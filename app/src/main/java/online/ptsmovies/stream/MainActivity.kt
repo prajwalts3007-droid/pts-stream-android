@@ -21,6 +21,7 @@ import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
@@ -32,6 +33,7 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.Font
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
@@ -52,9 +54,12 @@ import org.json.JSONObject
 import coil.compose.AsyncImage
 import kotlin.math.roundToLong
 
-private val ink = Color.Black
-private val accent = Color.White
-private val white = Color.White
+private val ink = Color(0xFF11132D)
+private val accent = Color(0xFFAAA6FF)
+private val white = Color(0xFFF7F7FF)
+private val card = Color(0xFF202343)
+private val dmSans = FontFamily(Font(R.font.dm_sans))
+private val nunito = FontFamily(Font(R.font.nunito))
 
 class MainActivity : ComponentActivity() {
     private val api = PtsApi()
@@ -112,10 +117,15 @@ class MainActivity : ComponentActivity() {
             }
             catch (_: Exception) { loading = false }
         }
-        window.statusBarColor = android.graphics.Color.BLACK
-        window.navigationBarColor = android.graphics.Color.BLACK
+        window.statusBarColor = android.graphics.Color.rgb(17, 19, 45)
+        window.navigationBarColor = android.graphics.Color.rgb(32, 35, 67)
         setContent {
-            MaterialTheme(colorScheme = darkColorScheme(primary = accent, onPrimary = Color.Black, background = ink, surface = Color(0xFF0A0A0A))) {
+            MaterialTheme(colorScheme = darkColorScheme(primary = accent, onPrimary = Color(0xFF16163F), background = ink, surface = card,
+                onBackground = white, onSurface = white, secondary = Color(0xFFFFB46E)), typography = Typography(
+                    bodyLarge = Typography().bodyLarge.copy(fontFamily = dmSans), bodyMedium = Typography().bodyMedium.copy(fontFamily = dmSans),
+                    titleMedium = Typography().titleMedium.copy(fontFamily = nunito), titleLarge = Typography().titleLarge.copy(fontFamily = nunito),
+                    headlineSmall = Typography().headlineSmall.copy(fontFamily = nunito), headlineMedium = Typography().headlineMedium.copy(fontFamily = nunito)
+                )) {
                 Surface(Modifier.fillMaxSize(), color = ink) {
                     when {
                         loading -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { CircularProgressIndicator() }
@@ -153,7 +163,8 @@ class MainActivity : ComponentActivity() {
     }
 
     @Composable private fun AppScreen() {
-        var query by remember { mutableStateOf("") }
+        val searches = remember { mutableStateMapOf<String, String>() }
+        val query = searches[tab].orEmpty()
         var revision by remember { mutableIntStateOf(0) }
         BackHandler(selected != null || showProfile || showDownloads || mode != (if (account?.optString("role") == "admin") "Hub" else "Stream")) {
             when {
@@ -164,12 +175,12 @@ class MainActivity : ComponentActivity() {
             }
         }
         Column(Modifier.fillMaxSize()) {
-            Row(Modifier.fillMaxWidth().background(Color(0xFF0A0A0A)).padding(horizontal = 18.dp, vertical = 9.dp), verticalAlignment = Alignment.CenterVertically) {
-                Box(Modifier.size(32.dp).background(white, RoundedCornerShape(8.dp)), contentAlignment = Alignment.Center) {
-                    Text("PTS", color = ink, style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Black, fontFamily = FontFamily.Serif)
+            Row(Modifier.fillMaxWidth().background(card).padding(horizontal = 18.dp, vertical = 9.dp), verticalAlignment = Alignment.CenterVertically) {
+                Box(Modifier.size(39.dp).background(accent, RoundedCornerShape(13.dp)), contentAlignment = Alignment.Center) {
+                    Text("PTS", color = Color(0xFF16163F), style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Black, fontFamily = nunito)
                 }
                 Text(when(mode) { "Files" -> "PTSFiles"; "Stream" -> "PTSStream"; else -> "PTS Library" },
-                    modifier = Modifier.weight(1f).padding(start = 10.dp), fontWeight = FontWeight.Bold, fontFamily = FontFamily.Serif)
+                    modifier = Modifier.weight(1f).padding(start = 10.dp), fontWeight = FontWeight.Bold, fontFamily = nunito)
                 TextButton(onClick = { showProfile = true; showDownloads = false }) { Text(account?.optString("username")?.take(1)?.uppercase() ?: "?") }
             }
             if (account?.optString("role") == "admin" && !showProfile && !showDownloads) {
@@ -216,10 +227,29 @@ class MainActivity : ComponentActivity() {
                                 (query.isBlank() || t.title.contains(query, ignoreCase = true) || t.genres.any { it.contains(query, true) }) }
                         }
                         LazyColumn(contentPadding = PaddingValues(horizontal = 16.dp, vertical = 6.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                            item { OutlinedTextField(query, { query = it }, label = { Text("Search titles and genres") }, modifier = Modifier.fillMaxWidth(), singleLine = true) }
+                            item { OutlinedTextField(query, { searches[tab] = it }, label = { Text("Search movies and series") }, modifier = Modifier.fillMaxWidth(), singleLine = true) }
                             item { Text(if (selected == null) "$tab · ${titles.size} titles" else selected!!.title,
                                 style = MaterialTheme.typography.titleLarge, modifier = Modifier.padding(vertical = 8.dp)) }
-                            if (selected == null) {
+                            if (selected == null && tab == "Home" && query.isBlank() && lib.titles.isNotEmpty()) {
+                                val featured = lib.titles.first()
+                                item { PtsCard(Modifier.fillMaxWidth()) {
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        if (featured.poster.startsWith("https://")) AsyncImage(model = featured.poster, contentDescription = null,
+                                            modifier = Modifier.width(96.dp).height(144.dp))
+                                        Column(Modifier.padding(start = 12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                            Text(featured.title, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+                                            Text("${featured.year} · ${if (featured.kind == "series") "TV Show" else "Movie"}")
+                                            Button(onClick = { selected = featured }) { Text("View title") }
+                                        }
+                                    }
+                                } }
+                                val continuing = lib.titles.filter { (lib.progress[it.id]?.seconds ?: 0) > 0 }
+                                if (continuing.isNotEmpty()) item { StreamShelf("Continue Watching", continuing, { selected = it }) }
+                                val movies = lib.titles.filter { it.kind == "movie" }
+                                if (movies.isNotEmpty()) item { StreamShelf("Movies", movies, { selected = it }) }
+                                val series = lib.titles.filter { it.kind == "series" }
+                                if (series.isNotEmpty()) item { StreamShelf("TV Shows", series, { selected = it }) }
+                            } else if (selected == null) {
                                 items(titles, key = { it.id }) { t -> TitleCard(t, lib.progress[t.id]?.seconds, { selected = t }) }
                             } else {
                                 val t = selected!!
@@ -241,7 +271,7 @@ class MainActivity : ComponentActivity() {
                                     t.episodes.groupBy { it.season }.forEach { (season, eps) ->
                                         item { Text("Season $season", style = MaterialTheme.typography.titleLarge, modifier = Modifier.padding(top = 18.dp)) }
                                         items(eps, key = { it.id }) { ep ->
-                                            Column(Modifier.fillMaxWidth().background(Color(0xFF172235), RoundedCornerShape(12.dp)).padding(12.dp)) {
+                                            Column(Modifier.fillMaxWidth().background(card, RoundedCornerShape(12.dp)).padding(12.dp)) {
                                                 Text("E${ep.episode} · ${ep.title.ifBlank { t.title }}", fontWeight = FontWeight.Bold)
                                                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                                                     TextButton(onClick = { episode = ep; playing = true }) { Text("Play") }
@@ -263,7 +293,7 @@ class MainActivity : ComponentActivity() {
             }
             if (!showProfile && !showDownloads) {
                 var swipe by remember { mutableFloatStateOf(0f) }
-                NavigationBar(containerColor = Color(0xFF0A0A0A), modifier = Modifier.pointerInput(mode) {
+                NavigationBar(containerColor = card, modifier = Modifier.pointerInput(mode) {
                     detectHorizontalDragGestures(onDragStart = { swipe = 0f }, onDragEnd = {
                         if (kotlin.math.abs(swipe) >= size.width * 0.45f) switchBySwipe(swipe)
                         swipe = 0f
@@ -446,7 +476,7 @@ class MainActivity : ComponentActivity() {
 }
 
 @Composable private fun TitleCard(title: Title, position: Long?, open: () -> Unit) {
-    Row(Modifier.fillMaxWidth().background(Color(0xFF172235), RoundedCornerShape(14.dp))
+    Row(Modifier.fillMaxWidth().background(card, RoundedCornerShape(14.dp))
         .clickable(onClick = open).animateContentSize().padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
         if (title.poster.startsWith("https://")) {
             AsyncImage(model = title.poster, contentDescription = "Poster for ${title.title}", modifier = Modifier.width(75.dp).height(110.dp))
@@ -461,6 +491,33 @@ class MainActivity : ComponentActivity() {
     }
 }
 
+@Composable private fun StreamShelf(label: String, titles: List<Title>, open: (Title) -> Unit) {
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+            Text(label, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+            Text("${titles.size}", color = accent)
+        }
+        LazyRow(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            items(titles, key = { it.id }) { title ->
+                Column(Modifier.width(128.dp).background(card, RoundedCornerShape(16.dp)).clickable { open(title) }
+                    .padding(8.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    if (title.poster.startsWith("https://")) {
+                        AsyncImage(model = title.poster, contentDescription = "Poster for ${title.title}",
+                            modifier = Modifier.fillMaxWidth().height(166.dp), contentScale = androidx.compose.ui.layout.ContentScale.Crop)
+                    } else {
+                        Box(Modifier.fillMaxWidth().height(166.dp).background(Color(0xFF2B2F57), RoundedCornerShape(11.dp)),
+                            contentAlignment = Alignment.Center) {
+                            Text(title.title.take(1).uppercase(), style = MaterialTheme.typography.headlineMedium, color = accent)
+                        }
+                    }
+                    Text(title.title, maxLines = 2, overflow = TextOverflow.Ellipsis, fontWeight = FontWeight.Bold)
+                    Text(if (title.kind == "series") "TV Show" else "Movie", style = MaterialTheme.typography.labelSmall, color = Color(0xFFC4C9E4))
+                }
+            }
+        }
+    }
+}
+
 @Composable private fun DownloadsScreen(saved: List<SavedVideo>, play: (SavedVideo) -> Unit, delete: (SavedVideo) -> Unit) {
     LazyColumn(contentPadding = PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         item { Text("My Downloads", style = MaterialTheme.typography.headlineMedium) }
@@ -470,7 +527,7 @@ class MainActivity : ComponentActivity() {
             videos.groupBy { it.season }.forEach { (season, episodes) ->
                 if (season > 0) item { Text("Season $season", color = accent) }
                 items(episodes.sortedBy { it.episode }, key = { it.key }) { item ->
-                    Row(Modifier.fillMaxWidth().background(Color(0xFF172235), RoundedCornerShape(12.dp)).padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Row(Modifier.fillMaxWidth().background(card, RoundedCornerShape(12.dp)).padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
                         Column(Modifier.weight(1f)) { Text(item.label, fontWeight = FontWeight.Bold); Text("${item.bytes / 1048576} MiB · on this device") }
                         TextButton(onClick = { play(item) }) { Text("Play") }
                         TextButton(onClick = { delete(item) }) { Text("Delete") }

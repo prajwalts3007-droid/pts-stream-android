@@ -29,9 +29,9 @@ import java.io.IOException
 import java.net.URLEncoder
 import androidx.compose.ui.unit.sp
 
-private val panel = Color(0xFF0A0A0A)
-private val subtle = Color(0xFFB6B6B6)
-private val border = Color(0xFF383838)
+private val panel = Color(0xFF202343)
+private val subtle = Color(0xFFC4C9E4)
+private val border = Color(0xFF414671)
 
 @Composable fun PageLabel(text: String) {
     Row(Modifier.fillMaxWidth().padding(vertical = 12.dp), horizontalArrangement = Arrangement.Center) {
