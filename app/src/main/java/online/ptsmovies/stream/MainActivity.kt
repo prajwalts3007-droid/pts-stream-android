@@ -94,6 +94,7 @@ class MainActivity : ComponentActivity() {
     private var restoredAutoplay = true
     private var resumeAfterBackground = false
     private var foregroundSync: Job? = null
+    private var sessionGeneration = 0
     private val selectPhoto = registerForActivityResult(ActivityResultContracts.GetContent()) { uri ->
         if (uri != null) scope.launch {
             try {
@@ -244,7 +245,12 @@ class MainActivity : ComponentActivity() {
             loading = false
         }
         try {
-            account = api.me()
+            val verified = api.me()
+            if (cached != null && cached.optLong("id") != verified.optLong("id")) {
+                downloads?.pauseAll(); device.clearSession(); library = null; selected = null; episode = null
+                playing = false; profileOpen = false; downloadsOpen = false; updatesOpen = false; navigationRestored = false
+            }
+            account = verified
             device.account(account!!)
             attachDownloads()
             if (cached == null) mode = "Stream"
@@ -288,8 +294,11 @@ class MainActivity : ComponentActivity() {
     }
 
     private suspend fun refreshLibrary() {
+        val owner = account?.optLong("id") ?: return
+        val generation = sessionGeneration
         try {
             val result = api.library()
+            if (generation != sessionGeneration || owner != account?.optLong("id")) return
             val current = selected?.id?.takeIf { playing }
             library = if (current != null && library?.progress?.containsKey(current) == true) result.copy(progress = result.progress + (current to library!!.progress.getValue(current))) else result
             account?.let { device.library(it.optLong("id"), library!!) }
@@ -301,6 +310,7 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun signOut() {
+        sessionGeneration++
         persistNavigation()
         downloads?.pauseAll()
         downloadWatch?.cancel()
@@ -316,7 +326,7 @@ class MainActivity : ComponentActivity() {
                 account = null; library = null; selected = null; profileOpen = false; downloadsOpen = false
                 device.clearSession(); navigationRestored = false; updatesOpen = false
                 queueJobs = emptyList(); queueDone = emptyList(); metrics = null; users = emptyList()
-                savedVideos = emptyList(); message = ""; startupError = ""
+                savedVideos = emptyList(); downloadTasks = emptyList(); downloading = ""; message = ""; startupError = ""
                 fileClipboard = null; fileEditor = null; fileStatus = ""; clearedProgress.clear()
                 relayJobs = emptyList()
                 loading = false
@@ -340,7 +350,7 @@ class MainActivity : ComponentActivity() {
 
     private fun selectTab(name: String) {
         when (mode) { "Hub" -> hubTab = name; "Files" -> filesTab = name; else -> streamTab = name }
-        selected = null; profileOpen = false; downloadsOpen = name == "Downloads"
+        selected = null; profileOpen = false; updatesOpen = false; downloadsOpen = name == "Downloads"
         persistNavigation()
     }
 
@@ -986,12 +996,12 @@ class MainActivity : ComponentActivity() {
                                  PlayerTextControl(if (muted) "Unmute" else "Mute", "Mute audio") { muted = !muted; exo.volume = if (muted) 0f else 1f; touchControls() }
                                  PtsIconAction(PtsIcons.Fit, if (playerFullscreen) "Exit fullscreen" else "Fullscreen", { fullscreen(!playerFullscreen); touchControls() }, tint = Color.White)
                  }
+                         }
+                     }
+                 }
                  if (gestureFeedback.isNotBlank() && !inPip) Text(gestureFeedback,
                      Modifier.align(Alignment.Center).background(Color.Black.copy(alpha = .9f), RowShape).padding(horizontal = 16.dp, vertical = 10.dp).testTag("gesture-feedback"),
                      style = MaterialTheme.typography.labelLarge, color = Color.White)
-                        }
-                    }
-                }
                 if ((buffering || !firstFrame) && error.isBlank()) CircularProgressIndicator(Modifier.align(Alignment.Center).size(32.dp), color = Pts.accent)
                 if (error.isNotBlank() && !inPip) Column(Modifier.align(Alignment.Center).fillMaxWidth().background(Color.Black.copy(alpha = .9f)).padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Text("Playback interrupted", style = MaterialTheme.typography.titleMedium, color = Color.White)
@@ -1203,7 +1213,8 @@ class MainActivity : ComponentActivity() {
                     if (account != null && !loading) {
                         try {
                             val user = api.me()
-                            if (user.optLong("id") == account?.optLong("id")) { account = user; device.account(user); if (!admin() && mode != "Stream") enterMode("Stream") }
+                            if (user.optLong("id") != account?.optLong("id")) { downloads?.pauseAll(); device.clearSession(); account = null; library = null; playing = false; continue }
+                            account = user; device.account(user); if (!admin() && mode != "Stream") enterMode("Stream")
                             refreshLibrary(); loadPlaybackPrefs(); downloads?.refresh()
                         } catch (e: CancellationException) { throw e }
                         catch (e: ApiException) { if (e.status == 401) { downloads?.pauseAll(); device.clearSession(); account = null; library = null; playing = false } }

@@ -262,7 +262,7 @@ fun BrowseScreen(
             PtsSearchField(query, onQuery, "Search movies and shows")
         }
         item(span = { GridItemSpan(maxLineSpan) }) {
-            PtsSegmented(listOf("grid" to "Grid", "list" to "List"), view) { view = it; onViewChange(it) }
+            PtsSegmented(listOf("grid" to "Grid", "list" to "List"), view, onSelect = { view = it; onViewChange(it) })
         }
         if (genres.isNotEmpty()) {
             item(span = { GridItemSpan(maxLineSpan) }) {

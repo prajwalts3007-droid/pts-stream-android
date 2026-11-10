@@ -7,6 +7,8 @@ import android.net.Uri
 import android.provider.Settings
 import androidx.core.content.FileProvider
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
@@ -40,9 +42,9 @@ class NativeUpdates private constructor(private val context: Context) {
             if (candidate.code > BuildConfig.VERSION_CODE && prefs.getLong("download_id", 0) > 0) observe(candidate, prefs.getLong("download_id", 0))
         }
     }
-    fun channel(value: String) { if (mutable.value.status in listOf("downloading", "verifying")) return; channel = value; prefs.edit().putString("channel", value).apply(); mutable.value = NativeUpdateState() }
+    fun channel(value: String) { if (value !in listOf("stable", "test") || mutable.value.status in listOf("checking", "downloading", "verifying")) return; channel = value; prefs.edit().putString("channel", value).apply(); mutable.value = NativeUpdateState() }
     fun check() {
-        if (mutable.value.status in listOf("checking", "downloading", "verifying")) return
+        if (mutable.value.status in listOf("checking", "downloading", "verifying", "ready")) return
         val tests = channel == "test"
         mutable.value = NativeUpdateState("checking", "Checking signed ${if (tests) "test and stable" else "stable"} releases…")
         scope.launch {
@@ -117,8 +119,13 @@ class NativeUpdates private constructor(private val context: Context) {
                 activity.startActivity(Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES, Uri.parse("package:${context.packageName}")))
                 return
             }
-            val uri = FileProvider.getUriForFile(context, "${BuildConfig.APPLICATION_ID}.files", file(candidate))
-            activity.startActivity(Intent(Intent.ACTION_VIEW).setDataAndType(uri, "application/vnd.android.package-archive").addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION))
+            scope.launch {
+                try {
+                    withContext(Dispatchers.IO) { verifyUpdate(context, file(candidate), candidate) }
+                    val uri = FileProvider.getUriForFile(context, "${BuildConfig.APPLICATION_ID}.files", file(candidate))
+                    activity.startActivity(Intent(Intent.ACTION_VIEW).setDataAndType(uri, "application/vnd.android.package-archive").addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION))
+                } catch (e: Exception) { mutable.value = mutable.value.copy(status = "error", message = "Installer unavailable: ${e.message}") }
+            }
         } catch (e: Exception) { mutable.value = mutable.value.copy(message = "Installer unavailable: ${e.message}") }
     }
     companion object {
@@ -130,7 +137,7 @@ class NativeUpdates private constructor(private val context: Context) {
 @Composable
 fun NativeUpdateScreen(controller: NativeUpdates, onInstall: () -> Unit, onBack: () -> Unit) {
     val state by controller.state.collectAsState()
-    Column(Modifier.fillMaxSize().padding(16.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
+    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
         PtsSecondaryButton("Back", onClick = onBack)
         PtsPage("App updates", "Installed ${BuildConfig.VERSION_NAME} · signed APKs only")
         PtsSegmented(listOf("stable" to "Stable", "test" to "Test releases"), controller.channel, controller::channel)

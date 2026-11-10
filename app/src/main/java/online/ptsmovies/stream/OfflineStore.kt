@@ -89,7 +89,9 @@ class OfflineStore(private val context: Context, private val api: PtsApi, ownerI
                 val append = response.code == 206 && offset > 0
                 val responseValidator = response.header("ETag")?.takeUnless { it.startsWith("W/") }
                     ?: response.header("Last-Modified").orEmpty()
-                if (append && (range == null || range.groupValues[1].toLong() != offset || responseValidator != validator))
+                if (append && (range == null || range.groupValues[1].toLong() != offset ||
+                        range.groupValues[2].toLong() != range.groupValues[3].toLong() - 1 ||
+                        range.groupValues[3].toLong() != info?.optLong("total") || responseValidator != validator))
                     throw IOException("Source changed; restart the download")
                 if (response.code != 200 && !append) throw IOException("Source did not return a safe complete file or range")
                 val total = if (append) range!!.groupValues[3].toLong() else body.contentLength()

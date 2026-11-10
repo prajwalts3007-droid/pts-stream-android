@@ -21,7 +21,10 @@ class DeviceState(context: Context) {
     fun library(owner: Long, value: Library) { prefs.edit().putString("library_$owner", value.toJson().toString()).apply() }
     fun navigation(): JSONObject = runCatching { JSONObject(prefs.getString("navigation", "{}")!!) }.getOrDefault(JSONObject())
     fun navigation(value: JSONObject) { prefs.edit().putString("navigation", value.toString()).commit() }
-    fun clearSession() { prefs.edit().remove("account").remove("navigation").commit() }
+    fun clearSession() {
+        val owner = account()?.optLong("id")
+        prefs.edit().remove("account").remove("navigation").apply { if (owner != null) remove("library_$owner") }.commit()
+    }
 }
 
 fun Episode.toJson() = JSONObject().put("id", id).put("season", season).put("episode", episode)

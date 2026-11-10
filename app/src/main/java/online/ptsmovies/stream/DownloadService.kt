@@ -58,6 +58,7 @@ class DownloadRepository internal constructor(private val context: Context, priv
     fun enqueue(title: Title, episode: Episode?) {
         require(episode?.container != "hls" && (episode != null || title.container != "hls")) { "This HLS title is not available as an authorized offline MP4" }
         val t = DownloadTask(title, episode)
+        if (mutable.value.saved.any { it.key == t.key } || mutable.value.tasks.any { it.key == t.key && it.status in listOf("queued", "downloading") }) return
         update { s -> s.copy(tasks = s.tasks.filterNot { it.key == t.key } + t) }
         startService()
     }
@@ -65,20 +66,25 @@ class DownloadRepository internal constructor(private val context: Context, priv
         try { ContextCompat.startForegroundService(context, Intent(context, DownloadService::class.java).putExtra("owner", owner)) }
         catch (e: Exception) { update { s -> s.copy(tasks = s.tasks.map { if (it.status == "queued") it.copy(status = "paused", error = "Open Downloads and tap Resume: ${e.message}") else it }) } }
     }
-    fun resume(key: String) { task(key) { it.copy(status = "queued", speed = 0, error = "") }; startService() }
+    fun resume(key: String) {
+        if (mutable.value.tasks.none { it.key == key && it.status in listOf("paused", "failed") }) return
+        task(key) { it.copy(status = "queued", speed = 0, error = "") }; startService()
+    }
     fun pause(key: String) {
         val active = mutable.value.tasks.firstOrNull { it.key == key }?.status == "downloading"
         task(key) { it.copy(status = "paused", speed = 0) }
         if (active) { job?.cancel(); call?.cancel() }
     }
     fun cancel(key: String) {
+        val running = if (mutable.value.tasks.any { it.key == key && it.status == "downloading" }) job else null
         pause(key)
-        scope.launch { job?.join(); store.discardPartial(key); update { s -> s.copy(tasks = s.tasks.filterNot { it.key == key }) } }
+        task(key) { it.copy(status = "cancelling", speed = 0) }
+        scope.launch { running?.join(); store.discardPartial(key); update { s -> s.copy(tasks = s.tasks.filterNot { it.key == key }) } }
     }
     fun pauseAll() { mutable.value.tasks.filter { it.status in listOf("queued", "downloading") }.forEach { pause(it.key) } }
     fun remove(saved: SavedVideo) { store.remove(saved); update { s -> s.copy(saved = store.list(), tasks = s.tasks.filterNot { it.key == saved.key }) } }
     fun refresh() { update { it.copy(saved = store.list()) } }
-    fun runNext(onStatus: (DownloadTask?) -> Unit) = synchronized(lock) {
+    fun runNext(onStatus: (DownloadTask?) -> Unit): Unit = synchronized(lock) {
         if (job?.isActive == true) return@synchronized
         val next = mutable.value.tasks.firstOrNull { it.status == "queued" }
         if (next == null) { onStatus(null); return@synchronized }
@@ -86,10 +92,11 @@ class DownloadRepository internal constructor(private val context: Context, priv
         job = scope.launch {
             try {
                 store.save(next.title, next.episode, resume = true, onCall = { call = it }, onTransfer = { p ->
-                    task(next.key) { it.copy(bytes = p.bytes, total = p.total, speed = p.speed) }
+                    task(next.key) { it.copy(bytes = p.bytes, total = p.total, speed = if (it.status == "downloading") p.speed else 0) }
                     onStatus(mutable.value.tasks.firstOrNull { it.key == next.key })
                 }) { }
-                task(next.key) { it.copy(status = "complete", bytes = it.total, speed = 0) }
+                val finished = store.find(next.title, next.episode) ?: error("Downloaded file is missing")
+                task(next.key) { it.copy(status = "complete", bytes = finished.bytes, total = finished.bytes, speed = 0) }
                 refresh()
             } catch (e: CancellationException) {
                 task(next.key) { if (it.status == "downloading") it.copy(status = "paused", speed = 0) else it }
@@ -123,10 +130,11 @@ class DownloadService : Service() {
         startForeground(3001, notification(null))
         val owner = intent?.getLongExtra("owner", 0) ?: 0
         // Do not continue private transfers for an account that has signed out.
-        if (owner <= 0 || DeviceState(this).account()?.optLong("id") != owner) { stopSelf(); return START_NOT_STICKY }
+        if (owner <= 0 || DeviceState(this).account()?.optLong("id") != owner) { stopSelf(startId); return START_NOT_STICKY }
+        if (repository?.owner != null && repository?.owner != owner) repository?.pauseAll()
         repository = DeviceDownloads.forOwner(this, ApiProvider.create(), owner)
         repository!!.runNext { task ->
-            if (task == null) { stopForeground(STOP_FOREGROUND_REMOVE); stopSelf() }
+            if (task == null) { stopForeground(STOP_FOREGROUND_REMOVE); stopSelf(startId) }
             else manager.notify(3001, notification(task))
         }
         return START_NOT_STICKY

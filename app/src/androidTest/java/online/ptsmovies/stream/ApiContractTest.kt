@@ -253,4 +253,31 @@ class ApiContractTest {
         assertEquals(5L, TransferProgress(500, 1000, 100).eta)
         assertNull(TransferProgress(500, 1000, 0).eta)
     }
+
+    @Test fun interruptedDownloadJournalRestoresAsPausedAndKeepsMetadata() {
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        val task = DownloadTask(movie, null, "downloading", 100, 1000, 50)
+        context.getSharedPreferences("download_jobs_90022", 0).edit().putString("jobs", org.json.JSONArray().put(task.json()).toString()).commit()
+        val restored = DownloadRepository(context, api, 90022).state.value.tasks.single()
+        assertEquals("paused", restored.status); assertEquals(100L, restored.bytes)
+        assertEquals(movie, restored.title); assertEquals(0L, restored.speed)
+        assertEquals(0, server.requestCount)
+        context.getSharedPreferences("download_jobs_90022", 0).edit().clear().commit()
+    }
+
+    @Test fun invalidPartialValidatorCannotSilentlyJoinChangedSource() = runBlocking {
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        val store = OfflineStore(context, api, 90023)
+        store.list().forEach { store.remove(it) }
+        val root = java.io.File(context.filesDir, "media/90023")
+        java.io.File(root, "90001_0.part").writeText("old")
+        java.io.File(root, "90001_0.source").writeText("""{"validator":"\"old\"","total":10}""")
+        server.enqueue(MockResponse().setResponseCode(206).setHeader("ETag", "\"new\"")
+            .setHeader("Content-Range", "bytes 3-9/10").setBody("changed"))
+        server.enqueue(MockResponse().setHeader("ETag", "\"new\"").setBody("full-new-source"))
+        val saved = store.save(movie, null, resume = true) {}
+        assertEquals("full-new-source", saved.file.readText())
+        assertEquals("bytes=3-", request().getHeader("Range")); assertNull(request().getHeader("Range"))
+        store.remove(saved)
+    }
 }
