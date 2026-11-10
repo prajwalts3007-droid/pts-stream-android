@@ -75,7 +75,7 @@ fun PlaybackPreferencesScreen(prefs: org.json.JSONObject, onChange: (String, Any
     var fit by remember { mutableStateOf(local.getString("fit_mode", "fit") ?: "fit") }
     Column(if (embedded) Modifier.fillMaxWidth() else Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
         if (!embedded) PtsSecondaryButton("Back", onClick = onBack)
-        Text("Playback preferences", style = MaterialTheme.typography.titleLarge, color = Pts.text)
+        if (!embedded) Text("Playback preferences", style = MaterialTheme.typography.titleLarge, color = Pts.text)
         PtsField(audio, { audio = it }, "Audio language (en, hi, ta…)", Modifier.fillMaxWidth())
         PtsField(subtitles, { subtitles = it }, "Subtitle language (blank = off)", Modifier.fillMaxWidth())
         PreferenceSwitch("Autoplay next episode", autoplay) { autoplay = it }

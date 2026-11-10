@@ -25,12 +25,12 @@ fun WebIconTabs(tabs: List<WebTab>, selected: String, onSelect: (String) -> Unit
     Row(Modifier.fillMaxWidth().testTag(tag).horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
         tabs.forEach { tab ->
             val active = tab.key == selected
-            Row(Modifier.heightIn(min = 48.dp).widthIn(min = 48.dp)
+            Column(Modifier.heightIn(min = 48.dp).widthIn(min = 48.dp)
                 .background(if (active) Pts.accentSoft else Pts.card, RoundedCornerShape(12.dp))
                 .border(1.dp, if (active) Pts.accent else Pts.line, RoundedCornerShape(12.dp))
                 .semantics { contentDescription = tab.label; this.selected = active; role = Role.Tab; if (!tab.enabled) disabled() }
-                .clickable(enabled = tab.enabled) { onSelect(tab.key) }.padding(horizontal = 12.dp),
-                verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                .clickable(enabled = tab.enabled) { onSelect(tab.key) }.padding(horizontal = 10.dp, vertical = 6.dp),
+                horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
                 Icon(tab.icon, null, Modifier.size(22.dp), tint = if (active) Pts.accent else Pts.muted)
                 tab.count?.let { Text(it.toString(), color = if (active) Pts.accent else Pts.muted, style = MaterialTheme.typography.labelMedium) }
             }

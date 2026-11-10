@@ -126,7 +126,7 @@ fun NativeAdminSettings(user: JSONObject, api: PtsApi, onUpdate: () -> Unit, onS
     fun confirm(command: AdminCommand, message: String) { pending = command; confirmation = message; phrase = ""; powerPassword = "" }
     LazyColumn(contentPadding = PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
         item { PtsPage("Settings") }
-        item { WebIconTabs(listOf(WebTab("pipeline", "Pipeline", PtsIcons.Transfers), WebTab("playback", "Playback", PtsIcons.Play),
+        item { WebIconTabs(listOf(WebTab("pipeline", "Pipeline", PtsIcons.Pipeline), WebTab("playback", "Playback", PtsIcons.Play),
             WebTab("devices", "Devices", PtsIcons.Tv), WebTab("users", "Users", PtsIcons.User)), category, { category = it }, "settings-tab-row") }
         if (error.isNotBlank()) item { PtsErrorBanner(error) }
         if (notice.isNotBlank()) item { Text(notice, color = Pts.ok) }
@@ -144,13 +144,13 @@ fun NativeAdminSettings(user: JSONObject, api: PtsApi, onUpdate: () -> Unit, onS
                     when (section) {
                         "Playback preferences" -> PlaybackPreferencesScreen(playbackPrefs, onPlayback, {}, embedded = true)
                         "Pipeline settings" -> {
-                            val labels = linkedMapOf("pi_bwlimit_kbps" to "Pi transfer speed (Mbps)", "max_runners" to "Concurrent runners", "max_pi_transfers" to "Pi transfers", "min_free_gib" to "Minimum free space (GiB)", "max_staging_gib" to "Staging limit (GiB)", "reserve_per_job_gib" to "Reserve per job (GiB)")
+                            val labels = linkedMapOf("pi_bwlimit_kbps" to "Pi transfer speed (Mbps, 0 = unlimited)", "max_runners" to "GitHub jobs at once", "max_pi_transfers" to "Pi transfers at once", "min_free_gib" to "Keep VPS space free (GiB)", "max_staging_gib" to "VPS space for waiting files (GiB)", "reserve_per_job_gib" to "Estimated file size (GiB)")
                             if (pipeline != null) labels.forEach { (key, label) -> PtsField(fields[key].orEmpty(), { fields[key] = it }, label, Modifier.fillMaxWidth().testTag("pipeline-$key")) }
-                            Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                            PtsPrimaryButton("Save limits", enabled = pipeline != null && !busy) {
+                            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                            PtsPrimaryButton("Save limits", Modifier.weight(1f), enabled = pipeline != null && !busy) {
                                 try { confirm(AdminCommand("/admin/pipeline-settings", "PUT", pipelineBody(fields.toMap(), pipeline!!)), "Apply pipeline settings?") } catch (e: Exception) { error = e.message.orEmpty() }
                             }
-                            PtsSecondaryButton("Refresh status") { refreshPipeline() }
+                            PtsSecondaryButton("Refresh status", Modifier.weight(1f)) { refreshPipeline() }
                             }
                         }
                         "API management" -> {

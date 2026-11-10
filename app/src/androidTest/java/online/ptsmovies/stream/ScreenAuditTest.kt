@@ -50,6 +50,7 @@ class ScreenAuditTest {
             start()
         }
         mock = server
+        val mockBaseUrl = server.url("/").toString()
         var screen by mutableIntStateOf(0)
         ui.setContent {
             PtsTheme {
@@ -68,7 +69,7 @@ class ScreenAuditTest {
                                 7 -> TitleScreen(series, library.progress[1], true, emptySet(), "", {}, {}, {}, {})
                                 8 -> DownloadsScreen(emptyList(), {}, {})
                                 9 -> ProfileScreen(admin, 0, {}, {}, {}, {})
-                                10 -> NativeAdminSettings(admin, remember { PtsApi(server.url("/").toString(), okhttp3.CookieJar.NO_COOKIES) }, {}, {})
+                                10 -> NativeAdminSettings(admin, remember { PtsApi(mockBaseUrl, okhttp3.CookieJar.NO_COOKIES) }, {}, {})
                                 11 -> SearchScreen("Open Road", {}, listOf(JSONObject("""{"title":"The Open Road","year":2025,"type":"series"}""")), false)
                             }
                         }

@@ -1045,7 +1045,8 @@ class MainActivity : ComponentActivity() {
           Column(Modifier.fillMaxSize()) {
               val frame = if (landscape) Modifier.weight(1f).fillMaxWidth() else Modifier.fillMaxWidth().height(portraitHeight)
              PtsTheme("dark") { Box(frame.testTag("player-surface").clipToBounds().background(Color.Black)) {
-                 key(exo) { AndroidView(factory = { ctx -> (android.view.LayoutInflater.from(ctx).inflate(R.layout.native_player, FrameLayout(ctx), false) as PlayerView).apply {
+                  Box(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.displayCutout).clipToBounds()) {
+                  key(exo) { AndroidView(factory = { ctx -> (android.view.LayoutInflater.from(ctx).inflate(R.layout.native_player, FrameLayout(ctx), false) as PlayerView).apply {
                      useController = false
                      keepScreenOn = true
                      setEnableComposeSurfaceSyncWorkaround(true)
@@ -1071,7 +1072,8 @@ class MainActivity : ComponentActivity() {
                          // gets its own view; the old surface is explicitly detached on release.
                          view.doOnLayout { if (view.player === exo) { exo.prepare(); exo.playWhenReady = startPlaying } }
                      }
-                  }, modifier = Modifier.fillMaxSize().graphicsLayer { scaleX = zoom; scaleY = zoom }) }
+                   }, modifier = Modifier.fillMaxSize().graphicsLayer { scaleX = zoom; scaleY = zoom }) }
+                   }
                    PlayerGestures(this@MainActivity, exo.currentPosition, duration,
                       onTap = { controls = !playingNow || !controls; interaction++ },
                      onSeekPreview = { seekPreview = it; touchControls() },
@@ -1115,7 +1117,7 @@ class MainActivity : ComponentActivity() {
               } }
              if (!landscape) {
              if (!hevcAvailable) PtsErrorBanner("This device may not support HEVC playback", modifier = Modifier.padding(12.dp))
-              Column(Modifier.weight(1f).background(Pts.bg).windowInsetsPadding(WindowInsets.navigationBars).verticalScroll(rememberScrollState()).padding(16.dp), verticalArrangement = Arrangement.spacedBy(9.dp)) {
+              Column(Modifier.weight(1f).windowInsetsPadding(WindowInsets.navigationBars).background(Pts.bg).verticalScroll(rememberScrollState()).padding(16.dp), verticalArrangement = Arrangement.spacedBy(9.dp)) {
                  Text(title.title, style = MaterialTheme.typography.titleLarge, color = Pts.text)
                 Text(
                     listOfNotNull(

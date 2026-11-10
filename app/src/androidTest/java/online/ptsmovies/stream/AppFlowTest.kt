@@ -587,7 +587,7 @@ class AppFlowTest {
     @Test fun nativePipelineSettingsLoadAndRequireTypedSaveConfirmation() {
         role = "admin"; launchLoggedIn()
         ui.onNodeWithContentDescription("Settings").performClick()
-        waitForText("Concurrent runners")
+        waitForText("GitHub jobs at once")
         ui.onNode(hasSetTextAction() and hasAnyAncestor(hasTestTag("pipeline-max_runners"))).performScrollTo().performTextReplacement("3")
         ui.onNodeWithText("Save limits").performScrollTo().performClick()
         ui.onNodeWithText("Confirm").assertIsNotEnabled()
@@ -613,10 +613,15 @@ class AppFlowTest {
         ui.onNodeWithContentDescription("Close player menu").performClick()
         ui.onNodeWithContentDescription("Play playback").assertExists()
         scenario!!.onActivity { activity ->
-            assertEquals(android.graphics.Color.BLACK, activity.window.statusBarColor)
-            assertEquals(android.graphics.Color.BLACK, activity.window.navigationBarColor)
+            // Android 15 enforces transparent system bars; the pixels behind them must be black.
+            assertTrue(activity.window.statusBarColor in listOf(android.graphics.Color.BLACK, android.graphics.Color.TRANSPARENT))
+            assertTrue(activity.window.navigationBarColor in listOf(android.graphics.Color.BLACK, android.graphics.Color.TRANSPARENT))
             assertEquals(android.view.WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES, activity.window.attributes.layoutInDisplayCutoutMode)
         }
+        val image = checkNotNull(InstrumentationRegistry.getInstrumentation().uiAutomation.takeScreenshot())
+        assertEquals(android.graphics.Color.BLACK, image.getPixel(image.width / 2, 3))
+        assertEquals(android.graphics.Color.BLACK, image.getPixel(image.width / 2, image.height - 3))
+        image.recycle()
         capture("cinema-player-paused")
     }
 

@@ -70,4 +70,10 @@ object PtsIcons {
     val Muted by lazy { stroke("muted", "M3 9h4l5-4v14l-5-4H3z M16 9l6 6 M22 9l-6 6") }
     val Previous by lazy { stroke("previous", "M5 5v14 M19 5L8 12l11 7z") }
     val Next by lazy { stroke("next", "M19 5v14 M5 5l11 7-11 7z") }
+    val StageQueued by lazy { stroke("queued", "M4 5h16 M4 12h16 M4 19h16") }
+    val StageStarting by lazy { stroke("starting", "M12 3v3 M12 18v3 M3 12h3 M18 12h3 M5.6 5.6l2.1 2.1 M16.3 16.3l2.1 2.1 M18.4 5.6l-2.1 2.1 M7.7 16.3l-2.1 2.1") }
+    val StageCompress by lazy { stroke("compress", "M4 8h16v8H4z M8 3v5 M16 3v5 M8 16v5 M16 16v5") }
+    val StagePi by lazy { stroke("to-pi", "M3 12h14 M12 7l5 5-5 5 M19 5h2v14h-2") }
+    val StageFailed by lazy { stroke("failed", "M12 3L2 21h20L12 3z M12 10v4 M12 17h.01") }
+    val Pipeline by lazy { stroke("pipeline", "M3 12h4l2-6 3 12 2-6h7") }
 }
