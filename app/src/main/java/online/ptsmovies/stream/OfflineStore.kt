@@ -17,10 +17,14 @@ import java.io.IOException
 import android.os.SystemClock
 import okhttp3.Call
 
-private class DeviceStorageException(message: String) : IOException(message)
+internal class DeviceStorageException(message: String) : IOException(message)
 
 data class SavedVideo(val key: String, val titleId: Long, val title: String, val season: Int,
-                      val episode: Int, val label: String, val bytes: Long, val file: File)
+                      val episode: Int, val label: String, val bytes: Long, val file: File,
+                      val poster: File? = null, val metadata: Title? = null) {
+    fun titleMetadata(): Title = metadata ?: Title(titleId, if (season > 0) "series" else "movie", title, 0, "", "", emptyList(),
+        if (season > 0) listOf(Episode(key.substringAfter('_').toLong(), season, episode, label, 0.0, "mp4")) else emptyList(), "hevc", "mp4")
+}
 data class TransferProgress(val bytes: Long, val total: Long, val speed: Long) {
     val percent: Int get() = if (total > 0) (bytes * 100 / total).toInt().coerceIn(0, 100) else 0
     val eta: Long? get() = if (speed > 0 && total >= bytes) (total - bytes) / speed else null
@@ -30,6 +34,7 @@ class OfflineStore(private val context: Context, private val api: PtsApi, ownerI
     private val prefs = context.getSharedPreferences("offline_index_$ownerId", Context.MODE_PRIVATE)
     private val root = File(context.filesDir, "media/$ownerId").apply { mkdirs() }
     private val notifier = context.getSystemService(NotificationManager::class.java)
+    private val indexLock = Any()
     init { notifier.createNotificationChannel(NotificationChannel("downloads", "Offline downloads", NotificationManager.IMPORTANCE_LOW)) }
     private fun key(title: Title, episode: Episode?) = "${title.id}_${episode?.id ?: 0}"
 
@@ -41,15 +46,19 @@ class OfflineStore(private val context: Context, private val api: PtsApi, ownerI
             if (!k.matches(Regex("[0-9]+_[0-9]+"))) return@mapNotNull null
             val file = File(root, "$k.mp4")
             if (!file.isFile || file.length() != item.optLong("bytes") || file.length() < 1) return@mapNotNull null
-            SavedVideo(k, item.optLong("title_id"), item.optString("title"), item.optInt("season"),
-                item.optInt("episode"), item.optString("label"), file.length(), file)
+            val id = item.optLong("title_id")
+            val metadata = runCatching { parseTitle(JSONObject(prefs.getString("title_$id", "")!!)) }.getOrNull()
+            SavedVideo(k, id, item.optString("title"), item.optInt("season"),
+                item.optInt("episode"), item.optString("label"), file.length(), file,
+                File(root, "poster_$id.jpg").takeIf { it.isFile }, metadata)
         }
     }
     fun find(title: Title, episode: Episode?): SavedVideo? = list().firstOrNull { it.key == key(title, episode) }
-    fun remove(item: SavedVideo) {
+    fun remove(item: SavedVideo): Unit = synchronized(indexLock) {
         val next = list().filterNot { it.key == item.key }
         if (!item.file.delete()) throw IOException("Cannot delete local video")
         writeIndex(next)
+        if (next.none { it.titleId == item.titleId }) File(root, "poster_${item.titleId}.jpg").delete()
     }
     private fun writeIndex(items: List<SavedVideo>) {
         val array = JSONArray()
@@ -65,7 +74,8 @@ class OfflineStore(private val context: Context, private val api: PtsApi, ownerI
         File(root, "$key.part").delete(); File(root, "$key.source").delete()
     }
     suspend fun save(title: Title, episode: Episode?, resume: Boolean = false,
-        onTransfer: (TransferProgress) -> Unit = {}, onCall: (Call?) -> Unit = {},
+        onTransfer: (TransferProgress) -> Unit = {}, onCall: (Call?) -> Unit = {}, maxBytes: Long = Long.MAX_VALUE,
+        admit: (Long, Long) -> Unit = { _, _ -> },
         onProgress: (Int) -> Unit): SavedVideo = withContext(Dispatchers.IO) {
         find(title, episode)?.let { return@withContext it }
         if (episode?.container == "hls" || (episode == null && title.container == "hls"))
@@ -100,6 +110,8 @@ class OfflineStore(private val context: Context, private val api: PtsApi, ownerI
                 if (total <= 0) throw IOException("Source size is unknown; safe offline download unavailable")
                 val start = if (append) offset else 0L
                 if (total - start > root.usableSpace - 64L * 1024 * 1024) throw DeviceStorageException("Insufficient device storage")
+                if (total > maxBytes) throw DeviceStorageException("Download would exceed your storage limit")
+                admit(total, start)
                 sourceInfo.writeText(JSONObject().put("validator", responseValidator).put("total", total).toString())
                 var written = start
                 val started = SystemClock.elapsedRealtime()
@@ -146,7 +158,11 @@ class OfflineStore(private val context: Context, private val api: PtsApi, ownerI
         if (!succeeded) throw IOException("Offline download failed: ${last?.message ?: "source unavailable"}")
         val item = SavedVideo(id, title.id, title.title, episode?.season ?: 0, episode?.episode ?: 0,
             episode?.title ?: title.title, dest.length(), dest)
-        writeIndex(list().filterNot { it.key == id } + item)
+        cachePoster(title)
+        synchronized(indexLock) {
+            prefs.edit().putString("title_${title.id}", title.toJson().toString()).commit()
+            writeIndex(list().filterNot { it.key == id } + item)
+        }
         try {
             notifier.notify(id.hashCode(), NotificationCompat.Builder(context, "downloads")
                 .setSmallIcon(android.R.drawable.stat_sys_download_done).setContentTitle("PTS Library")
@@ -154,4 +170,34 @@ class OfflineStore(private val context: Context, private val api: PtsApi, ownerI
         } catch (_: SecurityException) { /* notification permission is optional */ }
         item
     }
+
+    private fun cachePoster(title: Title) {
+        val target = File(root, "poster_${title.id}.jpg")
+        if (target.isFile) return
+        val url = api.imageUrl(title.poster) ?: return
+        try {
+            val encoded = api.http.newCall(Request.Builder().url(url).build()).execute().use { response ->
+                if (!response.isSuccessful || response.body?.contentType()?.type != "image") return
+                response.body!!.byteStream().use { input ->
+                    val output = java.io.ByteArrayOutputStream()
+                    val buffer = ByteArray(32768)
+                    while (true) {
+                        val count = input.read(buffer); if (count < 0) break
+                        if (output.size() + count > 4 * 1024 * 1024) return
+                        output.write(buffer, 0, count)
+                    }
+                    output.toByteArray()
+                }
+            }
+            val bounds = android.graphics.BitmapFactory.Options().apply { inJustDecodeBounds = true }
+            android.graphics.BitmapFactory.decodeByteArray(encoded, 0, encoded.size, bounds)
+            if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return
+            val options = android.graphics.BitmapFactory.Options().apply { inSampleSize = maxOf(1, maxOf(bounds.outWidth, bounds.outHeight) / 640) }
+            val bitmap = android.graphics.BitmapFactory.decodeByteArray(encoded, 0, encoded.size, options) ?: return
+            synchronized(indexLock) { target.outputStream().use { bitmap.compress(android.graphics.Bitmap.CompressFormat.JPEG, 85, it) } }
+            bitmap.recycle()
+        } catch (_: Exception) { /* Poster failure never destroys a completed media transfer. */ }
+    }
+
+    fun usedBytes(): Long = root.listFiles()?.sumOf { if (it.isFile) it.length() else 0L } ?: 0L
 }

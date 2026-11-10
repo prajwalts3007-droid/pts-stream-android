@@ -28,12 +28,12 @@ class DeviceState(context: Context) {
 }
 
 fun Episode.toJson() = JSONObject().put("id", id).put("season", season).put("episode", episode)
-    .put("title", title).put("duration", duration).put("container", container).put("description", description)
+    .put("title", title).put("duration", duration).put("container", container).put("description", description).put("size", size)
 fun Title.toJson() = JSONObject().put("id", id).put("kind", kind).put("title", title).put("year", year)
     .put("poster", poster).put("synopsis", synopsis).put("genres", JSONArray(genres)).put("video_codec", codec)
     .put("container", container).put("episodes", JSONArray(episodes.map { it.toJson() }))
 fun parseEpisode(e: JSONObject) = Episode(e.getLong("id"), e.optInt("season"), e.optInt("episode"), e.optString("title"),
-    e.optDouble("duration", 0.0), e.optString("container"), e.optString("description"))
+    e.optDouble("duration", 0.0), e.optString("container"), e.optString("description"), e.optLong("size"))
 fun parseTitle(t: JSONObject): Title {
     val genres = t.optJSONArray("genres") ?: JSONArray()
     val episodes = t.optJSONArray("episodes") ?: JSONArray()

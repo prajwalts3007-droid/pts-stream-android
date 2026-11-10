@@ -1,0 +1,27 @@
+[Unit]
+Description=PTS authenticated LAN media TLS relay
+After=network-online.target pts-media.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+DynamicUser=yes
+Environment=LAN_ADDRESS=192.168.29.75
+Environment=LAN_PORT=4443
+LoadCredential=server.crt:/opt/pts-lan/server.crt
+LoadCredential=server.key:/opt/pts-lan/server.key
+ExecStart=/usr/bin/python3 -B /opt/pts-lan/pi-lan-proxy.py
+Restart=on-failure
+RestartSec=10
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+RestrictAddressFamilies=AF_INET AF_UNIX
+TasksMax=64
+MemoryMax=192M
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,192 @@
+package online.ptsmovies.stream
+
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalLifecycleOwner
+import androidx.compose.ui.unit.dp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import kotlinx.coroutines.launch
+import org.json.JSONObject
+import kotlin.math.roundToLong
+
+data class AdminCommand(val path: String, val method: String, val body: JSONObject? = null)
+fun pipelineBody(values: Map<String, String>, original: JSONObject): JSONObject {
+    val result = JSONObject()
+    val speed = values.getValue("pi_bwlimit_kbps").toDoubleOrNull() ?: error("Invalid transfer speed")
+    require(speed.isFinite() && speed in 0.0..8589.93) { "Speed must be 0–8589.93 Mbps" }
+    val prior = original.getLong("pi_bwlimit_kbps")
+    val display = kotlin.math.round(prior * 8192.0 / 1000000 * 100) / 100
+    result.put("pi_bwlimit_kbps", if (speed == display) prior else if (speed == 0.0) 0L else (speed * 1000000 / 8192).roundToLong().coerceAtLeast(1))
+    val ranges = mapOf("max_runners" to 1L..60L, "max_pi_transfers" to 1L..8L, "min_free_gib" to 1L..1000000L,
+        "max_staging_gib" to 0L..1000000L, "reserve_per_job_gib" to 1L..100L)
+    ranges.forEach { (key, range) ->
+        val value = values.getValue(key).toLongOrNull() ?: error("Enter a whole number for $key")
+        require(value in range) { "$key must be ${range.first}–${range.last}" }; result.put(key, value)
+    }
+    return result
+}
+
+@Composable
+fun NativeAdminSettings(user: JSONObject, api: PtsApi, onUpdate: () -> Unit, onSignOut: () -> Unit) {
+    if (user.optString("role") != "admin") return
+    val scope = rememberCoroutineScope()
+    var panel by remember { mutableStateOf("") }
+    var error by remember { mutableStateOf("") }
+    var notice by remember { mutableStateOf("") }
+    var busy by remember { mutableStateOf(false) }
+    var pipeline by remember { mutableStateOf<JSONObject?>(null) }
+    var github by remember { mutableStateOf(JSONObject()) }
+    var google by remember { mutableStateOf(JSONObject()) }
+    var users by remember { mutableStateOf(emptyList<JSONObject>()) }
+    val fields = remember { mutableStateMapOf<String, String>() }
+    var password by remember { mutableStateOf("") }
+    var token by remember { mutableStateOf("") }
+    var clientId by remember { mutableStateOf("") }
+    var account by remember { mutableStateOf("primary") }
+    var unlocked by remember { mutableStateOf(false) }
+    var pending by remember { mutableStateOf<AdminCommand?>(null) }
+    var confirmation by remember { mutableStateOf("") }
+    var phrase by remember { mutableStateOf("") }
+    var powerPassword by remember { mutableStateOf("") }
+    var newUser by remember { mutableStateOf(false) }
+    var username by remember { mutableStateOf("") }
+    var name by remember { mutableStateOf("") }
+    var email by remember { mutableStateOf("") }
+    var newPassword by remember { mutableStateOf("") }
+    var role by remember { mutableStateOf("user") }
+    fun run(command: AdminCommand, after: (JSONObject) -> Unit = {}) {
+        if (busy) return
+        busy = true; error = ""; notice = ""
+        scope.launch {
+            try { val result = api.json(command.path, command.method, command.body); after(result); notice = "Saved" }
+            catch (e: Exception) { error = e.message ?: "Request failed" }
+            finally { busy = false; token = ""; powerPassword = "" }
+        }
+    }
+    fun refreshUsers() { scope.launch { try { val a = api.json("/admin/users").optJSONArray("users"); users = (0 until (a?.length() ?: 0)).map { a!!.getJSONObject(it) } } catch (e: Exception) { error = e.message.orEmpty() } } }
+    fun refreshPipeline() {
+        scope.launch { try {
+            val value = api.json("/admin/pipeline-settings")
+            val keys = listOf("pi_bwlimit_kbps", "max_runners", "max_pi_transfers", "min_free_gib", "max_staging_gib", "reserve_per_job_gib")
+            require(keys.all { value.has(it) }) { "Pipeline settings response is incomplete" }
+            pipeline = value
+            keys.forEach { fields[it] = if (it == "pi_bwlimit_kbps") "%.2f".format(java.util.Locale.US, value.getLong(it) * 8192.0 / 1000000) else value.getLong(it).toString() }
+        } catch (e: Exception) { error = e.message.orEmpty() } }
+    }
+    LaunchedEffect(panel) {
+        error = ""; notice = ""
+        if (panel == "Pipeline settings") refreshPipeline()
+        if (panel == "User management") refreshUsers()
+        if (panel != "API management") { password = ""; token = ""; unlocked = false }
+    }
+    val lifecycle = LocalLifecycleOwner.current.lifecycle
+    DisposableEffect(lifecycle) {
+        val observer = LifecycleEventObserver { _, event -> if (event == Lifecycle.Event.ON_STOP) {
+            password = ""; token = ""; powerPassword = ""; newPassword = ""; unlocked = false; pending = null; newUser = false
+        } }
+        lifecycle.addObserver(observer); onDispose { lifecycle.removeObserver(observer) }
+    }
+    pending?.let { command ->
+        PtsConfirmDialog("Confirm change", confirmation, "Confirm", destructive = command.path.startsWith("/admin/power") || command.method == "DELETE",
+            confirmEnabled = !busy && phrase == "CONFIRM" && (command.path != "/admin/power" || powerPassword.isNotBlank()),
+            onConfirm = {
+                pending = null
+                val captured = if (command.path == "/admin/power") command.copy(body = JSONObject(command.body.toString()).put("password", powerPassword)) else command
+                run(captured) { if (command.path.startsWith("/admin/users")) refreshUsers(); if (command.path == "/admin/pipeline-settings") refreshPipeline() }
+            }, onDismiss = { pending = null; powerPassword = "" }) {
+            PtsField(phrase, { phrase = it }, "Type CONFIRM", Modifier.fillMaxWidth())
+            if (command.path == "/admin/power") PtsField(powerPassword, { powerPassword = it }, "Your password", Modifier.fillMaxWidth(), password = true)
+        }
+    }
+    if (newUser) PtsConfirmDialog("Create user", "", "Create", confirmEnabled = !busy && username.isNotBlank() && newPassword.length >= 8,
+        onConfirm = { newUser = false; run(AdminCommand("/admin/users", "POST", JSONObject().put("username", username.trim()).put("name", name.trim()).put("email", email.trim()).put("password", newPassword).put("role", role))) { newPassword = ""; refreshUsers() } },
+        onDismiss = { newUser = false; newPassword = "" }) {
+        PtsField(username, { username = it }, "Username", Modifier.fillMaxWidth())
+        PtsField(name, { name = it }, "Name", Modifier.fillMaxWidth())
+        PtsField(email, { email = it }, "Email", Modifier.fillMaxWidth())
+        PtsField(newPassword, { newPassword = it }, "Password", Modifier.fillMaxWidth(), password = true)
+        PtsSegmented(listOf("user" to "User", "admin" to "Admin"), role, { role = it })
+    }
+    fun confirm(command: AdminCommand, message: String) { pending = command; confirmation = message; phrase = ""; powerPassword = "" }
+    LazyColumn(contentPadding = PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        item { PtsPage("Settings") }
+        if (error.isNotBlank()) item { PtsErrorBanner(error) }
+        if (notice.isNotBlank()) item { Text(notice, color = Pts.ok) }
+        if (busy) item { LinearProgressIndicator(Modifier.fillMaxWidth()) }
+        listOf("Pipeline settings", "API management", "Power options", "User management").forEach { section ->
+            item {
+                PtsCard(Modifier.fillMaxWidth(), padding = 14.dp) {
+                    Row(Modifier.fillMaxWidth().clickable { panel = if (panel == section) "" else section }, verticalAlignment = Alignment.CenterVertically) {
+                        Text(section, Modifier.weight(1f), style = MaterialTheme.typography.titleMedium, color = Pts.text)
+                        Icon(PtsIcons.ChevronDown, null, tint = Pts.accent)
+                    }
+                    if (panel == section) when (section) {
+                        "Pipeline settings" -> {
+                            val labels = linkedMapOf("pi_bwlimit_kbps" to "Pi transfer speed (Mbps)", "max_runners" to "Concurrent runners", "max_pi_transfers" to "Pi transfers", "min_free_gib" to "Minimum free space (GiB)", "max_staging_gib" to "Staging limit (GiB)", "reserve_per_job_gib" to "Reserve per job (GiB)")
+                            if (pipeline != null) labels.forEach { (key, label) -> PtsField(fields[key].orEmpty(), { fields[key] = it }, label, Modifier.fillMaxWidth()) }
+                            PtsSecondaryButton("Refresh", Modifier.fillMaxWidth()) { refreshPipeline() }
+                            PtsPrimaryButton("Save", Modifier.fillMaxWidth(), enabled = pipeline != null && !busy) {
+                                try { confirm(AdminCommand("/admin/pipeline-settings", "PUT", pipelineBody(fields.toMap(), pipeline!!)), "Apply pipeline settings?") } catch (e: Exception) { error = e.message.orEmpty() }
+                            }
+                        }
+                        "API management" -> {
+                            if (!unlocked) {
+                                PtsField(password, { password = it }, "Your password", Modifier.fillMaxWidth(), password = true)
+                                PtsPrimaryButton("Unlock", Modifier.fillMaxWidth(), enabled = password.isNotBlank() && !busy) {
+                                    run(AdminCommand("/admin/github", "POST", JSONObject().put("password", password).put("token", ""))) { cfg ->
+                                        github = cfg; unlocked = true
+                                        scope.launch { try { google = api.json("/admin/google"); clientId = google.optString("client_id") } catch (e: Exception) { error = e.message.orEmpty() } }
+                                    }
+                                }
+                            } else {
+                                val accounts = github.optJSONArray("accounts")
+                                val roles = (0 until (accounts?.length() ?: 0)).map { accounts!!.getJSONObject(it).optString("role") }.filter { it.isNotBlank() }.ifEmpty { listOf("primary") }
+                                roles.forEach { selected -> PtsSecondaryButton(selected.replaceFirstChar { it.uppercase() }, Modifier.fillMaxWidth(), icon = if (selected == account) PtsIcons.Check else null) { account = selected; token = "" } }
+                                val cfg = (0 until (accounts?.length() ?: 0)).map { accounts!!.getJSONObject(it) }.firstOrNull { it.optString("role") == account } ?: github
+                                Text(cfg.optString("repo"), color = Pts.muted, style = MaterialTheme.typography.bodySmall)
+                                Text(cfg.optString("token_masked", "Not configured"), color = Pts.muted, style = MaterialTheme.typography.bodySmall)
+                                PtsField(token, { token = it }, "Replacement GitHub token", Modifier.fillMaxWidth(), password = true)
+                                PtsPrimaryButton("Save & provision", Modifier.fillMaxWidth(), enabled = token.isNotBlank() && !busy) {
+                                    confirm(AdminCommand("/admin/github", "POST", JSONObject().put("password", password).put("token", token.trim()).put("account", account)), "Replace the selected account token and provision its runner repository?")
+                                }
+                                PtsField(clientId, { clientId = it }, "Google client ID", Modifier.fillMaxWidth())
+                                PtsSecondaryButton("Save Google sign-in", Modifier.fillMaxWidth(), enabled = !busy) {
+                                    confirm(AdminCommand("/admin/google", "PUT", JSONObject().put("client_id", clientId.trim()).put("password", password)), "Update Google sign-in?")
+                                }
+                                PtsSecondaryButton("Lock", Modifier.fillMaxWidth()) { password = ""; token = ""; unlocked = false; github = JSONObject(); google = JSONObject() }
+                            }
+                        }
+                        "Power options" -> listOf("pi" to "Restart library", "vps" to "Restart server").forEach { (target, label) ->
+                            PtsSecondaryButton(label, Modifier.fillMaxWidth(), danger = true, enabled = !busy) { confirm(AdminCommand("/admin/power", "POST", JSONObject().put("target", target)), "$label now? Active connections will be interrupted.") }
+                        }
+                        "User management" -> {
+                            PtsPrimaryButton("Create user", Modifier.fillMaxWidth(), enabled = !busy) { username = ""; name = ""; email = ""; newPassword = ""; role = "user"; newUser = true }
+                            users.forEach { entry ->
+                                val id = entry.optLong("id"); val self = id == user.optLong("id")
+                                Text(entry.optString("name").ifBlank { entry.optString("username") }, color = Pts.text, style = MaterialTheme.typography.titleSmall)
+                                Text("@${entry.optString("username")} · ${entry.optString("role")} · ${if (entry.optBoolean("is_active", true)) "Active" else "Disabled"}", color = Pts.muted, style = MaterialTheme.typography.bodySmall)
+                                if (!self) {
+                                    PtsSecondaryButton(if (entry.optString("role") == "admin") "Make user" else "Make admin", Modifier.fillMaxWidth(), enabled = !busy) {
+                                        confirm(AdminCommand("/admin/users/$id", "PATCH", JSONObject().put("role", if (entry.optString("role") == "admin") "user" else "admin")), "Change ${entry.optString("username")}'s role?")
+                                    }
+                                    PtsSecondaryButton(if (entry.optBoolean("is_active", true)) "Disable" else "Enable", Modifier.fillMaxWidth(), enabled = !busy) {
+                                        confirm(AdminCommand("/admin/users/$id", "PATCH", JSONObject().put("is_active", !entry.optBoolean("is_active", true))), "Change ${entry.optString("username")}'s access?")
+                                    }
+                                    PtsSecondaryButton("Delete user", Modifier.fillMaxWidth(), danger = true, enabled = !busy) { confirm(AdminCommand("/admin/users/$id", "DELETE"), "Delete ${entry.optString("username")}? This cannot be undone.") }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        item { PtsSecondaryButton("Check for updates", Modifier.fillMaxWidth(), onClick = onUpdate) }
+        item { PtsSecondaryButton("Sign out", Modifier.fillMaxWidth(), danger = true, onClick = onSignOut) }
+    }
+}

@@ -42,6 +42,22 @@ fun PlayerSeekButton(forward: Boolean, onClick: () -> Unit) {
 }
 
 @Composable
+fun WatchActionBar(downloaded: Boolean, completed: Boolean, series: Boolean, onComplete: () -> Unit, onSave: () -> Unit, onSeasonDownload: () -> Unit) {
+    Row(Modifier.fillMaxWidth().padding(vertical = 6.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        val items = listOf(Triple(PtsIcons.Check, if (completed) "Completed" else "Mark completed", onComplete),
+            Triple(if (downloaded) PtsIcons.Check else PtsIcons.Download, if (downloaded) "Downloaded" else "Save offline", onSave)) +
+            if (series) listOf(Triple(PtsIcons.Queue, "Download episodes", onSeasonDownload)) else emptyList()
+        items.forEach { (icon, label, action) ->
+            Column(Modifier.weight(1f).heightIn(min = 66.dp).clickable(enabled = label != "Downloaded", onClick = action).padding(6.dp),
+                horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                Icon(icon, null, Modifier.size(23.dp), tint = Pts.accent)
+                Text(label, style = MaterialTheme.typography.labelSmall, color = Pts.text, maxLines = 2, textAlign = androidx.compose.ui.text.style.TextAlign.Center)
+            }
+        }
+    }
+}
+
+@Composable
 fun UpNextCard(episode: Episode, countdown: Int?, onPlay: () -> Unit, onCancel: () -> Unit) {
     PtsCard(Modifier.fillMaxWidth()) {
         Text("Up next · S${episode.season}E${episode.episode}", color = Pts.accent, style = MaterialTheme.typography.titleMedium)
@@ -97,8 +113,11 @@ fun SeasonEpisodes(
     val episodes = title.episodes.filter { it.season == season }.sortedBy { it.episode }
     Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
-            Text("Episodes", Modifier.weight(1f), style = MaterialTheme.typography.titleLarge, color = Pts.text)
-            PtsSecondaryButton("Season $season", Modifier.widthIn(max = 160.dp).testTag("season-selector"), icon = PtsIcons.ChevronDown) { picker = true }
+            Text("Episodes", Modifier.weight(1f), style = MaterialTheme.typography.titleMedium, color = Pts.text)
+            TextButton({ picker = true }, Modifier.testTag("season-selector")) {
+                Text("Season $season", style = MaterialTheme.typography.labelLarge)
+                Icon(PtsIcons.ChevronDown, null, Modifier.padding(start = 6.dp).size(18.dp))
+            }
         }
         Text("${episodes.size} episodes", style = MaterialTheme.typography.bodySmall, color = Pts.muted)
         if (episodes.isEmpty()) PtsEmpty("No episodes available", icon = PtsIcons.Series)

@@ -22,7 +22,7 @@ import java.util.concurrent.TimeUnit
 
 const val BASE = "https://ptsmovies.online"
 
-data class Episode(val id: Long, val season: Int, val episode: Int, val title: String, val duration: Double, val container: String, val description: String = "")
+data class Episode(val id: Long, val season: Int, val episode: Int, val title: String, val duration: Double, val container: String, val description: String = "", val size: Long = 0)
 data class Title(
     val id: Long, val kind: String, val title: String, val year: Int, val poster: String,
     val synopsis: String, val genres: List<String>, val episodes: List<Episode>, val codec: String, val container: String
@@ -41,7 +41,7 @@ class PtsApi(private val baseUrl: String = BASE, cookieJar: CookieJar? = null) {
             override fun loadForRequest(url: okhttp3.HttpUrl): List<Cookie> =
                 cookies.getCookie(url.toString())?.split(';')?.mapNotNull { Cookie.parse(url, it.trim()) } ?: emptyList()
         })
-        .followRedirects(true).connectTimeout(15, TimeUnit.SECONDS)
+        .addInterceptor(MediaRouting()).followRedirects(false).connectTimeout(15, TimeUnit.SECONDS)
         .readTimeout(45, TimeUnit.SECONDS).build()
 
     private fun request(path: String, body: JSONObject? = null, method: String = if (body == null) "GET" else "POST"): JSONObject {

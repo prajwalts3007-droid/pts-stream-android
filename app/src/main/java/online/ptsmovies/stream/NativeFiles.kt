@@ -103,7 +103,7 @@ fun NativeFilesScreen(
         ) { if (input) PtsField(name, { name = it }, "Name", Modifier.fillMaxWidth()) }
     }
     LazyColumn(contentPadding = PaddingValues(start = 16.dp, end = 16.dp, bottom = 20.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-        item { PtsPage("Files", "Browse storage on the VPS and Raspberry Pi") }
+        item { PtsPage("Files") }
         item { PtsSegmented(listOf("vps" to "VPS", "pi" to "Raspberry Pi"), device, onDevice) }
         item {
             PtsCard(Modifier.fillMaxWidth(), padding = 10.dp) {

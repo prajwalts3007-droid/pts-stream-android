@@ -37,8 +37,10 @@ class DownloadRepository internal constructor(private val context: Context, priv
     private val lock = Any()
     private val mutable = MutableStateFlow(DownloadSnapshot())
     val state: StateFlow<DownloadSnapshot> = mutable.asStateFlow()
-    @Volatile private var job: Job? = null
-    @Volatile private var call: Call? = null
+    private val jobs = linkedMapOf<String, Job>()
+    private val calls = linkedMapOf<String, Call>()
+    private val reservations = linkedMapOf<String, Long>()
+    private var statusCallback: ((DownloadTask?) -> Unit)? = null
     init {
         val array = runCatching { JSONArray(prefs.getString("jobs", "[]")) }.getOrDefault(JSONArray())
         val saved = store.list()
@@ -72,14 +74,13 @@ class DownloadRepository internal constructor(private val context: Context, priv
     }
     fun pause(key: String): Unit = synchronized(lock) {
         val status = mutable.value.tasks.firstOrNull { it.key == key }?.status
-        if (status !in listOf("queued", "downloading")) return@synchronized
-        val active = status == "downloading"
+        if (status !in listOf("queued", "downloading", "waiting_wifi")) return@synchronized
         task(key) { it.copy(status = "paused", speed = 0) }
-        if (active) { job?.cancel(); call?.cancel() }
+        jobs[key]?.cancel(); calls[key]?.cancel()
     }
     fun cancel(key: String) {
         val metadata = mutable.value.tasks.firstOrNull { it.key == key } ?: return
-        val running = if (mutable.value.tasks.any { it.key == key && it.status == "downloading" }) job else null
+        val running = synchronized(lock) { jobs[key] }
         pause(key)
         task(key) { it.copy(status = "cancelling", speed = 0) }
         scope.launch {
@@ -88,35 +89,52 @@ class DownloadRepository internal constructor(private val context: Context, priv
             update { s -> s.copy(tasks = s.tasks.filterNot { it.key == key }, saved = store.list()) }
         }
     }
-    fun pauseAll() { mutable.value.tasks.filter { it.status in listOf("queued", "downloading") }.forEach { pause(it.key) } }
+    fun pauseAll() { mutable.value.tasks.filter { it.status in listOf("queued", "downloading", "waiting_wifi") }.forEach { pause(it.key) } }
     fun remove(saved: SavedVideo) { store.remove(saved); update { s -> s.copy(saved = store.list(), tasks = s.tasks.filterNot { it.key == saved.key }) } }
     fun refresh() { update { it.copy(saved = store.list()) } }
-    fun runNext(onStatus: (DownloadTask?) -> Unit): Unit = synchronized(lock) {
-        // A cancelling worker still owns its partial file until finally completes.
-        if (job != null) return@synchronized
-        val next = mutable.value.tasks.firstOrNull { it.status == "queued" }
-        if (next == null) { onStatus(null); return@synchronized }
-        task(next.key) { it.copy(status = "downloading", error = "") }
-        job = scope.launch {
-            try {
-                store.save(next.title, next.episode, resume = true, onCall = { call = it }, onTransfer = { p ->
-                    task(next.key) { it.copy(bytes = p.bytes, total = p.total, speed = if (it.status == "downloading") p.speed else 0) }
-                    onStatus(mutable.value.tasks.firstOrNull { it.key == next.key })
-                }) { }
-                val finished = store.find(next.title, next.episode) ?: error("Downloaded file is missing")
-                task(next.key) { it.copy(status = "complete", bytes = finished.bytes, total = finished.bytes, speed = 0) }
-                refresh()
-            } catch (e: CancellationException) {
-                task(next.key) { if (it.status == "downloading") it.copy(status = "paused", speed = 0) else it }
-            } catch (e: Exception) {
-                task(next.key) { it.copy(status = "failed", speed = 0, error = e.message ?: "Download failed") }
-            } finally {
-                call = null
-                synchronized(lock) { job = null }
-                runNext(onStatus)
+    fun enqueueSeason(title: Title, episodes: List<Episode>) { episodes.filter { ep -> store.find(title, ep) == null }.forEach { enqueue(title, it) } }
+    fun runNext(onStatus: (DownloadTask?) -> Unit) { synchronized(lock) { statusCallback = onStatus }; reconcile() }
+    fun reconcile(): Unit = synchronized(lock) {
+        val callback = statusCallback ?: return@synchronized
+        val options = NativePreferences(context).downloads()
+        if (options.wifiOnly && !onWifi(context)) {
+            update { s -> s.copy(tasks = s.tasks.map { if (it.status in listOf("queued", "downloading")) it.copy(status = "waiting_wifi", speed = 0) else it }) }
+            jobs.values.forEach { it.cancel() }; calls.values.forEach { it.cancel() }
+        } else {
+            update { s -> s.copy(tasks = s.tasks.map { if (it.status == "waiting_wifi") it.copy(status = "queued") else it }) }
+            val available = (options.concurrent - jobs.size).coerceAtLeast(0)
+            mutable.value.tasks.filter { it.status == "queued" && it.key !in jobs }.take(available).forEach { next ->
+                task(next.key) { it.copy(status = "downloading", error = "") }
+                val worker = scope.launch(start = CoroutineStart.LAZY) {
+                    try {
+                        store.save(next.title, next.episode, resume = true, onCall = { call -> synchronized(lock) {
+                            if (call != null) calls[next.key] = call else calls.remove(next.key)
+                        } }, admit = { total, offset -> synchronized(lock) {
+                            val limit = NativePreferences(context).downloads().limitGiB.toLong() * 1024 * 1024 * 1024
+                            val needed = total - offset
+                            if (limit > 0 && store.usedBytes() + reservations.filterKeys { it != next.key }.values.sum() + needed > limit)
+                                throw DeviceStorageException("Storage limit reached. Remove a download or increase the limit.")
+                            reservations[next.key] = needed
+                        } }, onTransfer = { p ->
+                            synchronized(lock) { reservations[next.key] = (p.total - p.bytes).coerceAtLeast(0) }
+                            task(next.key) { it.copy(bytes = p.bytes, total = p.total, speed = if (it.status == "downloading") p.speed else 0) }
+                            statusCallback?.invoke(mutable.value.tasks.firstOrNull { it.key == next.key })
+                        }) { }
+                        val finished = store.find(next.title, next.episode) ?: error("Downloaded file is missing")
+                        task(next.key) { it.copy(status = "complete", bytes = finished.bytes, total = finished.bytes, speed = 0) }; refresh()
+                    } catch (e: CancellationException) {
+                        task(next.key) { if (it.status == "downloading") it.copy(status = "paused", speed = 0) else it }
+                    } catch (e: Exception) {
+                        task(next.key) { it.copy(status = "failed", speed = 0, error = e.message ?: "Download failed") }
+                    } finally {
+                        synchronized(lock) { calls.remove(next.key); jobs.remove(next.key); reservations.remove(next.key) }
+                        reconcile()
+                    }
+                }
+                jobs[next.key] = worker; worker.start()
             }
         }
-        onStatus(mutable.value.tasks.firstOrNull { it.key == next.key })
+        callback(mutable.value.tasks.firstOrNull { it.status == "downloading" } ?: mutable.value.tasks.firstOrNull { it.status == "waiting_wifi" })
     }
 }
 
@@ -130,9 +148,15 @@ object DeviceDownloads {
 class DownloadService : Service() {
     private var repository: DownloadRepository? = null
     private val manager get() = getSystemService(NotificationManager::class.java)
+    private val network = object : android.net.ConnectivityManager.NetworkCallback() {
+        override fun onAvailable(network: android.net.Network) { repository?.reconcile() }
+        override fun onLost(network: android.net.Network) { repository?.reconcile() }
+        override fun onCapabilitiesChanged(network: android.net.Network, capabilities: android.net.NetworkCapabilities) { repository?.reconcile() }
+    }
     override fun onCreate() {
         super.onCreate()
         manager.createNotificationChannel(NotificationChannel("native-transfers", "Device downloads", NotificationManager.IMPORTANCE_LOW))
+        getSystemService(android.net.ConnectivityManager::class.java).registerDefaultNetworkCallback(network)
     }
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         startForeground(3001, notification(null))
@@ -157,6 +181,9 @@ class DownloadService : Service() {
             .setProgress(100, task?.progress?.percent ?: 0, task == null).setOngoing(true).setContentIntent(open).build()
     }
     override fun onTimeout(startId: Int, fgsType: Int) { repository?.pauseAll(); stopSelf() }
-    override fun onDestroy() { repository?.pauseAll(); super.onDestroy() }
+    override fun onDestroy() {
+        runCatching { getSystemService(android.net.ConnectivityManager::class.java).unregisterNetworkCallback(network) }
+        repository?.pauseAll(); super.onDestroy()
+    }
     override fun onBind(intent: Intent?): IBinder? = null
 }
