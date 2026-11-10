@@ -6,6 +6,9 @@ an explicit user action and confirmation; authenticated API authorization remain
 
 ## This pass
 
+See [NATIVE-LIFECYCLE.md](NATIVE-LIFECYCLE.md) for the subsequent player, persistent
+device Downloads, avatar/profile, theme, grid/list and native OTA rework.
+
 | Web control / behavior | Native integration |
 | --- | --- |
 | `st-season`, `st-episodes` | Season picker and season-filtered episodes in details **and** watch page; episode sheet in fullscreen; current episode identified. |
@@ -50,8 +53,8 @@ phone's codecs or authenticated behavior of the deployed server.
 - Browser-specific compatibility/remux routes are not silently substituted for HEVC.
   Native playback errors show a Media3/HTTP code; device-specific failures need that
   code and the phone/Android version to diagnose.
-- HLS offline MP4 preparation, resumable foreground-service transfers, native remote
-  push and some advanced library filters remain incomplete. Existing foreground MP4
-  saving restrictions remain explicit.
+- HLS offline MP4 preparation, native remote push and some advanced library filters
+  remain incomplete. Device MP4 downloads now use a foreground service and validated
+  range resume; unsupported or changed sources safely restart rather than append.
 - Browser keyboard shortcuts and browser download presentation are platform-specific;
   Android uses native controls and document pickers instead of embedding a WebView.

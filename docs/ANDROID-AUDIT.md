@@ -61,6 +61,10 @@ or pipeline was changed for this Android audit.
 
 ## Not a stable/full-parity release
 
+The later [native lifecycle rework](NATIVE-LIFECYCLE.md) supersedes the old
+foreground-only download and stable-only update restrictions below. Historical
+results here describe the first audit; use current release notes for the new run.
+
 - Real-device codec/track support, rotation/PiP, deployed Pi/Tunnel/VPS failover,
   authenticated production behavior, actual low-device-storage conditions and
   installer consent still require physical-device testing.

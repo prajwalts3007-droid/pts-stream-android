@@ -429,9 +429,23 @@ class AppFlowTest {
         }
         ui.onNodeWithTag("gesture-feedback").assertTextContains("Volume", substring = true)
         ui.onNodeWithTag("player-gesture-zone").performTouchInput {
+            swipe(androidx.compose.ui.geometry.Offset(width * .2f, height * .3f), androidx.compose.ui.geometry.Offset(width * .65f, height * .3f), 400)
+        }
+        ui.onNodeWithTag("gesture-feedback").assertTextContains("Seek", substring = true)
+        ui.onNodeWithTag("player-gesture-zone").performTouchInput {
             doubleClick(androidx.compose.ui.geometry.Offset(width * .1f, height * .42f))
         }
         ui.onNodeWithTag("gesture-feedback").assertTextContains("−10 seconds")
         capture("native-player-gestures")
+    }
+
+    @Test fun stoppedAndReopenedPlaybackRetainsPositionAndScreen() {
+        launchLoggedIn(); openMovie(); ui.onNodeWithText("Play").performClick(); waitForMovingPlayback(); pauseIfPlaying()
+        val before = ui.onAllNodesWithText(" / 0:08", substring = true).fetchSemanticsNodes().single().config[SemanticsProperties.Text].single().text
+        scenario!!.moveToState(androidx.lifecycle.Lifecycle.State.CREATED)
+        scenario!!.moveToState(androidx.lifecycle.Lifecycle.State.RESUMED)
+        ui.onNodeWithTag("player-surface").assertExists()
+        ui.onNodeWithText(before).assertExists()
+        ui.onNodeWithContentDescription("Play playback").assertExists()
     }
 }

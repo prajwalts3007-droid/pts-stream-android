@@ -26,7 +26,8 @@ data class NativeUpdateState(val status: String = "idle", val message: String = 
     val bytes: Long = 0, val total: Long = 0, val speed: Long = 0, val candidate: ReleaseUpdate? = null)
 
 /** Android DownloadManager owns the APK transfer, not the Activity or a browser page. */
-class NativeUpdates private constructor(private val context: Context) {
+class NativeUpdates internal constructor(private val context: Context, private val releasesApi: String = BuildConfig.RELEASES_API,
+    private val installedCode: Int = BuildConfig.VERSION_CODE) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private val prefs = context.getSharedPreferences("native_updates", Context.MODE_PRIVATE)
     private val manager = context.getSystemService(DownloadManager::class.java)
@@ -50,14 +51,14 @@ class NativeUpdates private constructor(private val context: Context) {
         scope.launch {
             try {
                 val candidate = withContext(Dispatchers.IO) {
-                    val url = if (tests) BuildConfig.RELEASES_API.removeSuffix("/latest") + "?per_page=20" else BuildConfig.RELEASES_API
+                    val url = if (tests) releasesApi.removeSuffix("/latest") + "?per_page=20" else releasesApi
                     OkHttpClient().newCall(Request.Builder().url(url).build()).execute().use { response ->
                         if (response.code == 404) return@use null
                         check(response.isSuccessful) { "Release server HTTP ${response.code}" }
                         val text = response.body?.string().orEmpty()
                         val releases = if (tests) JSONArray(text) else JSONArray().put(JSONObject(text))
                         (0 until releases.length()).mapNotNull { i ->
-                            runCatching { parseReleaseUpdate(releases.getJSONObject(i), BuildConfig.VERSION_CODE, tests) }.getOrNull()
+                            runCatching { parseReleaseUpdate(releases.getJSONObject(i), installedCode, tests) }.getOrNull()
                         }.maxByOrNull { it.code }
                     }
                 }

@@ -205,6 +205,7 @@ class MainActivity : ComponentActivity() {
             window.isNavigationBarContrastEnforced = false
         }
         scope.launch { restoreSession() }
+        startAccountSync()
         setContent {
             PtsTheme(device.theme) {
                 val bar = Pts.bg
@@ -234,6 +235,7 @@ class MainActivity : ComponentActivity() {
     }
 
     private suspend fun restoreSession() {
+        val generation = sessionGeneration
         loading = true
         val cached = device.account()
         if (cached != null) {
@@ -246,6 +248,7 @@ class MainActivity : ComponentActivity() {
         }
         try {
             val verified = api.me()
+            if (generation != sessionGeneration) return
             if (cached != null && cached.optLong("id") != verified.optLong("id")) {
                 downloads?.pauseAll(); device.clearSession(); library = null; selected = null; episode = null
                 playing = false; profileOpen = false; downloadsOpen = false; updatesOpen = false; navigationRestored = false
@@ -619,7 +622,7 @@ class MainActivity : ComponentActivity() {
             playing -> { playing = false; episode = null }
             updatesOpen -> updatesOpen = false
             profileOpen -> profileOpen = false
-            downloadsOpen -> downloadsOpen = false
+            downloadsOpen -> { downloadsOpen = false; streamTab = "Home" }
             selected != null -> selected = null
             mode == "Files" && filesTab == "Browse" && filesPath.isNotBlank() -> filesPath = filesPath.substringBeforeLast('/', "")
             admin() && mode != "Hub" -> enterMode("Hub")
@@ -682,7 +685,7 @@ class MainActivity : ComponentActivity() {
                             scope.launch { try { account = api.json("/auth/avatar", "DELETE").getJSONObject("user"); device.account(account!!); toast("Photo removed", true) }
                                 catch (e: Exception) { toast(e.message ?: "Could not remove photo") } }
                         })
-                    downloadsOpen -> DownloadsScreen(savedVideos, { item ->
+                    downloadsOpen || (mode == "Stream" && streamTab == "Downloads" && selected == null) -> DownloadsScreen(savedVideos, { item ->
                         val title = library?.titles?.firstOrNull { it.id == item.titleId }
                         val stored = title ?: downloadTasks.firstOrNull { it.key == item.key }?.title
                         if (stored == null) toast("Saved title metadata is unavailable")
@@ -1206,7 +1209,9 @@ class MainActivity : ComponentActivity() {
     override fun onStart() {
         super.onStart()
         if (resumeAfterBackground) { player?.play(); resumeAfterBackground = false }
-        foregroundSync?.cancel()
+    }
+
+    private fun startAccountSync() {
         foregroundSync = scope.launch {
             lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
                 while (true) {

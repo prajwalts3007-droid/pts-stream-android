@@ -280,4 +280,33 @@ class ApiContractTest {
         assertEquals("bytes=3-", request().getHeader("Range")); assertNull(request().getHeader("Range"))
         store.remove(saved)
     }
+
+    @Test fun updateVerifierChecksInstalledSignerAndRejectsWrongVersionAndDigest() {
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        val apk = java.io.File(context.applicationInfo.sourceDir)
+        verifyUpdate(context, apk, ReleaseUpdate(BuildConfig.VERSION_CODE, "", ""))
+        try { verifyUpdate(context, apk, ReleaseUpdate(BuildConfig.VERSION_CODE + 1, "", "")); fail("Wrong version") }
+        catch (e: IllegalStateException) { assertTrue(e.message.orEmpty().contains("version mismatch")) }
+        try { verifyUpdate(context, apk, ReleaseUpdate(BuildConfig.VERSION_CODE, "", "sha256:" + "0".repeat(64))); fail("Wrong hash") }
+        catch (e: IllegalStateException) { assertTrue(e.message.orEmpty().contains("checksum mismatch")) }
+    }
+
+    @Test fun nativeUpdaterFindsPrereleaseOnlyInExplicitTestChannel() = runBlocking {
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        lateinit var controller: NativeUpdates
+        InstrumentationRegistry.getInstrumentation().runOnMainSync {
+            controller = NativeUpdates(context, server.url("/releases/latest").toString(), 3)
+            controller.channel("stable")
+        }
+        server.enqueue(MockResponse().setResponseCode(404))
+        InstrumentationRegistry.getInstrumentation().runOnMainSync { controller.check() }
+        kotlinx.coroutines.withTimeout(5000) { while (controller.state.value.status == "checking") kotlinx.coroutines.delay(25) }
+        assertEquals("current", controller.state.value.status)
+        assertEquals("/releases/latest", request().path)
+        server.enqueue(json("""[{"tag_name":"v4-rc1","prerelease":true,"assets":[{"name":"PTS-Stream-v4.apk","browser_download_url":"https://github.com/${BuildConfig.APP_REPOSITORY}/releases/download/v4-rc1/PTS-Stream-v4.apk"}]}]"""))
+        InstrumentationRegistry.getInstrumentation().runOnMainSync { controller.channel("test"); controller.check() }
+        kotlinx.coroutines.withTimeout(5000) { while (controller.state.value.status == "checking") kotlinx.coroutines.delay(25) }
+        assertEquals("available", controller.state.value.status); assertEquals(4, controller.state.value.candidate?.code)
+        assertEquals("/releases?per_page=20", request().path)
+    }
 }
