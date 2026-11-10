@@ -51,19 +51,19 @@ fun CinemaIcon(icon: ImageVector, description: String, modifier: Modifier = Modi
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun CinemaControls(title: String, playing: Boolean, position: Long, duration: Long, buffered: Long, fullscreen: Boolean,
-    muted: Boolean, route: String, episodes: Boolean, previousEnabled: Boolean, nextEnabled: Boolean,
+    muted: Boolean, route: String, episodes: Boolean,
     onBack: () -> Unit, onToggle: () -> Unit, onSeek: (Long) -> Unit, onPreview: (Long?) -> Unit,
     onOptions: () -> Unit, onTracks: () -> Unit, onEpisodes: () -> Unit, onPip: () -> Unit, onLock: () -> Unit,
-    onMute: () -> Unit, onFullscreen: () -> Unit, onConnection: () -> Unit, onPrevious: () -> Unit, onNext: () -> Unit) {
-    Box(Modifier.fillMaxSize().testTag("cinema-controls").background(Brush.verticalGradient(listOf(Color(0xCC000000), Color.Transparent, Color(0xE6000000))))) {
-        Row(Modifier.align(Alignment.TopCenter).fillMaxWidth().padding(horizontal = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+    onMute: () -> Unit, onFullscreen: () -> Unit, onConnection: () -> Unit) {
+    Column(Modifier.fillMaxSize().testTag("cinema-controls").background(Brush.verticalGradient(listOf(Color(0xBB000000), Color.Transparent, Color(0xCC000000))))) {
+        Row(Modifier.fillMaxWidth().testTag("player-header").padding(horizontal = 4.dp), verticalAlignment = Alignment.CenterVertically) {
             CinemaIcon(PtsIcons.Back, "Back", onClick = onBack)
             Text(title, Modifier.weight(1f).padding(horizontal = 6.dp), color = Color.White, style = MaterialTheme.typography.titleSmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
             CinemaIcon(PtsIcons.Pip, "Picture in picture", onClick = onPip)
             CinemaIcon(PtsIcons.PlayerSettings, "Player options", onClick = onOptions)
         }
-        Box(Modifier.fillMaxSize().padding(top = 48.dp, bottom = 132.dp), contentAlignment = Alignment.Center) {
-        Row(horizontalArrangement = Arrangement.spacedBy(28.dp), verticalAlignment = Alignment.CenterVertically) {
+        Box(Modifier.weight(1f).fillMaxWidth().testTag("player-transport"), contentAlignment = Alignment.Center) {
+        Row(horizontalArrangement = Arrangement.spacedBy(24.dp), verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.size(64.dp).clickable { onSeek((position - 10000).coerceAtLeast(0)) }, horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
                 Icon(PtsIcons.Retry, "Back 10 seconds", Modifier.size(36.dp), tint = Color.White)
                 Text("10", style = MaterialTheme.typography.labelMedium, color = Color.White)
@@ -77,10 +77,10 @@ fun CinemaControls(title: String, playing: Boolean, position: Long, duration: Lo
             }
         }
         }
-        Column(Modifier.align(Alignment.BottomCenter).fillMaxWidth().padding(horizontal = 12.dp)) {
-            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+        Column(Modifier.fillMaxWidth().testTag("player-footer").padding(horizontal = 8.dp)) {
+            Row(Modifier.fillMaxWidth().heightIn(min = 24.dp), verticalAlignment = Alignment.CenterVertically) {
                 Text("${playerClock(position)} / ${playerClock(duration)}", Modifier.weight(1f), color = Color.White, style = MaterialTheme.typography.labelMedium)
-                TextButton(onConnection, Modifier.testTag("media-route")) { Text(route, maxLines = 1, color = Pts.accent, style = MaterialTheme.typography.labelMedium) }
+                Text(route, Modifier.testTag("media-route").clickable(onClick = onConnection).padding(horizontal = 8.dp, vertical = 4.dp), maxLines = 1, color = Pts.accent, style = MaterialTheme.typography.labelSmall)
             }
             Box(Modifier.fillMaxWidth()) {
                 var target by remember { mutableLongStateOf(position) }
@@ -97,11 +97,8 @@ fun CinemaControls(title: String, playing: Boolean, position: Long, duration: Lo
             }
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
                 CinemaIcon(PtsIcons.Lock, "Lock player", onClick = onLock)
-                if (episodes) {
-                    CinemaIcon(PtsIcons.Previous, "Previous episode", enabled = previousEnabled, onClick = onPrevious)
-                    CinemaIcon(PtsIcons.Series, "Choose episode", onClick = onEpisodes)
-                    CinemaIcon(PtsIcons.Next, "Next episode", enabled = nextEnabled, onClick = onNext)
-                } else CinemaIcon(if (muted) PtsIcons.Muted else PtsIcons.Volume, "Mute audio", onClick = onMute)
+                CinemaIcon(if (muted) PtsIcons.Muted else PtsIcons.Volume, "Mute audio", onClick = onMute)
+                if (episodes) CinemaIcon(PtsIcons.Series, "Choose episode", onClick = onEpisodes)
                 CinemaIcon(PtsIcons.Subtitles, "Audio and subtitles", onClick = onTracks)
                 CinemaIcon(PtsIcons.Fit, if (fullscreen) "Exit fullscreen" else "Fullscreen", onClick = onFullscreen)
             }

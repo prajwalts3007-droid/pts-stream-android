@@ -151,6 +151,7 @@ class MainActivity : ComponentActivity() {
     private var metrics by mutableStateOf<JSONObject?>(null)
     private var metricsTarget by mutableStateOf("vps")
     private var queueJobs by mutableStateOf(emptyList<JSONObject>())
+    private var queueBusy by mutableStateOf(false)
     private var queueDone by mutableStateOf(emptyList<JSONObject>())
     private var queueStage by mutableStateOf("queued")
     private var users by mutableStateOf(emptyList<JSONObject>())
@@ -450,6 +451,23 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    private fun changeQueue(id: String?, link: String? = null) {
+        if (!admin() || queueBusy) return
+        queueBusy = true
+        val owner = account?.optLong("id")
+        scope.launch {
+            try {
+                val path = if (id == null) "/queue/retry-all" else "/queue/${java.net.URLEncoder.encode(id, "UTF-8")}/${if (link == null) "retry" else "edit"}"
+                val response = api.json(path, "POST", link?.let { JSONObject().put("download_url", it) })
+                if (owner == account?.optLong("id")) {
+                    toast(if (id == null) "Retried ${response.optInt("retried")} failed jobs" else if (link == null) "Job re-queued" else "Job restarted with the new link", true)
+                    loadQueue()
+                }
+            } catch (e: Exception) { if (owner == account?.optLong("id")) toast(e.message ?: "Queue action failed") }
+            finally { queueBusy = false }
+        }
+    }
+
     private fun loadSettings() {
         scope.launch {
             try { users = api.json("/admin/users").optJSONArray("users").objects() } catch (_: Exception) { }
@@ -731,7 +749,8 @@ class MainActivity : ComponentActivity() {
                         "Dashboard" -> DashboardScreen(name, metrics, metricsTarget, { metricsTarget = it }, { loadMetrics() }, queueJobs, queueDone) { hubTab = "Queue" }
                         "Queue" -> QueueScreen(queueJobs, queueDone, queueStage, { queueStage = it }, { loadQueue() }, { id ->
                             scope.launch { try { api.json("/queue/${java.net.URLEncoder.encode(id, "UTF-8")}", "DELETE"); loadQueue() } catch (e: Exception) { toast(e.message ?: "Delete failed") } }
-                        }) { stage, ids -> cancelStage(stage, ids) }
+                        }, onCancelStage = { stage, ids -> cancelStage(stage, ids) }, onRetry = { id -> changeQueue(id) },
+                            onEdit = { job, link -> changeQueue(job.optString("job_id"), link) }, busy = queueBusy)
                         "Download" -> SearchScreen(searchQuery, { search(it) }, searchResults, searchLoading)
                         else -> NativeAdminSettings(user, api, { openUpdates() }, { signOut() }, playbackPrefs, { key, value -> playerPreference(key, value) })
                     }
@@ -870,6 +889,7 @@ class MainActivity : ComponentActivity() {
         var playingNow by remember { mutableStateOf(true) }
         var seekPreview by remember { mutableStateOf<Long?>(null) }
         var interaction by remember { mutableIntStateOf(0) }
+        var touching by remember { mutableStateOf(false) }
         var muted by remember { mutableStateOf(false) }
         var buffering by remember { mutableStateOf(true) }
         var firstFrame by remember { mutableStateOf(false) }
@@ -883,10 +903,6 @@ class MainActivity : ComponentActivity() {
         val nextEpisode = remember(title, ep, appearance.nextDownloadedOnly, savedVideos) {
             nextEpisode(title, ep, savedVideos.map { it.key }.toSet(), appearance.nextDownloadedOnly)
         }
-        val previousEpisode = remember(title, ep, appearance.nextDownloadedOnly, savedVideos) { title.episodes.sortedWith(compareBy({ it.season }, { it.episode })).lastOrNull {
-            ep != null && (it.season < ep.season || (it.season == ep.season && it.episode < ep.episode)) &&
-                (!appearance.nextDownloadedOnly || "${title.id}_${it.id}" in savedVideos.map { v -> v.key })
-        } }
         fun touchControls() { controls = true; interaction++ }
         fun leavePlayer() { if (playerFullscreen) fullscreen(false) else onBack() }
         fun selectEpisode(next: Episode) { clearedProgress.remove(title.id); journal()?.begin(title.id); episode = next; showEpisodes = false }
@@ -1020,8 +1036,8 @@ class MainActivity : ComponentActivity() {
                 if (exo.isPlaying && title.id !in clearedProgress) recordProgress(title.id, ep?.id, exo.currentPosition / 1000, exo.duration.coerceAtLeast(0) / 1000)
             }
         }
-        LaunchedEffect(controls, playingNow, interaction, seekPreview != null, showTracks, showEpisodes, showSettings, showSleep, appearance.controlsSeconds, buffering) {
-            if (controls && controlsShouldHide(playingNow, buffering, seekPreview != null, showTracks || showEpisodes || showSettings || showSleep, appearance.controlsSeconds)) {
+        LaunchedEffect(controls, playingNow, interaction, touching, seekPreview != null, showTracks, showEpisodes, showSettings, showSleep, appearance.controlsSeconds, buffering) {
+            if (controls && !touching && controlsShouldHide(playingNow, buffering, seekPreview != null, showTracks || showEpisodes || showSettings || showSleep, appearance.controlsSeconds)) {
                 delay(appearance.controlsSeconds * 1000L); controls = false
             }
         }
@@ -1075,24 +1091,24 @@ class MainActivity : ComponentActivity() {
                    }, modifier = Modifier.fillMaxSize().graphicsLayer { scaleX = zoom; scaleY = zoom }) }
                    }
                    PlayerGestures(this@MainActivity, exo.currentPosition, duration,
-                      onTap = { controls = !playingNow || !controls; interaction++ },
+                       onTap = { touchControls() },
                      onSeekPreview = { seekPreview = it; touchControls() },
                      onSeek = { exo.seekTo(it); touchControls() },
                       onFeedback = { gestureFeedback = it; touchControls() }, zoom = zoom,
                       onZoom = { value -> zoom = value; gestureFeedback = "Zoom ${"%.2f".format(Locale.US, value)}×"; touchControls() },
-                       onZoomEnd = { if (abs(zoom - 1f) <= .04f) zoom = 1f; if (playbackPrefs.optString("zoom_mode") == "remember") playerPreference("zoom", zoom) }, enabled = !inPip && !locked) {
+                        onZoomEnd = { if (abs(zoom - 1f) <= .04f) zoom = 1f; if (playbackPrefs.optString("zoom_mode") == "remember") playerPreference("zoom", zoom) }, enabled = !inPip && !locked,
+                        onTouch = { touching = it; if (!it) interaction++ }) {
                  androidx.compose.animation.AnimatedVisibility(visible = controls && !inPip && !locked, enter = fadeIn(), exit = fadeOut(), modifier = Modifier.fillMaxSize()) {
                       Box(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.safeDrawing)) {
                           CinemaControls(ep?.let { "${title.title} · S${it.season}E${it.episode}" } ?: title.title,
                               playingNow, seekPreview ?: position, duration, buffered, playerFullscreen, muted, traffic.route.label,
-                              ep != null, previousEpisode != null, nextEpisode != null,
+                               ep != null,
                               onBack = { leavePlayer() }, onToggle = { if (exo.isPlaying) exo.pause() else { if (ended) exo.seekTo(0); exo.play() }; touchControls() },
                               onSeek = { exo.seekTo(it); touchControls() }, onPreview = { seekPreview = it; touchControls() },
                               onOptions = { optionsPage = ""; showSettings = true; touchControls() }, onTracks = { showTracks = true; touchControls() },
                               onEpisodes = { showEpisodes = true; touchControls() }, onPip = { try { enterPictureInPictureMode(PictureInPictureParams.Builder().setAspectRatio(Rational(16, 9)).build()) } catch (_: Exception) { toast("Picture in picture unavailable") } },
                               onLock = { locked = true }, onMute = { muted = !muted; exo.volume = if (muted) 0f else 1f; touchControls() },
-                              onFullscreen = { fullscreen(!playerFullscreen); touchControls() }, onConnection = { optionsPage = "Connection"; showSettings = true; touchControls() },
-                              onPrevious = { previousEpisode?.let { selectEpisode(it) } }, onNext = { nextEpisode?.let { selectEpisode(it) } })
+                               onFullscreen = { fullscreen(!playerFullscreen); touchControls() }, onConnection = { optionsPage = "Connection"; showSettings = true; touchControls() })
                       }
                  }
                   if (locked && !inPip) Box(Modifier.align(Alignment.TopEnd).padding(12.dp).background(Color.Black.copy(alpha = .7f), androidx.compose.foundation.shape.CircleShape)) {

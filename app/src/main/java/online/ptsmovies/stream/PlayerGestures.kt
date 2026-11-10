@@ -22,7 +22,7 @@ import kotlin.math.roundToInt
 fun PlayerGestures(activity: Activity, position: Long, duration: Long, onTap: () -> Unit,
     onSeekPreview: (Long?) -> Unit, onSeek: (Long) -> Unit, onFeedback: (String) -> Unit,
     zoom: Float = 1f, onZoom: (Float) -> Unit = {}, onZoomEnd: () -> Unit = {}, enabled: Boolean = true,
-    content: @Composable BoxScope.() -> Unit = {}) {
+    onTouch: (Boolean) -> Unit = {}, content: @Composable BoxScope.() -> Unit = {}) {
     val currentPosition by rememberUpdatedState(position)
     val currentDuration by rememberUpdatedState(duration)
     val tap by rememberUpdatedState(onTap)
@@ -32,7 +32,16 @@ fun PlayerGestures(activity: Activity, position: Long, duration: Long, onTap: ()
     val currentZoom by rememberUpdatedState(zoom)
     val changeZoom by rememberUpdatedState(onZoom)
     val endZoom by rememberUpdatedState(onZoomEnd)
+    val touch by rememberUpdatedState(onTouch)
     val gestures = Modifier.fillMaxSize().testTag("player-gesture-zone")
+        .pointerInput(Unit) {
+            awaitEachGesture {
+                awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
+                touch(true)
+                try { do { val event = awaitPointerEvent(PointerEventPass.Initial) } while (event.changes.any { it.pressed }) }
+                finally { touch(false) }
+            }
+        }
         .pointerInput(Unit) {
             detectTapGestures(onTap = { tap() }, onDoubleTap = { offset ->
                 val delta = if (offset.x < size.width / 2f) -10000L else 10000L
@@ -88,7 +97,7 @@ fun PlayerGestures(activity: Activity, position: Long, duration: Long, onTap: ()
                 }
                 if (mode == "seek") seek(target)
                 if (mode == "zoom") endZoom()
-                preview(null)
+                if (mode == "seek") preview(null)
             }
         }
     Box(if (enabled) gestures else Modifier.fillMaxSize(), content = content)

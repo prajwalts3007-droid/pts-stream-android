@@ -21,18 +21,18 @@ data class WebTab(val key: String, val label: String, val icon: ImageVector, val
 
 /** One web-style row. It scrolls instead of wrapping or shrinking touch targets. */
 @Composable
-fun WebIconTabs(tabs: List<WebTab>, selected: String, onSelect: (String) -> Unit, tag: String) {
-    Row(Modifier.fillMaxWidth().testTag(tag).horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+fun WebIconTabs(tabs: List<WebTab>, selected: String, onSelect: (String) -> Unit, tag: String, fit: Boolean = false) {
+    Row(Modifier.fillMaxWidth().testTag(tag).then(if (fit) Modifier else Modifier.horizontalScroll(rememberScrollState())), horizontalArrangement = Arrangement.spacedBy(if (fit) 2.dp else 6.dp)) {
         tabs.forEach { tab ->
             val active = tab.key == selected
-            Column(Modifier.heightIn(min = 48.dp).widthIn(min = 48.dp)
+            Column((if (fit) Modifier.weight(1f) else Modifier.widthIn(min = 48.dp)).heightIn(min = 48.dp)
                 .background(if (active) Pts.accentSoft else Pts.card, RoundedCornerShape(12.dp))
                 .border(1.dp, if (active) Pts.accent else Pts.line, RoundedCornerShape(12.dp))
                 .semantics { contentDescription = tab.label; this.selected = active; role = Role.Tab; if (!tab.enabled) disabled() }
-                .clickable(enabled = tab.enabled) { onSelect(tab.key) }.padding(horizontal = 10.dp, vertical = 6.dp),
+                .clickable(enabled = tab.enabled) { onSelect(tab.key) }.padding(horizontal = if (fit) 0.dp else 10.dp, vertical = 6.dp),
                 horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
-                Icon(tab.icon, null, Modifier.size(22.dp), tint = if (active) Pts.accent else Pts.muted)
-                tab.count?.let { Text(it.toString(), color = if (active) Pts.accent else Pts.muted, style = MaterialTheme.typography.labelMedium) }
+                Icon(tab.icon, null, Modifier.size(if (fit) 17.dp else 22.dp), tint = if (active) Pts.accent else Pts.muted)
+                tab.count?.let { Text(if (it > 99) "99+" else it.toString(), maxLines = 1, color = if (active) Pts.accent else Pts.muted, style = MaterialTheme.typography.labelSmall) }
             }
         }
     }

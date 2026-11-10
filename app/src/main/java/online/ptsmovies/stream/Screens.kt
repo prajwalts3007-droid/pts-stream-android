@@ -608,12 +608,31 @@ fun QueueScreen(
     onStage: (String) -> Unit,
     onRefresh: () -> Unit,
     onDelete: (String) -> Unit,
-    onCancelStage: (String, List<String>) -> Unit
+    onCancelStage: (String, List<String>) -> Unit,
+    onRetry: (String?) -> Unit = {},
+    onEdit: (JSONObject, String) -> Unit = { _, _ -> },
+    busy: Boolean = false
 ) {
     var confirmStage by remember { mutableStateOf<String?>(null) }
     var snapshot by remember { mutableStateOf<List<String>>(emptyList()) }
     var deleteJob by remember { mutableStateOf<JSONObject?>(null) }
     var clearCompleted by remember { mutableStateOf<List<String>?>(null) }
+    var retryJob by remember { mutableStateOf<JSONObject?>(null) }
+    var retryAll by remember { mutableStateOf(false) }
+    var editJob by remember { mutableStateOf<JSONObject?>(null) }
+    if (retryAll || retryJob != null) PtsConfirmDialog("Retry failed jobs", if (retryAll)
+        "Re-queue all failed jobs with their existing download links?" else "Retry ${retryJob!!.optString("title")}?",
+        "Retry", confirmEnabled = !busy,
+        onConfirm = { val id = retryJob?.optString("job_id"); retryAll = false; retryJob = null; onRetry(id) },
+        onDismiss = { retryAll = false; retryJob = null })
+    editJob?.let { job ->
+        var url by remember(job.optString("job_id")) { mutableStateOf(job.optString("download_url")) }
+        PtsConfirmDialog("Change download link", "${job.optString("title")}\nThe job restarts from the beginning with the new link, and the file on the Pi is overwritten.",
+            "Restart job", destructive = true, confirmEnabled = validSourceLink(url) && !busy,
+            onConfirm = { editJob = null; onEdit(job, url.trim()) }, onDismiss = { editJob = null }) {
+            PtsField(url, { url = it }, "Download link", Modifier.fillMaxWidth())
+        }
+    }
     clearCompleted?.let { ids ->
         PtsConfirmDialog("Clear completed?", "Remove ${ids.size} completed records? Files already on the Pi are kept.", "Clear",
             onConfirm = { clearCompleted = null; onCancelStage("done", ids) }, onDismiss = { clearCompleted = null })
@@ -653,7 +672,8 @@ fun QueueScreen(
             val icons = listOf(PtsIcons.StageQueued, PtsIcons.StageStarting, PtsIcons.Download, PtsIcons.StageCompress, PtsIcons.Upload, PtsIcons.StagePi, PtsIcons.StageFailed, PtsIcons.Check)
             WebIconTabs(stageOrder.mapIndexed { index, s ->
                 WebTab(s, stageLabel(s), icons[index], if (s == "done") completed.size else jobs.count { it.optString("stage", "queued") == s })
-            } + WebTab("retry", "Retry failed jobs", PtsIcons.Retry, jobs.count { it.optString("stage") == "failed" }, enabled = false), stage, onStage, "queue-stage-row")
+            } + WebTab("retry", "Retry failed jobs", PtsIcons.Retry, jobs.count { it.optString("stage") == "failed" }, enabled = !busy && jobs.any { it.optString("stage") == "failed" }), stage,
+                { if (it == "retry") retryAll = true else onStage(it) }, "queue-stage-row", fit = true)
         }
         item {
             Row(verticalAlignment = Alignment.CenterVertically) {
@@ -680,7 +700,7 @@ fun QueueScreen(
         items(visible) { job ->
             QueueJobRow(
                 job = job,
-                onDelete = { deleteJob = job }
+                onDelete = { deleteJob = job }, onRetry = { retryJob = job }, onEdit = { editJob = job }, busy = busy
             )
         }
     }
@@ -704,7 +724,7 @@ private fun StageTile(label: String, count: Int, active: Boolean, stage: String,
 }
 
 @Composable
-private fun QueueJobRow(job: JSONObject, onDelete: () -> Unit) {
+private fun QueueJobRow(job: JSONObject, onDelete: () -> Unit, onRetry: () -> Unit, onEdit: () -> Unit, busy: Boolean) {
     val stage = job.optString("stage", "queued")
     val progress = (job.optDouble("progress", 0.0) / 100).toFloat().takeIf { it.isFinite() } ?: 0f
     val failed = stage == "failed"
@@ -720,7 +740,11 @@ private fun QueueJobRow(job: JSONObject, onDelete: () -> Unit) {
                 Text(job.optString("title").ifBlank { job.optString("job_id") }, style = MaterialTheme.typography.titleSmall, color = Pts.text, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 Text("· ${tags.joinToString(" · ")}", style = MaterialTheme.typography.labelSmall, color = Pts.muted, maxLines = 1)
             }
-            PtsIconAction(PtsIcons.Close, "Remove", onDelete, tint = Pts.danger, size = 34.dp)
+            if (!busy) {
+                if (failed) PtsIconAction(PtsIcons.Retry, "Retry job", onRetry, size = 40.dp)
+                PtsIconAction(PtsIcons.Edit, "Change download link", onEdit, size = 40.dp)
+                PtsIconAction(PtsIcons.Close, "Remove", onDelete, tint = Pts.danger, size = 40.dp)
+            }
         }
         PtsProgressBar(if (done) 1f else progress, tint = when { failed -> Pts.danger; done -> Pts.ok; stage == "downloading" -> Pts.spark; else -> Pts.accent })
         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -736,6 +760,11 @@ private fun QueueJobRow(job: JSONObject, onDelete: () -> Unit) {
         }
     }
 }
+
+fun validSourceLink(value: String): Boolean = runCatching {
+    val uri = java.net.URI(value.trim())
+    uri.scheme in listOf("https", "http") && !uri.host.isNullOrBlank() && uri.rawUserInfo == null
+}.getOrDefault(false)
 
 @Composable
 fun SearchScreen(query: String, onQuery: (String) -> Unit, results: List<JSONObject>, loading: Boolean) {
