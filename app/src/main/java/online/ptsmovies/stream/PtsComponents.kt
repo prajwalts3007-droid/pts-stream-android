@@ -12,6 +12,8 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsFocusedAsState
 import androidx.compose.foundation.interaction.collectIsPressedAsState
@@ -347,8 +349,9 @@ fun PtsPill(text: String, active: Boolean = false, danger: Boolean = false, tint
 
 @Composable
 fun PtsProgressBar(progress: Float, modifier: Modifier = Modifier, height: Dp = 7.dp, tint: Color = Pts.accent) {
+    val safeProgress = if (progress.isFinite()) progress.coerceIn(0f, 1f) else 0f
     Box(modifier.fillMaxWidth().height(height).clip(RoundedCornerShape(99.dp)).background(Pts.soft)) {
-        Box(Modifier.fillMaxHeight().fillMaxWidth(progress.coerceIn(0f, 1f)).clip(RoundedCornerShape(99.dp)).background(tint))
+        Box(Modifier.fillMaxHeight().fillMaxWidth(safeProgress).clip(RoundedCornerShape(99.dp)).background(tint))
     }
 }
 
@@ -472,12 +475,11 @@ fun PtsPosterCard(
         verticalArrangement = Arrangement.spacedBy(5.dp)
     ) {
         Box(Modifier.fillMaxWidth().aspectRatio(2f / 3f).clip(PosterShape).background(Pts.soft)) {
+            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                Text(title.title.take(1).uppercase(), fontFamily = Nunito, fontWeight = FontWeight.Black, fontSize = 34.sp, color = Pts.accent)
+            }
             if (title.poster.startsWith("https://")) {
                 AsyncImage(title.poster, "Poster for ${title.title}", Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
-            } else {
-                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                    Text(title.title.take(1).uppercase(), fontFamily = Nunito, fontWeight = FontWeight.Black, fontSize = 34.sp, color = Pts.accent)
-                }
             }
             val seconds = resume?.seconds ?: 0L
             val total = resume?.duration ?: 0L
@@ -492,6 +494,7 @@ fun PtsPosterCard(
                     Modifier.align(Alignment.BottomEnd).padding(6.dp).size(32.dp)
                         .background(if (marked) Pts.accent else Pts.card.copy(alpha = .94f), CircleShape)
                         .border(1.dp, if (marked) Pts.accent else Pts.line2, CircleShape)
+                        .semantics { contentDescription = if (marked) "Remove ${title.title} from My List" else "Add ${title.title} to My List" }
                         .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null, onClick = onToggleWatch),
                     contentAlignment = Alignment.Center
                 ) { Icon(if (marked) PtsIcons.Check else PtsIcons.Plus, null, Modifier.size(16.dp), tint = if (marked) Pts.onAccent else Pts.accent) }
@@ -628,7 +631,7 @@ fun PtsConfirmDialog(
     Dialog(onDismissRequest = onDismiss) {
         Column(
             Modifier.fillMaxWidth().clip(RoundedCornerShape(24.dp)).background(Pts.card)
-                .border(2.dp, Pts.line, RoundedCornerShape(24.dp)).padding(22.dp),
+                .border(2.dp, Pts.line, RoundedCornerShape(24.dp)).verticalScroll(rememberScrollState()).padding(22.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
             Text(title, style = MaterialTheme.typography.titleLarge, color = Pts.text)

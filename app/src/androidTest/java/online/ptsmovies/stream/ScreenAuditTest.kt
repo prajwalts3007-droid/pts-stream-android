@@ -4,10 +4,12 @@ import android.graphics.Bitmap
 import androidx.compose.foundation.layout.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.graphics.asAndroidBitmap
 import androidx.compose.ui.test.*
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.Density
 import androidx.test.platform.app.InstrumentationRegistry
 import org.json.JSONObject
 import org.junit.Assert.*
@@ -79,7 +81,7 @@ class ScreenAuditTest {
         ui.onAllNodes(hasSetTextAction())[1].performTextInput("synthetic-password")
         ui.onNodeWithText("SHOW").performClick()
         ui.onNodeWithText("HIDE").assertExists()
-        ui.onNodeWithText("Keep me signed in").performClick()
+        ui.onNodeWithText("Keep me signed in").performScrollTo().performClick().assertIsOff()
         ui.onNodeWithText("Sign in").performScrollTo().performClick()
         ui.runOnIdle { assertEquals(Triple("viewer", "synthetic-password", false), submitted) }
     }
@@ -102,7 +104,7 @@ class ScreenAuditTest {
         ui.onNodeWithText("Delete 2").assertIsNotEnabled()
         ui.runOnIdle { assertTrue(deleted.isEmpty()) }
         ui.onNode(hasSetTextAction()).performTextInput("QUEUED")
-        ui.onNodeWithText("Delete 2").performClick()
+        ui.onNodeWithText("Delete 2").performScrollTo().performClick()
         ui.runOnIdle { assertEquals(listOf("a", "b"), deleted) }
     }
 
@@ -129,5 +131,28 @@ class ScreenAuditTest {
         ui.runOnIdle { assertEquals(0, deletes) }
         ui.onNodeWithText("Delete").performClick()
         ui.runOnIdle { assertEquals(1, deletes) }
+    }
+
+    @Test fun compactPhoneWithLargeTextKeepsPrimaryActionsVisible() {
+        var screen by mutableIntStateOf(0)
+        ui.setContent {
+            val density = LocalDensity.current
+            CompositionLocalProvider(LocalDensity provides Density(density.density, 1.3f)) {
+                PtsTheme {
+                    Box(Modifier.width(320.dp).height(640.dp)) {
+                        PtsBackground {
+                            if (screen == 0) LoginScreen("", false) { _, _, _ -> }
+                            else PtsHero(series.copy(title = "A very long title for a compact phone"), false, {}, {}, {})
+                        }
+                    }
+                }
+            }
+        }
+        ui.onNodeWithText("Sign in").performScrollTo().assertIsDisplayed()
+        capture("compact-large-text-login")
+        ui.runOnIdle { screen = 1 }
+        ui.onNodeWithText("Play").assertIsDisplayed()
+        ui.onNodeWithText("My list").assertIsDisplayed()
+        capture("compact-large-text-hero")
     }
 }

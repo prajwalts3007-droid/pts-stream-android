@@ -33,18 +33,13 @@ jobs:
           profile: pixel_2
           disable-animations: true
           emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
-          script: |
-            gradle --no-daemon :app:connectedDebugAndroidTest
-      - name: Collect rendered screens
-        if: always()
-        run: |
-          mkdir -p audit-screens
-          adb pull /sdcard/Android/data/online.ptsmovies.stream/files/audit-screens/. audit-screens/ || true
+          script: bash .github/scripts/emulator-audit.sh
       - uses: actions/upload-artifact@v4
         if: always()
         with:
           name: native-audit-evidence
           path: |
             audit-screens/
+            audit-logcat.txt
             app/build/reports/
             app/build/outputs/androidTest-results/

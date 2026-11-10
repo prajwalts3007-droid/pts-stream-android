@@ -3,6 +3,7 @@ package online.ptsmovies.stream
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -26,6 +27,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
@@ -70,9 +72,12 @@ fun LoginScreen(message: String, busy: Boolean, onLogin: (String, String, Boolea
     var user by remember { mutableStateOf("") }
     var pass by remember { mutableStateOf("") }
     var keep by remember { mutableStateOf(true) }
-    Box(Modifier.fillMaxSize().imePadding()) {
+    BoxWithConstraints(Modifier.fillMaxSize().imePadding()) {
+        val viewportHeight = maxHeight
+        Box(Modifier.align(Alignment.BottomStart).offset(x = (-125).dp, y = 90.dp).size(250.dp)
+            .border(27.dp, Pts.accent.copy(alpha = .09f), CircleShape))
         Column(
-            Modifier.fillMaxSize().verticalScroll(rememberScrollState())
+            Modifier.fillMaxWidth().verticalScroll(rememberScrollState()).heightIn(min = viewportHeight)
                 .padding(horizontal = 24.dp, vertical = 30.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.Center
@@ -99,7 +104,7 @@ fun LoginScreen(message: String, busy: Boolean, onLogin: (String, String, Boolea
                 Spacer(Modifier.height(4.dp))
                 PtsField(user, { user = it }, "Username or email", Modifier.fillMaxWidth(), keyboardType = KeyboardType.Email, enabled = !busy)
                 PtsField(pass, { pass = it }, "Password", Modifier.fillMaxWidth(), password = true, enabled = !busy)
-                Row(Modifier.fillMaxWidth().clickable { keep = !keep }, verticalAlignment = Alignment.CenterVertically) {
+                Row(Modifier.fillMaxWidth().toggleable(value = keep, role = Role.Checkbox, onValueChange = { keep = it }), verticalAlignment = Alignment.CenterVertically) {
                     Box(
                         Modifier.size(21.dp).background(if (keep) Pts.accent else Pts.soft, RoundedCornerShape(5.dp))
                             .then(if (!keep) Modifier.padding(1.dp).background(Pts.card, RoundedCornerShape(4.dp)) else Modifier),

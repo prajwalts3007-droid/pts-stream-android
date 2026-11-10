@@ -8,6 +8,7 @@ import android.media.AudioManager
 import android.media.MediaCodecList
 import android.os.Build
 import android.os.Bundle
+import android.util.Rational
 import android.view.ViewGroup
 import android.widget.FrameLayout
 import androidx.activity.ComponentActivity
@@ -584,6 +585,7 @@ class MainActivity : ComponentActivity() {
         BackHandler { onBack() }
         DisposableEffect(exo) {
             player = exo
+            val originalBrightness = window.attributes.screenBrightness
             val listener = object : Player.Listener {
                 override fun onPlayerError(exception: PlaybackException) {
                     if (saved == null && !fallback) {
@@ -610,6 +612,7 @@ class MainActivity : ComponentActivity() {
                 library = library?.let { it.copy(progress = it.progress + (title.id to Resume(ep?.id ?: 0L, p, d))) }
                 scope.launch { try { api.progress(title.id, ep?.id, p, d) } catch (_: Exception) { } }
                 exo.removeListener(listener); exo.release()
+                window.attributes = window.attributes.apply { screenBrightness = originalBrightness }
                 if (player === exo) player = null
             }
         }
@@ -641,7 +644,7 @@ class MainActivity : ComponentActivity() {
                         style = MaterialTheme.typography.labelSmall, color = Color(0xFFD3D6ED), maxLines = 1, overflow = TextOverflow.Ellipsis)
                 }
                 if (Build.VERSION.SDK_INT >= 26) PtsIconAction(PtsIcons.Tv, "Picture in picture", {
-                    try { enterPictureInPictureMode(PictureInPictureParams.Builder().build()) } catch (_: Exception) { }
+                    try { enterPictureInPictureMode(PictureInPictureParams.Builder().setAspectRatio(Rational(16, 9)).build()) } catch (_: Exception) { }
                 }, tint = Color.White)
                 PtsIconAction(PtsIcons.Subtitles, "Audio and subtitles", { showTracks = true; controls = true }, tint = Color.White)
             }
@@ -667,13 +670,20 @@ class MainActivity : ComponentActivity() {
                         val total = duration.coerceAtLeast(1)
                         when {
                             abs(dx) > 55f && abs(dx) > abs(dy) -> {
-                                exo.seekTo((exo.currentPosition + (dx * 140).roundToLong()).coerceIn(0, total))
+                                exo.seekTo((exo.currentPosition + (dx / size.width * 120000).roundToLong()).coerceIn(0, total))
                                 controls = true
                             }
-                            abs(dy) > 110f && abs(dy) > abs(dx) && down.position.x > size.width / 2f -> {
-                                val audio = context.getSystemService(AUDIO_SERVICE) as AudioManager
-                                val steps = (abs(dy) / 90f).toInt().coerceIn(1, 8)
-                                repeat(steps) { audio.adjustStreamVolume(AudioManager.STREAM_MUSIC, if (dy < 0) AudioManager.ADJUST_RAISE else AudioManager.ADJUST_LOWER, 0) }
+                            abs(dy) > 110f && abs(dy) > abs(dx) -> {
+                                if (down.position.x > size.width / 2f) {
+                                    val audio = context.getSystemService(AUDIO_SERVICE) as AudioManager
+                                    val steps = (abs(dy) / 90f).toInt().coerceIn(1, 8)
+                                    repeat(steps) { audio.adjustStreamVolume(AudioManager.STREAM_MUSIC, if (dy < 0) AudioManager.ADJUST_RAISE else AudioManager.ADJUST_LOWER, 0) }
+                                } else {
+                                    val attributes = window.attributes
+                                    val current = attributes.screenBrightness.takeIf { it >= 0f } ?: .5f
+                                    attributes.screenBrightness = (current - dy / size.height).coerceIn(.05f, 1f)
+                                    window.attributes = attributes
+                                }
                                 controls = true
                             }
                             else -> {
@@ -709,7 +719,7 @@ class MainActivity : ComponentActivity() {
                                         .clickable { if (exo.isPlaying) exo.pause() else exo.play(); controls = true }, contentAlignment = Alignment.Center) {
                                         Icon(if (playingNow) PtsIcons.Pause else PtsIcons.Play, if (playingNow) "Pause playback" else "Play playback", Modifier.size(26.dp), tint = Pts.onAccent)
                                     }
-                                    PtsIconAction(PtsIcons.Retry, "Forward 10 seconds", { exo.seekTo((exo.currentPosition + 10000).coerceAtMost(duration.coerceAtLeast(0))) }, tint = Color.White, size = 40.dp)
+                                     PtsIconAction(PtsIcons.Refresh, "Forward 10 seconds", { exo.seekTo((exo.currentPosition + 10000).coerceAtMost(duration.coerceAtLeast(0))) }, tint = Color.White, size = 40.dp)
                                 }
                                 Row(verticalAlignment = Alignment.CenterVertically) {
                                     Box(Modifier.clickable { speed = if (speed >= 2f) 0.5f else (speed + 0.25f); exo.setPlaybackSpeed(speed) }
@@ -805,7 +815,7 @@ class MainActivity : ComponentActivity() {
     override fun onUserLeaveHint() {
         super.onUserLeaveHint()
         if (Build.VERSION.SDK_INT >= 26 && playing && player?.isPlaying == true) {
-            try { enterPictureInPictureMode(PictureInPictureParams.Builder().build()) } catch (_: Exception) { }
+            try { enterPictureInPictureMode(PictureInPictureParams.Builder().setAspectRatio(Rational(16, 9)).build()) } catch (_: Exception) { }
         }
     }
 

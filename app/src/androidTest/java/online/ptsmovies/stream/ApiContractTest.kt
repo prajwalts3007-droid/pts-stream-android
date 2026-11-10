@@ -23,8 +23,9 @@ class ApiContractTest {
     @Before fun setup() {
         server = MockWebServer()
         server.start()
+        val baseUrl = server.url("/").toString()
         InstrumentationRegistry.getInstrumentation().runOnMainSync {
-            api = PtsApi(server.url("/").toString(), CookieJar.NO_COOKIES)
+            api = PtsApi(baseUrl, CookieJar.NO_COOKIES)
         }
     }
     @After fun close() { server.shutdown() }
