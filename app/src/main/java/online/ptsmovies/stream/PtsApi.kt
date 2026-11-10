@@ -57,7 +57,7 @@ class PtsApi(private val baseUrl: String = BASE, cookieJar: CookieJar? = null) {
         val client = if (path == "/admin/github") http.newBuilder().readTimeout(105, TimeUnit.SECONDS).build() else http
         client.newCall(builder.build()).execute().use { response ->
             val text = response.body?.string().orEmpty()
-            if (!response.isSuccessful) throw ApiException(response.code, "HTTP ${response.code}: ${text.take(180)}")
+            if (!response.isSuccessful) throw ApiException(response.code, "HTTP ${response.code}: ${text.take(180)}", runCatching { JSONObject(text) }.getOrNull())
             return if (text.isBlank()) JSONObject() else JSONObject(text)
         }
     }
@@ -137,4 +137,4 @@ class PtsApi(private val baseUrl: String = BASE, cookieJar: CookieJar? = null) {
     fun resolveUrl(path: String) = baseUrl.trimEnd('/') + path
 }
 
-class ApiException(val status: Int, message: String) : IOException(message)
+class ApiException(val status: Int, message: String, val data: JSONObject? = null) : IOException(message)

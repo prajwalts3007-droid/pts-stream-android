@@ -318,7 +318,8 @@ fun TitleScreen(
     onPlay: (Episode?) -> Unit,
     onToggleWatch: () -> Unit,
     onDownload: (Episode?) -> Unit,
-    onMarkPlayed: () -> Unit = {}
+    onMarkPlayed: () -> Unit = {},
+    metadataContent: @Composable () -> Unit = {}
 ) {
     val episodes = remember(title) { title.episodes.sortedWith(compareBy({ it.season }, { it.episode })) }
     LazyColumn(
@@ -375,6 +376,7 @@ fun TitleScreen(
             }
         }
         if (title.kind == "series") {
+            item { metadataContent() }
             item { PtsSecondaryButton("Download episodes", Modifier.fillMaxWidth(), icon = PtsIcons.Download) { onDownload(null) } }
             item {
                 SeasonEpisodes(title, resume = resume, savedKeys = savedKeys, downloading = downloading,

@@ -152,6 +152,7 @@ class MainActivity : ComponentActivity() {
     private var metricsTarget by mutableStateOf("vps")
     private var queueJobs by mutableStateOf(emptyList<JSONObject>())
     private var queueBusy by mutableStateOf(false)
+    private val episodeNames by lazy { EpisodeMetadata(this) }
     private var queueDone by mutableStateOf(emptyList<JSONObject>())
     private var queueStage by mutableStateOf("queued")
     private var users by mutableStateOf(emptyList<JSONObject>())
@@ -310,7 +311,8 @@ class MainActivity : ComponentActivity() {
         val generation = sessionGeneration
         try {
             try { progressMutex.withLock { if (owner == account?.optLong("id")) journal()?.flush(api) } } catch (_: Exception) { }
-            val result = journal()?.overlay(api.library()) ?: api.library()
+            val fresh = api.library()
+            val result = (journal()?.overlay(fresh) ?: fresh).let { lib -> lib.copy(titles = lib.titles.map { applyEpisodeNames(it, episodeNames.cached(it)) }) }
             if (generation != sessionGeneration || owner != account?.optLong("id")) return
             val current = selected?.id?.takeIf { playing }
             library = if (current != null && library?.progress?.containsKey(current) == true) result.copy(progress = result.progress + (current to library!!.progress.getValue(current))) else result
@@ -427,12 +429,24 @@ class MainActivity : ComponentActivity() {
     private fun play(title: Title, ep: Episode?) {
         clearedProgress.remove(title.id)
         journal()?.begin(title.id)
-        episode = ep
-        selected = title
+        val named = applyEpisodeNames(title, episodeNames.cached(title))
+        episode = named.episodes.firstOrNull { it.id == ep?.id } ?: ep
+        selected = named
         playing = true
         profileOpen = false; downloadsOpen = false
         restoredPosition = -1L; restoredAutoplay = true
         persistNavigation()
+    }
+
+    private fun applyMetadataTitle(title: Title) {
+        if (selected?.id == title.id && selected?.title == title.title && selected?.year == title.year) {
+            selected = title
+            episode = title.episodes.firstOrNull { it.id == episode?.id } ?: episode
+            library = library?.let { lib -> lib.copy(titles = lib.titles.map { if (it.id == title.id) title else it }) }
+            val repository = downloads
+            val owner = account?.optLong("id")
+            scope.launch { if (repository?.owner == owner) { repository?.store?.hydrate(listOf(title)); repository?.refresh() } }
+        }
     }
 
     private fun loadMetrics() {
@@ -751,7 +765,7 @@ class MainActivity : ComponentActivity() {
                             scope.launch { try { api.json("/queue/${java.net.URLEncoder.encode(id, "UTF-8")}", "DELETE"); loadQueue() } catch (e: Exception) { toast(e.message ?: "Delete failed") } }
                         }, onCancelStage = { stage, ids -> cancelStage(stage, ids) }, onRetry = { id -> changeQueue(id) },
                             onEdit = { job, link -> changeQueue(job.optString("job_id"), link) }, busy = queueBusy)
-                        "Download" -> SearchScreen(searchQuery, { search(it) }, searchResults, searchLoading)
+                        "Download" -> NativeIngest(api, searchQuery, { search(it) }, searchResults, searchLoading, { loadQueue() })
                         else -> NativeAdminSettings(user, api, { openUpdates() }, { signOut() }, playbackPrefs, { key, value -> playerPreference(key, value) })
                     }
                     mode == "Files" && admin() -> if (filesTab == "Transfers") {
@@ -802,7 +816,8 @@ class MainActivity : ComponentActivity() {
                                 onBack = { selected = null },
                                 onPlay = { ep -> play(t, ep) },
                                 onToggleWatch = { toggleWatch(t) },
-                                onDownload = { ep -> startDownload(t, ep) }, onMarkPlayed = { markPlayed(t) })
+                                onDownload = { ep -> startDownload(t, ep) }, onMarkPlayed = { markPlayed(t) },
+                                metadataContent = { EpisodeNamesControl(t, episodeNames, { applyMetadataTitle(it) }) })
                         } else when (streamTab) {
                             "Home" -> StreamHomeScreen(lib, { selected = it }, { title ->
                                 val resume = lib.progress[title.id]
@@ -1142,7 +1157,8 @@ class MainActivity : ComponentActivity() {
                     ).joinToString(" · "),
                      style = MaterialTheme.typography.bodySmall, color = Pts.muted
                 )
-                ShortSynopsis(title.synopsis)
+                 ShortSynopsis(title.synopsis)
+                 if (title.kind == "series") EpisodeNamesControl(title, episodeNames, { applyMetadataTitle(it) })
                 if (ended && nextEpisode != null && !cancelNext) UpNextCard(nextEpisode, if (autoplay) nextCountdown else null, { selectEpisode(nextEpisode) }, { cancelNext = true })
                  WatchActionBar(downloaded, "${title.id}_${ep?.id ?: 0}" in journal()?.completed().orEmpty(), title.kind == "series",
                      onComplete = { markPlayed(title) }, onSave = { startDownload(title, ep) }, onSeasonDownload = { episodeDownloadTitle = title })
