@@ -405,6 +405,7 @@ class MainActivity : ComponentActivity() {
         offline = repo.store
         val cached = getSharedPreferences("playback_${user.optLong("id")}", MODE_PRIVATE).getString("value", "{}")
         if (downloads === repo && downloadWatch?.isActive == true) return
+        clearedProgress.clear(); clearedProgress.addAll(ProgressJournal(this, user.optLong("id")).clearedTitles())
         playbackPrefs = runCatching { JSONObject(cached!!) }.getOrDefault(JSONObject())
         downloads = repo; downloadWatch?.cancel(); repo.refresh()
         savedVideos = repo.state.value.saved; downloadTasks = repo.state.value.tasks
@@ -421,6 +422,7 @@ class MainActivity : ComponentActivity() {
 
     private fun play(title: Title, ep: Episode?) {
         clearedProgress.remove(title.id)
+        journal()?.begin(title.id)
         episode = ep
         selected = title
         playing = true
@@ -871,7 +873,7 @@ class MainActivity : ComponentActivity() {
             .firstOrNull { ep != null && (it.season > ep.season || (it.season == ep.season && it.episode > ep.episode)) } }
         fun touchControls() { controls = true; interaction++ }
         fun leavePlayer() { if (playerFullscreen) fullscreen(false) else onBack() }
-        fun selectEpisode(next: Episode) { clearedProgress.remove(title.id); episode = next; showEpisodes = false }
+        fun selectEpisode(next: Episode) { clearedProgress.remove(title.id); journal()?.begin(title.id); episode = next; showEpisodes = false }
         var resumeAt by remember(title.id, ep?.id) {
             mutableLongStateOf(if (restoredPosition >= 0) restoredPosition.also { restoredPosition = -1L }
                 else resumePosition(library?.progress?.get(title.id), ep?.id ?: 0L, ep?.duration?.toLong() ?: 0L) * 1000)

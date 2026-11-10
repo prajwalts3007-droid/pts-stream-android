@@ -10,11 +10,17 @@ class ProgressJournal(context: Context, owner: Long) {
     private val lock = Any()
     fun completed(): Set<String> = prefs.getStringSet("completed", emptySet())!!.toSet()
     fun markCompleted(key: String) { prefs.edit().putStringSet("completed", completed() + key).apply() }
+    fun clearedTitles(): Set<Long> = prefs.getStringSet("cleared_titles", emptySet())!!.mapNotNull { it.toLongOrNull() }.toSet()
+    fun begin(title: Long) = synchronized(lock) {
+        prefs.edit().putStringSet("cleared_titles", (clearedTitles() - title).map { it.toString() }.toSet()).commit()
+        Unit
+    }
     fun pending(): List<JSONObject> = synchronized(lock) {
         val a = runCatching { JSONArray(prefs.getString("pending", "[]")) }.getOrDefault(JSONArray())
         (0 until a.length()).map { a.getJSONObject(it) }
     }
     fun put(title: Long, episode: Long?, position: Long, duration: Long, clear: Boolean = false) = synchronized(lock) {
+        if (clear) prefs.edit().putStringSet("cleared_titles", (clearedTitles() + title).map { it.toString() }.toSet()).commit()
         val value = JSONObject().put("title_id", title).put("episode_id", episode ?: 0).put("position", position)
             .put("duration", duration).put("clear", clear).put("revision", java.util.UUID.randomUUID().toString())
         prefs.edit().putString("pending", JSONArray(pending().filterNot { it.optLong("title_id") == title } + value).toString()).commit()

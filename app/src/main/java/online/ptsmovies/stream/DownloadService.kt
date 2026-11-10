@@ -30,7 +30,8 @@ data class DownloadTask(val title: Title, val episode: Episode?, val status: Str
 data class DownloadSnapshot(val tasks: List<DownloadTask> = emptyList(), val saved: List<SavedVideo> = emptyList())
 
 /** Process-wide, owner-scoped transfer queue. Activity recreation never owns or cancels it. */
-class DownloadRepository internal constructor(private val context: Context, private val api: PtsApi, val owner: Long) {
+class DownloadRepository internal constructor(private val context: Context, private val api: PtsApi, val owner: Long,
+    private val wifi: () -> Boolean = { onWifi(context) }, private val foreground: (() -> Unit)? = null) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val prefs = context.getSharedPreferences("download_jobs_$owner", Context.MODE_PRIVATE)
     val store = OfflineStore(context, api, owner)
@@ -65,6 +66,7 @@ class DownloadRepository internal constructor(private val context: Context, priv
         startService()
     }
     private fun startService() {
+        foreground?.let { it(); return }
         try { ContextCompat.startForegroundService(context, Intent(context, DownloadService::class.java).putExtra("owner", owner)) }
         catch (e: Exception) { update { s -> s.copy(tasks = s.tasks.map { if (it.status == "queued") it.copy(status = "paused", error = "Open Downloads and tap Resume: ${e.message}") else it }) } }
     }
@@ -97,7 +99,7 @@ class DownloadRepository internal constructor(private val context: Context, priv
     fun reconcile(): Unit = synchronized(lock) {
         val callback = statusCallback ?: return@synchronized
         val options = NativePreferences(context).downloads()
-        if (options.wifiOnly && !onWifi(context)) {
+        if (options.wifiOnly && !wifi()) {
             update { s -> s.copy(tasks = s.tasks.map { if (it.status in listOf("queued", "downloading")) it.copy(status = "waiting_wifi", speed = 0) else it }) }
             jobs.values.forEach { it.cancel() }; calls.values.forEach { it.cancel() }
         } else {

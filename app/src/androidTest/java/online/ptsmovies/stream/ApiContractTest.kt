@@ -335,6 +335,8 @@ class ApiContractTest {
         server.enqueue(json("""{"csrf_token":"fixture"}""")); server.enqueue(json("{}"))
         journal.flush(api); request()
         assertEquals("/api/v1/stream/progress/clear", request().path)
+        assertEquals(setOf(1L), ProgressJournal(context, 90031).clearedTitles())
+        journal.begin(1); assertTrue(journal.clearedTitles().isEmpty())
     }
 
     @Test fun failedProgressFlushKeepsJournalForNextConnection() = runBlocking {
@@ -386,5 +388,43 @@ class ApiContractTest {
         assertEquals(title, restored.titleMetadata()); assertTrue(restored.poster?.isFile == true)
         assertEquals(4096L, restored.titleMetadata().episodes.single().size)
         store.remove(restored); assertFalse(restored.poster!!.exists())
+    }
+
+    @Test fun wifiWaitingNeverOverridesAnExplicitPause() {
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        val preferences = NativePreferences(context); val previous = preferences.downloads()
+        context.getSharedPreferences("download_jobs_90036", 0).edit().clear().commit()
+        var wifi = false
+        lateinit var repository: DownloadRepository
+        preferences.downloads(DownloadOptions(wifiOnly = true))
+        try {
+            repository = DownloadRepository(context, api, 90036, wifi = { wifi }, foreground = { repository.runNext {} })
+            repository.enqueue(movie, null)
+            assertEquals("waiting_wifi", repository.state.value.tasks.single().status)
+            assertEquals(0, server.requestCount)
+            repository.pause("90001_0"); wifi = true; repository.reconcile()
+            assertEquals("paused", repository.state.value.tasks.single().status)
+            assertEquals(0, server.requestCount)
+        } finally { preferences.downloads(previous) }
+    }
+
+    @Test fun concurrentDownloadsKeepBothIndexEntriesAndRespectConfiguredLimit() = runBlocking {
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        val preferences = NativePreferences(context); val previous = preferences.downloads()
+        context.getSharedPreferences("download_jobs_90037", 0).edit().clear().commit()
+        lateinit var repository: DownloadRepository
+        preferences.downloads(DownloadOptions(wifiOnly = false, concurrent = 2))
+        try {
+            repository = DownloadRepository(context, api, 90037, foreground = { repository.runNext {} })
+            repository.store.list().forEach { repository.store.remove(it) }
+            repeat(3) { server.enqueue(MockResponse().setBody("synthetic-media-$it").setBodyDelay(700, TimeUnit.MILLISECONDS)) }
+            repeat(3) { repository.enqueue(movie.copy(id = 90001L + it), null) }
+            assertEquals(2, repository.state.value.tasks.count { it.status == "downloading" })
+            assertEquals(1, repository.state.value.tasks.count { it.status == "queued" })
+            kotlinx.coroutines.withTimeout(10000) { while (repository.state.value.tasks.any { it.status != "complete" }) kotlinx.coroutines.delay(25) }
+            assertEquals(3, repository.store.list().size)
+            assertEquals(3, server.requestCount)
+            repository.state.value.saved.forEach { repository.remove(it) }
+        } finally { repository.pauseAll(); preferences.downloads(previous) }
     }
 }
