@@ -69,7 +69,7 @@ val PosterShape = RoundedCornerShape(12.dp)
 @Composable
 fun PtsBackground(modifier: Modifier = Modifier, content: @Composable BoxScope.() -> Unit) {
     Box(
-        modifier.fillMaxSize().background(Pts.bg).drawBehind {
+        Modifier.fillMaxSize().background(Pts.bg).then(modifier).drawBehind {
             drawRect(Brush.radialGradient(
                 colors = listOf(Pts.accent.copy(alpha = 0.12f), Color.Transparent),
                 center = Offset(size.width * 0.92f, size.height * 0.03f),

@@ -137,6 +137,14 @@ class MainActivity : ComponentActivity() {
         window.statusBarColor = android.graphics.Color.rgb(17, 19, 45)
         window.navigationBarColor = android.graphics.Color.rgb(32, 35, 67)
         WindowCompat.setDecorFitsSystemWindows(window, false)
+        WindowCompat.getInsetsController(window, window.decorView).apply {
+            isAppearanceLightStatusBars = false
+            isAppearanceLightNavigationBars = false
+        }
+        if (Build.VERSION.SDK_INT >= 29) {
+            window.isStatusBarContrastEnforced = false
+            window.isNavigationBarContrastEnforced = false
+        }
         scope.launch { restoreSession() }
         setContent {
             PtsTheme {
