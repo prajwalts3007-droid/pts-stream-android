@@ -43,6 +43,8 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
@@ -109,6 +111,7 @@ fun PtsTopBar(title: String, initial: String, onAvatar: () -> Unit, onTitle: () 
         Box(
             Modifier.size(39.dp).background(Pts.soft, CircleShape)
                 .border(2.dp, Pts.line2, CircleShape)
+                .semantics { contentDescription = "Open profile" }
                 .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null, onClick = onAvatar),
             contentAlignment = Alignment.Center
         ) {

@@ -1,6 +1,5 @@
 package online.ptsmovies.stream
 
-import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Shapes
 import androidx.compose.material3.Typography
@@ -11,6 +10,7 @@ import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.Font
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.font.FontVariation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 
@@ -37,15 +37,15 @@ object Pts {
 }
 
 val DmSans = FontFamily(
-    Font(R.font.dm_sans, FontWeight.Normal),
-    Font(R.font.dm_sans, FontWeight.Medium),
-    Font(R.font.dm_sans, FontWeight.Bold)
+    Font(R.font.dm_sans, FontWeight.Normal, variationSettings = FontVariation.Settings(FontVariation.weight(400), FontVariation.opticalSizing(14.sp))),
+    Font(R.font.dm_sans, FontWeight.Medium, variationSettings = FontVariation.Settings(FontVariation.weight(500), FontVariation.opticalSizing(14.sp))),
+    Font(R.font.dm_sans, FontWeight.Bold, variationSettings = FontVariation.Settings(FontVariation.weight(700), FontVariation.opticalSizing(14.sp)))
 )
 
 val Nunito = FontFamily(
-    Font(R.font.nunito, FontWeight.Bold),
-    Font(R.font.nunito, FontWeight.ExtraBold),
-    Font(R.font.nunito, FontWeight.Black)
+    Font(R.font.nunito, FontWeight.Bold, variationSettings = FontVariation.Settings(FontVariation.weight(700))),
+    Font(R.font.nunito, FontWeight.ExtraBold, variationSettings = FontVariation.Settings(FontVariation.weight(800))),
+    Font(R.font.nunito, FontWeight.Black, variationSettings = FontVariation.Settings(FontVariation.weight(900)))
 )
 
 private val PtsType = Typography(
@@ -98,6 +98,3 @@ private val PtsColors = darkColorScheme(
 fun PtsTheme(content: @Composable () -> Unit) {
     MaterialTheme(colorScheme = PtsColors, typography = PtsType, shapes = PtsShapes, content = content)
 }
-
-val SectionTint: Color
-    @Composable get() = if (isSystemInDarkTheme()) Pts.accent else Pts.accent

@@ -3,6 +3,7 @@ package online.ptsmovies.stream
 import android.Manifest
 import android.app.PictureInPictureParams
 import android.content.pm.PackageManager
+import android.content.res.Configuration
 import android.media.AudioManager
 import android.media.MediaCodecList
 import android.os.Build
@@ -19,6 +20,8 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
@@ -38,6 +41,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.pointer.positionChange
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -70,7 +74,7 @@ import kotlin.math.abs
 import kotlin.math.roundToLong
 
 class MainActivity : ComponentActivity() {
-    private val api = PtsApi()
+    private val api = ApiProvider.create()
     private val scope get() = lifecycleScope
     private lateinit var offline: OfflineStore
 
@@ -93,6 +97,7 @@ class MainActivity : ComponentActivity() {
     private var episode by mutableStateOf<Episode?>(null)
     private var playing by mutableStateOf(false)
     private var player: ExoPlayer? = null
+    private var inPip by mutableStateOf(false)
     private var downloadJob: Job? = null
     private var downloading by mutableStateOf("")
     private var downloadPercent by mutableIntStateOf(0)
@@ -117,11 +122,13 @@ class MainActivity : ComponentActivity() {
     private var filesEntries by mutableStateOf(emptyList<JSONObject>())
     private var filesLoading by mutableStateOf(false)
     private var ops by mutableStateOf(emptyList<JSONObject>())
+    private var restoredNavigation: Bundle? = null
 
     private val askNotifications = registerForActivityResult(ActivityResultContracts.RequestPermission()) { }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        restoredNavigation = savedInstanceState
         if (Build.VERSION.SDK_INT >= 33 && ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
             askNotifications.launch(Manifest.permission.POST_NOTIFICATIONS)
         }
@@ -155,6 +162,7 @@ class MainActivity : ComponentActivity() {
             mode = if (account!!.optString("role") == "admin") "Hub" else "Stream"
             startupError = ""
             refreshLibrary()
+            restoreNavigation()
             if (account!!.optString("role") == "admin") {
                 loadMetrics()
                 loadQueue()
@@ -390,6 +398,7 @@ class MainActivity : ComponentActivity() {
             profileOpen -> profileOpen = false
             downloadsOpen -> downloadsOpen = false
             selected != null -> selected = null
+            mode == "Files" && filesTab == "Browse" && filesPath.isNotBlank() -> filesPath = filesPath.substringBeforeLast('/', "")
             admin() && mode != "Hub" -> enterMode("Hub")
             else -> {
                 val first = when (mode) { "Hub" -> "Dashboard"; "Files" -> "Browse"; else -> "Home" }
@@ -516,7 +525,7 @@ class MainActivity : ComponentActivity() {
                 }
                 val current = when (mode) { "Hub" -> hubTab; "Files" -> filesTab; else -> streamTab }
                 var swipe by remember(mode) { mutableFloatStateOf(0f) }
-                Box(Modifier.pointerInput(mode) {
+                Box(Modifier.testTag("section-dock").pointerInput(mode) {
                     detectHorizontalDragGestures(onDragStart = { swipe = 0f }, onDragEnd = {
                         if (admin() && abs(swipe) >= size.width * 0.3f) swipeMode(swipe > 0)
                         swipe = 0f
@@ -534,6 +543,7 @@ class MainActivity : ComponentActivity() {
     // ---------- player ----------
 
     @Composable
+    @androidx.annotation.OptIn(markerClass = [androidx.media3.common.util.UnstableApi::class])
     private fun PlayerScreen(title: Title, ep: Episode?, saved: SavedVideo?, onBack: () -> Unit) {
         val context = LocalContext.current
         var fallback by remember(title.id, ep?.id) { mutableStateOf(false) }
@@ -578,10 +588,11 @@ class MainActivity : ComponentActivity() {
                 override fun onPlaybackStateChanged(state: Int) {
                     playingNow = state == Player.STATE_READY && exo.playWhenReady
                     if (state == Player.STATE_ENDED && ep != null) {
-                        val next = title.episodes.firstOrNull { it.season == ep.season && it.episode == ep.episode + 1 }
-                            ?: title.episodes.firstOrNull { it.season > ep.season }
+                        val next = title.episodes.sortedWith(compareBy({ it.season }, { it.episode }))
+                            .firstOrNull { it.season > ep.season || (it.season == ep.season && it.episode > ep.episode) }
                         if (next != null) { episode = next; resumeAt = 0; fallback = false }
                     }
+                    if (state == Player.STATE_ENDED) controls = true
                 }
                 override fun onIsPlayingChanged(isPlaying: Boolean) { playingNow = isPlaying }
             }
@@ -589,6 +600,7 @@ class MainActivity : ComponentActivity() {
             onDispose {
                 val p = exo.currentPosition / 1000
                 val d = exo.duration.coerceAtLeast(0) / 1000
+                library = library?.let { it.copy(progress = it.progress + (title.id to Resume(ep?.id ?: 0L, p, d))) }
                 scope.launch { try { api.progress(title.id, ep?.id, p, d) } catch (_: Exception) { } }
                 exo.removeListener(listener); exo.release()
                 if (player === exo) player = null
@@ -611,8 +623,10 @@ class MainActivity : ComponentActivity() {
         LaunchedEffect(controls, playingNow) {
             if (controls && playingNow) { delay(4500); controls = false }
         }
-        Column(Modifier.fillMaxSize().background(Color(0xFF060716))) {
-            Row(Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
+        BoxWithConstraints(Modifier.fillMaxSize().background(Color(0xFF060716))) {
+          val landscape = maxWidth > maxHeight || inPip
+          Column(Modifier.fillMaxSize()) {
+            if (!inPip) Row(Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
                 PtsIconAction(PtsIcons.Back, "Back", onBack, tint = Color.White)
                 Column(Modifier.weight(1f).padding(horizontal = 4.dp)) {
                     Text(title.title, style = MaterialTheme.typography.titleSmall, color = Color.White, maxLines = 1, overflow = TextOverflow.Ellipsis)
@@ -624,7 +638,7 @@ class MainActivity : ComponentActivity() {
                 }, tint = Color.White)
                 PtsIconAction(PtsIcons.Subtitles, "Audio and subtitles", { showTracks = true; controls = true }, tint = Color.White)
             }
-            Box(Modifier.fillMaxWidth().aspectRatio(16f / 9f).background(Color.Black)) {
+            Box((if (landscape) Modifier.weight(1f).fillMaxWidth() else Modifier.fillMaxWidth().aspectRatio(16f / 9f)).background(Color.Black)) {
                 AndroidView(factory = { ctx -> PlayerView(ctx).apply {
                     player = exo
                     useController = false
@@ -665,7 +679,7 @@ class MainActivity : ComponentActivity() {
                         }
                     }
                 })
-                androidx.compose.animation.AnimatedVisibility(visible = controls, enter = fadeIn(), exit = fadeOut(), modifier = Modifier.fillMaxSize()) {
+                androidx.compose.animation.AnimatedVisibility(visible = controls && !inPip, enter = fadeIn(), exit = fadeOut(), modifier = Modifier.fillMaxSize()) {
                     Box(Modifier.fillMaxSize().background(Brush.verticalGradient(listOf(Color(0xCC040514), Color(0x11040514), Color(0xE6040514))))) {
                         Column(Modifier.align(Alignment.BottomCenter).fillMaxWidth().padding(horizontal = 13.dp, vertical = 9.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                             val shown = seekPreview ?: position
@@ -686,7 +700,7 @@ class MainActivity : ComponentActivity() {
                                     PtsIconAction(PtsIcons.Retry, "Back 10 seconds", { exo.seekTo((exo.currentPosition - 10000).coerceAtLeast(0)) }, tint = Color.White, size = 40.dp)
                                     Box(Modifier.size(50.dp).background(Color(0xFFFAFAFF), androidx.compose.foundation.shape.CircleShape)
                                         .clickable { if (exo.isPlaying) exo.pause() else exo.play(); controls = true }, contentAlignment = Alignment.Center) {
-                                        Icon(if (playingNow) PtsIcons.Pause else PtsIcons.Play, "Play or pause", Modifier.size(26.dp), tint = Pts.onAccent)
+                                        Icon(if (playingNow) PtsIcons.Pause else PtsIcons.Play, if (playingNow) "Pause playback" else "Play playback", Modifier.size(26.dp), tint = Pts.onAccent)
                                     }
                                     PtsIconAction(PtsIcons.Retry, "Forward 10 seconds", { exo.seekTo((exo.currentPosition + 10000).coerceAtMost(duration.coerceAtLeast(0))) }, tint = Color.White, size = 40.dp)
                                 }
@@ -703,9 +717,10 @@ class MainActivity : ComponentActivity() {
                     }
                 }
             }
-            if (!hevcAvailable) PtsErrorBanner("This device may not support HEVC playback", modifier = Modifier.padding(12.dp))
-            if (error.isNotBlank()) PtsErrorBanner(error, modifier = Modifier.padding(12.dp))
-            Column(Modifier.fillMaxSize().padding(16.dp), verticalArrangement = Arrangement.spacedBy(9.dp)) {
+            if (!landscape) {
+             if (!hevcAvailable) PtsErrorBanner("This device may not support HEVC playback", modifier = Modifier.padding(12.dp))
+             if (error.isNotBlank()) PtsErrorBanner(error, modifier = Modifier.padding(12.dp))
+             Column(Modifier.weight(1f).verticalScroll(rememberScrollState()).padding(16.dp), verticalArrangement = Arrangement.spacedBy(9.dp)) {
                 Text(title.title, style = MaterialTheme.typography.titleLarge, color = Color.White)
                 Text(
                     listOfNotNull(
@@ -720,14 +735,16 @@ class MainActivity : ComponentActivity() {
                     PtsSecondaryButton("Audio / CC", Modifier.weight(1f), icon = PtsIcons.Subtitles) { showTracks = true }
                     PtsSecondaryButton(if (fill) "Fit screen" else "Fill screen", Modifier.weight(1f), icon = PtsIcons.Fit) { fill = !fill }
                 }
+             }
             }
+          }
         }
         if (showTracks) {
             val audioGroups = exo.currentTracks.groups.filter { it.type == androidx.media3.common.C.TRACK_TYPE_AUDIO }
             val textGroups = exo.currentTracks.groups.filter { it.type == androidx.media3.common.C.TRACK_TYPE_TEXT }
             androidx.compose.ui.window.Dialog(onDismissRequest = { showTracks = false }) {
-                Column(Modifier.fillMaxWidth().background(Pts.card, androidx.compose.foundation.shape.RoundedCornerShape(24.dp))
-                    .padding(20.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Column(Modifier.fillMaxWidth().heightIn(max = 560.dp).background(Pts.card, androidx.compose.foundation.shape.RoundedCornerShape(24.dp))
+                    .verticalScroll(rememberScrollState()).padding(20.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Text("Audio and subtitles", style = MaterialTheme.typography.titleLarge, color = Pts.text)
                     Text("Audio", style = MaterialTheme.typography.labelMedium, color = Pts.muted)
                     if (audioGroups.isEmpty()) Text("No alternate audio tracks", style = MaterialTheme.typography.bodySmall, color = Pts.muted)
@@ -783,6 +800,40 @@ class MainActivity : ComponentActivity() {
     override fun onDestroy() {
         downloadJob?.cancel()
         super.onDestroy()
+    }
+
+    override fun onSaveInstanceState(outState: Bundle) {
+        outState.putString("mode", mode)
+        outState.putString("hubTab", hubTab)
+        outState.putString("filesTab", filesTab)
+        outState.putString("streamTab", streamTab)
+        outState.putString("filesPath", filesPath)
+        outState.putString("filesDevice", filesDevice)
+        outState.putLong("selected", selected?.id ?: 0L)
+        super.onSaveInstanceState(outState)
+    }
+
+    private fun restoreNavigation() {
+        restoredNavigation?.let { state ->
+            mode = if (admin()) state.getString("mode") ?: mode else "Stream"
+            hubTab = state.getString("hubTab") ?: "Dashboard"
+            filesTab = state.getString("filesTab") ?: "Browse"
+            streamTab = state.getString("streamTab") ?: "Home"
+            filesPath = state.getString("filesPath").orEmpty()
+            filesDevice = state.getString("filesDevice") ?: "vps"
+            selected = library?.titles?.firstOrNull { it.id == state.getLong("selected") }
+        }
+        restoredNavigation = null
+    }
+
+    override fun onStop() {
+        if (!isInPictureInPictureMode) player?.pause()
+        super.onStop()
+    }
+
+    override fun onPictureInPictureModeChanged(isInPictureInPictureMode: Boolean, newConfig: Configuration) {
+        super.onPictureInPictureModeChanged(isInPictureInPictureMode, newConfig)
+        inPip = isInPictureInPictureMode
     }
 }
 
