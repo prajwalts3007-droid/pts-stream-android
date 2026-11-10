@@ -2,6 +2,7 @@ package online.ptsmovies.stream
 
 import android.Manifest
 import android.app.PictureInPictureParams
+import android.content.Intent
 import android.content.pm.PackageManager
 import android.media.AudioManager
 import android.media.MediaCodecList
@@ -10,6 +11,11 @@ import android.os.Bundle
 import android.view.ViewGroup
 import android.webkit.WebView
 import android.webkit.WebViewClient
+import android.webkit.CookieManager
+import android.webkit.ValueCallback
+import android.webkit.WebChromeClient
+import android.net.Uri
+import android.os.Environment
 import android.widget.FrameLayout
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
@@ -49,6 +55,9 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import okhttp3.Request
+import java.io.IOException
 import org.json.JSONObject
 import coil.compose.AsyncImage
 import java.io.File
@@ -75,6 +84,11 @@ class MainActivity : ComponentActivity() {
     private var downloading by mutableStateOf("")
     private var downloadPercent by mutableIntStateOf(0)
     private val askNotifications = registerForActivityResult(ActivityResultContracts.RequestPermission()) { }
+    private var fileCallback: ValueCallback<Array<Uri>>? = null
+    private val chooseFile = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
+        fileCallback?.onReceiveValue(WebChromeClient.FileChooserParams.parseResult(result.resultCode, result.data))
+        fileCallback = null
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -144,10 +158,52 @@ class MainActivity : ComponentActivity() {
                         settings.domStorageEnabled = true
                         settings.allowFileAccess = false
                         settings.allowContentAccess = false
+                        webChromeClient = object : WebChromeClient() {
+                            override fun onShowFileChooser(webView: WebView, callback: ValueCallback<Array<Uri>>,
+                                params: FileChooserParams): Boolean {
+                                fileCallback?.onReceiveValue(null)
+                                fileCallback = callback
+                                return try { chooseFile.launch(params.createIntent()); true }
+                                catch (_: Exception) { fileCallback = null; callback.onReceiveValue(null); false }
+                            }
+                        }
                         webViewClient = object : WebViewClient() {
                             override fun shouldOverrideUrlLoading(view: WebView, request: android.webkit.WebResourceRequest): Boolean {
                                 val uri = request.url
-                                return uri.scheme != "https" || uri.host != "ptsmovies.online"
+                                if (uri.scheme != "https") return true
+                                if (uri.host == "ptsmovies.online") return false
+                                startActivity(Intent(Intent.ACTION_VIEW, uri))
+                                return true
+                            }
+                        }
+                        setDownloadListener { url, _, disposition, mime, _ ->
+                            if (Uri.parse(url).scheme != "https" || Uri.parse(url).host != "ptsmovies.online") {
+                                message = "Downloads are limited to the PTS site"; return@setDownloadListener
+                            }
+                            val filename = android.webkit.URLUtil.guessFileName(url, disposition, mime)
+                                .replace(Regex("[^A-Za-z0-9._ -]"), "_").take(100).ifBlank { "pts-file" }
+                            // OkHttp's host-scoped cookie jar does not forward session credentials to redirect targets.
+                            scope.launch {
+                                try {
+                                    withContext(Dispatchers.IO) {
+                                        val directory = File(getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS), "admin").apply { mkdirs() }
+                                        val target = File(directory, filename)
+                                        val partial = File(directory, "$filename.part")
+                                        api.http.newCall(Request.Builder().url(url).build()).execute().use { response ->
+                                            if (!response.isSuccessful) throw IOException("HTTP ${response.code}")
+                                            val length = response.body?.contentLength() ?: -1L
+                                            val bytes = response.body?.byteStream()?.use { input ->
+                                                partial.outputStream().use { output -> input.copyTo(output) }
+                                            } ?: throw IOException("Empty response")
+                                            if (bytes <= 0 || (length >= 0 && bytes != length)) {
+                                                partial.delete(); throw IOException("Incomplete file")
+                                            }
+                                            if (target.exists() && !target.delete()) throw IOException("Cannot replace old file")
+                                            if (!partial.renameTo(target)) throw IOException("Cannot save file")
+                                        }
+                                    }
+                                    message = "$filename saved to this app's Downloads folder"
+                                } catch (e: Exception) { message = "File download failed: ${e.message}" }
                             }
                         }
                         loadUrl(BASE)

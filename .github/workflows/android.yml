@@ -38,7 +38,8 @@ jobs:
           test -n "$PTS_KEYSTORE_B64" && test -n "$PTS_KEYSTORE_PASSWORD" || { echo 'Signing secrets missing'; exit 1; }
           printf %s "$PTS_KEYSTORE_B64" | base64 -d > "$PTS_KEYSTORE_FILE"
           gradle --no-daemon :app:assembleRelease
-          "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify --print-certs app/build/outputs/apk/release/app-release.apk | grep -E '^Verifies|^Verified using' 
+          "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify app/build/outputs/apk/release/app-release.apk
+          echo 'Release APK signature verified'
   release:
     if: startsWith(github.ref, 'refs/tags/v')
     needs: build
