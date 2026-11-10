@@ -816,7 +816,7 @@ fun FilesScreen(
     if (mkdir) {
         PtsConfirmDialog(
             "New folder", "Create a folder inside /${path.ifBlank { "root" }}.",
-            "Create", confirmEnabled = folderName.isNotBlank() && '/' !in folderName && '\\' !in folderName,
+            "Create", confirmEnabled = folderName.isNotBlank() && folderName.trim() !in setOf(".", "..") && '/' !in folderName && '\\' !in folderName,
             onConfirm = { onMkdir(folderName.trim()); folderName = ""; mkdir = false },
             onDismiss = { mkdir = false }
         ) { PtsField(folderName, { folderName = it }, "Folder name", Modifier.fillMaxWidth()) }
@@ -960,9 +960,9 @@ fun SettingsScreen(
                     }
                     Column(Modifier.weight(1f).padding(start = 11.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
                         Text("GitHub pipeline", style = MaterialTheme.typography.titleSmall, color = Pts.text)
-                        Text(if (githubConfigured) "Configured and reachable" else "Status unavailable", style = MaterialTheme.typography.labelSmall, color = Pts.muted)
+                        Text(if (githubConfigured) "Server configuration available" else "Status unavailable", style = MaterialTheme.typography.labelSmall, color = Pts.muted)
                     }
-                    PtsPill(if (githubConfigured) "ready" else "check", active = githubConfigured, danger = !githubConfigured)
+                    PtsPill(if (githubConfigured) "configured" else "check", active = githubConfigured, danger = !githubConfigured)
                 }
                 Text("Runner accounts and tokens remain server-side and administrator-only.", style = MaterialTheme.typography.labelSmall, color = Pts.muted)
             }

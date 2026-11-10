@@ -6,7 +6,6 @@ import androidx.compose.ui.graphics.asAndroidBitmap
 import androidx.compose.ui.test.*
 import androidx.compose.ui.test.junit4.createEmptyComposeRule
 import androidx.test.core.app.ActivityScenario
-import androidx.test.espresso.Espresso.pressBack
 import androidx.test.platform.app.InstrumentationRegistry
 import androidx.test.rule.GrantPermissionRule
 import okhttp3.CookieJar
@@ -100,6 +99,11 @@ class AppFlowTest {
         ui.onNodeWithText("Movies").performClick()
         ui.onNodeWithText("Synthetic HEVC").performClick()
         waitForText("Details")
+    }
+
+    private fun pressBack() {
+        InstrumentationRegistry.getInstrumentation().sendKeyDownUpSync(android.view.KeyEvent.KEYCODE_BACK)
+        ui.waitForIdle()
     }
 
     private fun capture(name: String) {

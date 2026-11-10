@@ -103,6 +103,7 @@ class MainActivity : ComponentActivity() {
     private var downloadPercent by mutableIntStateOf(0)
     private var savedVideos by mutableStateOf(emptyList<SavedVideo>())
     private var fileJob: Job? = null
+    private var fileGeneration = 0
 
     private var metrics by mutableStateOf<JSONObject?>(null)
     private var metricsTarget by mutableStateOf("vps")
@@ -318,14 +319,15 @@ class MainActivity : ComponentActivity() {
 
     private fun loadFiles(device: String = filesDevice, path: String = filesPath) {
         fileJob?.cancel()
+        val generation = ++fileGeneration
         filesLoading = true
         fileJob = scope.launch {
             try {
                 val entries = api.json("/admin/files?path=${java.net.URLEncoder.encode(path, "UTF-8")}&device=$device").optJSONArray("entries").objects()
-                if (device == filesDevice && path == filesPath) filesEntries = entries
+                if (generation == fileGeneration && device == filesDevice && path == filesPath) filesEntries = entries
             } catch (e: CancellationException) { throw e }
             catch (e: Exception) { filesEntries = emptyList(); toast("Files: ${e.message}") }
-            finally { filesLoading = false }
+            finally { if (generation == fileGeneration) filesLoading = false }
         }
     }
 
@@ -493,7 +495,12 @@ class MainActivity : ComponentActivity() {
                                 onToggleWatch = { toggleWatch(t) },
                                 onDownload = { ep -> startDownload(t, ep) })
                         } else when (streamTab) {
-                            "Home" -> StreamHomeScreen(lib, { selected = it }, { play(it, if (it.kind == "series") it.episodes.minByOrNull { e -> e.season * 1000 + e.episode } else null) }, { toggleWatch(it) }) { streamTab = it }
+                            "Home" -> StreamHomeScreen(lib, { selected = it }, { title ->
+                                val resume = lib.progress[title.id]
+                                val next = if (title.kind == "series") title.episodes.firstOrNull { it.id == resume?.episodeId }
+                                    ?: title.episodes.minWithOrNull(compareBy({ it.season }, { it.episode })) else null
+                                play(title, next)
+                            }, { toggleWatch(it) }) { streamTab = it }
                             "Movies" -> BrowseScreen("Movies", lib.titles.filter { it.kind == "movie" }, lib.progress, lib.watch,
                                 browseQueries["Movies"].orEmpty(), { browseQueries["Movies"] = it }, { selected = it }, { toggleWatch(it) })
                             "Series" -> BrowseScreen("Series", lib.titles.filter { it.kind == "series" }, lib.progress, lib.watch,
@@ -719,7 +726,12 @@ class MainActivity : ComponentActivity() {
             }
             if (!landscape) {
              if (!hevcAvailable) PtsErrorBanner("This device may not support HEVC playback", modifier = Modifier.padding(12.dp))
-             if (error.isNotBlank()) PtsErrorBanner(error, modifier = Modifier.padding(12.dp))
+             if (error.isNotBlank()) {
+                 PtsErrorBanner(error, modifier = Modifier.padding(12.dp))
+                 PtsSecondaryButton("Retry playback", Modifier.padding(horizontal = 12.dp).fillMaxWidth(), icon = PtsIcons.Refresh) {
+                     error = ""; exo.prepare(); exo.play(); controls = true
+                 }
+             }
              Column(Modifier.weight(1f).verticalScroll(rememberScrollState()).padding(16.dp), verticalArrangement = Arrangement.spacedBy(9.dp)) {
                 Text(title.title, style = MaterialTheme.typography.titleLarge, color = Color.White)
                 Text(

@@ -15,6 +15,8 @@ import org.json.JSONObject
 import java.io.File
 import java.io.IOException
 
+private class DeviceStorageException(message: String) : IOException(message)
+
 data class SavedVideo(val key: String, val titleId: Long, val title: String, val season: Int,
                       val episode: Int, val label: String, val bytes: Long, val file: File)
 
@@ -68,7 +70,7 @@ class OfflineStore(private val context: Context, private val api: PtsApi, ownerI
                 if (response.code != 200) throw IOException("Source did not return a complete file")
                 val total = body.contentLength().takeIf { it > 0 }
                 if (total == null || total <= 0) throw IOException("Source size is unknown; safe offline download unavailable")
-                if (total > root.usableSpace - 64L * 1024 * 1024) throw IOException("Insufficient device storage")
+                if (total > root.usableSpace - 64L * 1024 * 1024) throw DeviceStorageException("Insufficient device storage")
                 var written = 0L
                 partial.outputStream().buffered().use { out ->
                     body.byteStream().use { input ->
@@ -97,6 +99,7 @@ class OfflineStore(private val context: Context, private val api: PtsApi, ownerI
                 succeeded = true
                 break
             } catch (e: kotlinx.coroutines.CancellationException) { partial.delete(); throw e }
+            catch (e: DeviceStorageException) { partial.delete(); throw e }
             catch (e: Exception) { partial.delete(); last = e }
         }
         if (!succeeded) throw IOException("Offline download failed: ${last?.message ?: "source unavailable"}")

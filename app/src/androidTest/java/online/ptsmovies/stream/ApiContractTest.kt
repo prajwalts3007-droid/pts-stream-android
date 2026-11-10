@@ -93,4 +93,41 @@ class ApiContractTest {
         catch (e: java.io.IOException) { assertTrue(e.message.orEmpty().contains("MP4 preparation")) }
         assertEquals(0, server.requestCount)
     }
+
+    @Test fun updateChannelExcludesPrereleases() {
+        assertNull(parseReleaseUpdate(JSONObject("""{"tag_name":"v3-rc1","prerelease":true}"""), 1))
+        assertNull(parseReleaseUpdate(JSONObject("""{"tag_name":"v1","prerelease":false}"""), 1))
+    }
+
+    @Test fun updateAssetMustBelongToExactRelease() {
+        val url = "https://github.com/sundar211954-debug/pts-stream-android/releases/download/v3/PTS-Stream-v3.apk"
+        val release = JSONObject("""{"tag_name":"v3","assets":[{"name":"PTS-Stream-v3.apk","browser_download_url":"$url"}]}""")
+        assertEquals(3, parseReleaseUpdate(release, 1)?.code)
+        release.getJSONArray("assets").getJSONObject(0).put("browser_download_url", "https://github.com/other/repo/file.apk")
+        try { parseReleaseUpdate(release, 1); fail("Untrusted repository must be refused") }
+        catch (_: IllegalArgumentException) { }
+    }
+
+    @Test fun insufficientStorageDoesNotRetryThroughVps() = runBlocking {
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        val store = OfflineStore(context, api, 90003)
+        server.enqueue(MockResponse().setBody("").setHeader("Content-Length", Long.MAX_VALUE))
+        try { store.save(movie, null) {}; fail("Oversized download must be refused") }
+        catch (e: java.io.IOException) { assertTrue(e.message.orEmpty().contains("Insufficient device storage")) }
+        assertEquals(1, server.requestCount)
+        assertTrue(store.list().isEmpty())
+    }
+
+    @Test fun failedSourcesLeaveNoPartialOrSavedCopy() = runBlocking {
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        val store = OfflineStore(context, api, 90004)
+        repeat(2) { server.enqueue(MockResponse().setResponseCode(403)) }
+        try { store.save(movie, null) {}; fail("Failed sources cannot produce an offline copy") }
+        catch (e: java.io.IOException) { assertTrue(e.message.orEmpty().contains("403")) }
+        assertEquals(2, server.requestCount)
+        assertTrue(store.list().isEmpty())
+        assertFalse(java.io.File(context.filesDir, "media/90004/90001_0.part").exists())
+        assertFalse(request().path.orEmpty().contains("via=vps"))
+        assertTrue(request().path.orEmpty().endsWith("?via=vps"))
+    }
 }
