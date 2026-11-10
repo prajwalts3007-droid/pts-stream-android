@@ -79,6 +79,7 @@ class DownloadRepository internal constructor(private val context: Context, priv
         if (status !in listOf("queued", "downloading", "waiting_wifi")) return@synchronized
         task(key) { it.copy(status = "paused", speed = 0) }
         jobs[key]?.cancel(); calls[key]?.cancel()
+        if (jobs.isEmpty()) reconcile()
     }
     fun cancel(key: String) {
         val metadata = mutable.value.tasks.firstOrNull { it.key == key } ?: return
@@ -91,7 +92,12 @@ class DownloadRepository internal constructor(private val context: Context, priv
             update { s -> s.copy(tasks = s.tasks.filterNot { it.key == key }, saved = store.list()) }
         }
     }
-    fun pauseAll() { mutable.value.tasks.filter { it.status in listOf("queued", "downloading", "waiting_wifi") }.forEach { pause(it.key) } }
+    fun pauseAll(): Unit = synchronized(lock) {
+        update { s -> s.copy(tasks = s.tasks.map { if (it.status in listOf("queued", "downloading", "waiting_wifi")) it.copy(status = "paused", speed = 0) else it }) }
+        jobs.values.forEach { it.cancel() }; calls.values.forEach { it.cancel() }
+        reconcile()
+    }
+    fun detachService(): Unit = synchronized(lock) { statusCallback = null; pauseAll() }
     fun remove(saved: SavedVideo) { store.remove(saved); update { s -> s.copy(saved = store.list(), tasks = s.tasks.filterNot { it.key == saved.key }) } }
     fun refresh() { update { it.copy(saved = store.list()) } }
     fun enqueueSeason(title: Title, episodes: List<Episode>) { episodes.filter { ep -> store.find(title, ep) == null }.forEach { enqueue(title, it) } }
@@ -181,13 +187,13 @@ class DownloadService : Service() {
         val open = PendingIntent.getActivity(this, 3100, intent, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
         return NotificationCompat.Builder(this, "native-transfers").setSmallIcon(android.R.drawable.stat_sys_download)
             .setContentTitle(task?.label ?: "PTS Library downloads")
-            .setContentText(task?.let { "${it.progress.percent}% · ${formatBytes(it.speed)}/s" } ?: "Preparing device transfer")
+            .setContentText(task?.let { if (it.status == "waiting_wifi") "Waiting for Wi-Fi" else "${it.progress.percent}% · ${formatBytes(it.speed)}/s" } ?: "Preparing device transfer")
             .setProgress(100, task?.progress?.percent ?: 0, task == null).setOngoing(true).setContentIntent(open).build()
     }
     override fun onTimeout(startId: Int, fgsType: Int) { repository?.pauseAll(); stopSelf() }
     override fun onDestroy() {
         runCatching { getSystemService(android.net.ConnectivityManager::class.java).unregisterNetworkCallback(network) }
-        repository?.pauseAll(); super.onDestroy()
+        repository?.detachService(); super.onDestroy()
     }
     override fun onBind(intent: Intent?): IBinder? = null
 }

@@ -65,8 +65,10 @@ fun PreferenceSwitch(label: String, checked: Boolean, onChange: (Boolean) -> Uni
 
 @Composable
 fun PlaybackPreferencesScreen(prefs: org.json.JSONObject, onChange: (String, Any) -> Unit, onBack: () -> Unit) {
-    var audio by remember(prefs) { mutableStateOf(prefs.optString("audio_lang")) }
-    var subtitles by remember(prefs) { mutableStateOf(prefs.optString("subtitle_lang")) }
+    var audio by remember { mutableStateOf(prefs.optString("audio_lang")) }
+    var subtitles by remember { mutableStateOf(prefs.optString("subtitle_lang")) }
+    var autoplay by remember { mutableStateOf(prefs.optBoolean("autoplay", true)) }
+    var rememberZoom by remember { mutableStateOf(prefs.optString("zoom_mode") == "remember") }
     val context = androidx.compose.ui.platform.LocalContext.current
     val local = remember { context.getSharedPreferences("playback_local", Context.MODE_PRIVATE) }
     var size by remember { mutableStateOf(local.getFloat("subtitle_size", 1f)) }
@@ -76,13 +78,16 @@ fun PlaybackPreferencesScreen(prefs: org.json.JSONObject, onChange: (String, Any
         PtsPage("Playback")
         PtsField(audio, { audio = it }, "Audio language (en, hi, ta…)", Modifier.fillMaxWidth())
         PtsField(subtitles, { subtitles = it }, "Subtitle language (blank = off)", Modifier.fillMaxWidth())
-        PreferenceSwitch("Autoplay next episode", prefs.optBoolean("autoplay", true)) { onChange("autoplay", it) }
-        PreferenceSwitch("Remember zoom", prefs.optString("zoom_mode") == "remember") { onChange("zoom_mode", if (it) "remember" else "reset") }
+        PreferenceSwitch("Autoplay next episode", autoplay) { autoplay = it }
+        PreferenceSwitch("Remember zoom", rememberZoom) { rememberZoom = it }
         PtsSegmented(listOf("fit" to "Fit", "fill" to "Fill"), fit, { fit = it; local.edit().putString("fit_mode", fit).apply() })
         Text("Subtitle size", color = Pts.text)
         PtsSegmented(listOf("0.8" to "Small", "1.0" to "Medium", "1.3" to "Large"), size.toString(), {
             size = it.toFloat(); local.edit().putFloat("subtitle_size", size).apply()
         })
-        PtsPrimaryButton("Save", Modifier.fillMaxWidth()) { onChange("audio_lang", audio.trim()); onChange("subtitle_lang", subtitles.trim()); onBack() }
+        PtsPrimaryButton("Save", Modifier.fillMaxWidth()) {
+            onChange("audio_lang", audio.trim()); onChange("subtitle_lang", subtitles.trim())
+            onChange("autoplay", autoplay); onChange("zoom_mode", if (rememberZoom) "remember" else "reset"); onBack()
+        }
     }
 }

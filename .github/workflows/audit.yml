@@ -25,6 +25,8 @@ jobs:
           sudo udevadm trigger --name-match=kvm
       - name: Compile app, instrumentation and lint
         run: gradle --no-daemon :app:assembleDebug :app:assembleDebugAndroidTest :app:lintDebug
+      - name: Test isolated LAN relay
+        run: PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s infra -p 'test_*.py' -v
       - name: Run isolated UI and API tests
         uses: reactivecircus/android-emulator-runner@v2
         with:
