@@ -212,11 +212,16 @@ class MainActivity : ComponentActivity() {
         downloadJob?.cancel()
         searchJob?.cancel()
         fileJob?.cancel()
+        loading = true
         scope.launch {
-            try { api.logout() } finally {
+            try { api.logout() }
+            catch (e: CancellationException) { throw e }
+            catch (_: Exception) { /* Local cookies are cleared even if the server is unreachable. */ }
+            finally {
                 account = null; library = null; selected = null; profileOpen = false; downloadsOpen = false
                 queueJobs = emptyList(); queueDone = emptyList(); metrics = null; users = emptyList()
                 savedVideos = emptyList(); message = ""; startupError = ""
+                loading = false
             }
         }
     }
@@ -552,6 +557,7 @@ class MainActivity : ComponentActivity() {
 
     @Composable
     @androidx.annotation.OptIn(markerClass = [androidx.media3.common.util.UnstableApi::class])
+    @OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
     private fun PlayerScreen(title: Title, ep: Episode?, saved: SavedVideo?, onBack: () -> Unit) {
         val context = LocalContext.current
         var fallback by remember(title.id, ep?.id) { mutableStateOf(false) }
@@ -706,6 +712,13 @@ class MainActivity : ComponentActivity() {
                                 onValueChangeFinished = { seekPreview?.let { exo.seekTo(it) }; seekPreview = null },
                                 valueRange = 0f..duration.coerceAtLeast(1).toFloat(),
                                 colors = SliderDefaults.colors(thumbColor = Pts.accent, activeTrackColor = Pts.accent, inactiveTrackColor = Color.White.copy(alpha = .35f)),
+                                thumb = { Box(Modifier.size(14.dp).background(Pts.accent, androidx.compose.foundation.shape.CircleShape)) },
+                                track = {
+                                    val fraction = (shown.toFloat() / duration.coerceAtLeast(1)).coerceIn(0f, 1f)
+                                    Box(Modifier.fillMaxWidth().height(4.dp).clip(androidx.compose.foundation.shape.RoundedCornerShape(99.dp)).background(Color.White.copy(alpha = .28f))) {
+                                        Box(Modifier.fillMaxHeight().fillMaxWidth(fraction).background(Pts.accent))
+                                    }
+                                },
                                 modifier = Modifier.fillMaxWidth().height(28.dp)
                             )
                             Row(verticalAlignment = Alignment.CenterVertically) {

@@ -534,7 +534,7 @@ fun PtsHero(title: Title, marked: Boolean, onOpen: () -> Unit, onPlay: () -> Uni
             listOf(Color(0xF2141434), Color(0xCC141434), Color(0x66141434))
         )))
         Row(
-            Modifier.fillMaxWidth().padding(20.dp).padding(top = 36.dp),
+            Modifier.align(Alignment.BottomStart).fillMaxWidth().padding(20.dp).padding(top = 36.dp),
             verticalAlignment = Alignment.Bottom
         ) {
             if (wide) Box(

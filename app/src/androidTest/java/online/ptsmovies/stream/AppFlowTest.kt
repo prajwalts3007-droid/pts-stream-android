@@ -112,7 +112,13 @@ class AppFlowTest {
 
     private fun capture(name: String) {
         ui.waitForIdle()
-        saveAuditCapture(name, ui.onRoot().captureToImage().asAndroidBitmap())
+        saveAuditCapture(name, checkNotNull(InstrumentationRegistry.getInstrumentation().uiAutomation.takeScreenshot()))
+    }
+
+    private fun waitForMovingPlayback() {
+        ui.waitUntil(20000) {
+            (1..7).any { ui.onAllNodesWithText("0:0$it / 0:08").fetchSemanticsNodes().isNotEmpty() }
+        }
     }
 
     @Test fun viewerLoginNavigationAndRecreation() {
@@ -133,6 +139,10 @@ class AppFlowTest {
         waitForText("No offline videos")
         assertEquals("Viewer must never call admin APIs", 0, adminCalls.get())
         capture("app-viewer-downloads")
+        pressBack()
+        ui.onNodeWithContentDescription("Open profile").performClick()
+        ui.onNodeWithText("Sign out").performScrollTo().performClick()
+        waitForText("Welcome back")
     }
 
     @Test fun adminDockSwipeAndFolderBack() {
@@ -154,7 +164,7 @@ class AppFlowTest {
         launchLoggedIn()
         openMovie()
         ui.onNodeWithText("Play").performClick()
-        ui.waitUntil(20000) { ui.onAllNodesWithText(" / 0:08", substring = true).fetchSemanticsNodes().isNotEmpty() }
+        waitForMovingPlayback()
         ui.onNodeWithContentDescription("Pause playback").performClick()
         capture("app-hevc-network-player")
         pressBack()
@@ -166,7 +176,8 @@ class AppFlowTest {
         ui.onNodeWithText("My Downloads").performClick()
         waitForText("My Downloads")
         ui.onNodeWithContentDescription("Play").performClick()
-        ui.waitUntil(20000) { ui.onAllNodesWithText(" / 0:08", substring = true).fetchSemanticsNodes().isNotEmpty() }
+        waitForMovingPlayback()
+        ui.onNodeWithContentDescription("Pause playback").performClick()
         ui.onNodeWithText("Offline").assertExists()
         capture("app-hevc-offline-player")
         pressBack()
@@ -183,7 +194,8 @@ class AppFlowTest {
         launchLoggedIn()
         openMovie()
         ui.onNodeWithText("Play").performClick()
-        ui.waitUntil(20000) { ui.onAllNodesWithText(" / 0:08", substring = true).fetchSemanticsNodes().isNotEmpty() }
+        waitForMovingPlayback()
+        ui.onNodeWithContentDescription("Pause playback").performClick()
         ui.onNodeWithText("VPS fallback").assertExists()
         capture("app-hevc-vps-fallback")
     }

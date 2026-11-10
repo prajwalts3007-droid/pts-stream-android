@@ -39,7 +39,7 @@ class ScreenAuditTest {
         var screen by mutableIntStateOf(0)
         ui.setContent {
             PtsTheme {
-                PtsBackground {
+                PtsBackground(Modifier.windowInsetsPadding(WindowInsets.safeDrawing)) {
                     if (screen == 0) LoginScreen("", false) { _, _, _ -> }
                     else Column(Modifier.fillMaxSize()) {
                         PtsTopBar("PTS Library", "A", {})
@@ -50,7 +50,7 @@ class ScreenAuditTest {
                                 3 -> FilesScreen("vps", "", listOf(file), false, {}, {}, {}, {}, {}, {})
                                 4 -> TransfersScreen(listOf(JSONObject("""{"id":"1","kind":"upload","detail":"Synthetic clip.mp4","state":"running","pct":42}""")), {})
                                 5 -> StreamHomeScreen(library, {}, {}, {}, {})
-                                6 -> BrowseScreen("Movies", library.titles, library.progress, library.watch, "", {}, {}, {})
+                                6 -> BrowseScreen("Movies", library.titles.filter { it.kind == "movie" }, library.progress, library.watch, "", {}, {}, {})
                                 7 -> TitleScreen(series, library.progress[1], true, emptySet(), "", {}, {}, {}, {})
                                 8 -> DownloadsScreen(emptyList(), {}, {})
                                 9 -> ProfileScreen(admin, 0, {}, {}, {}, {})

@@ -574,26 +574,26 @@ fun DashboardScreen(
             item {
                 val cpu = host.optDouble("cpu_percent").toFloat() / 100f
                 val mem = host.optDouble("mem_percent").toFloat() / 100f
-                Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                Row(Modifier.height(IntrinsicSize.Min), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                     PtsStatTile("CPU", "${(cpu * 100).toInt()}%",
                         "${host.optInt("cpu_cores")} cores · load ${String.format(Locale.US, "%.2f", host.optDouble("load1"))}",
-                        cpu, Pts.accent, Modifier.weight(1f))
+                        cpu, Pts.accent, Modifier.weight(1f).fillMaxHeight())
                     PtsStatTile("Memory", "${(mem * 100).toInt()}%",
                         "${formatBytes(host.optLong("mem_used_bytes"))} / ${formatBytes(host.optLong("mem_total_bytes"))}",
-                        mem, Pts.spark, Modifier.weight(1f))
+                        mem, Pts.spark, Modifier.weight(1f).fillMaxHeight())
                 }
             }
             item {
                 val disk = host.optDouble("disk_percent").toFloat() / 100f
-                Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                Row(Modifier.height(IntrinsicSize.Min), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                     PtsStatTile("Storage" + host.optString("disk_path").takeIf { it.isNotBlank() }?.let { " · $it" }.orEmpty(),
                         "${(disk * 100).toInt()}%",
                         "${formatBytes(host.optLong("disk_used_bytes"))} / ${formatBytes(host.optLong("disk_total_bytes"))}",
-                        disk, Pts.ok, Modifier.weight(1f))
+                        disk, Pts.ok, Modifier.weight(1f).fillMaxHeight())
                     PtsNetworkTile(
                         formatRate(host.optLong("net_rx_bps")), formatRate(host.optLong("net_tx_bps")),
                         "↓${formatBytes(host.optLong("net_rx_total_bytes"))}  ↑${formatBytes(host.optLong("net_tx_total_bytes"))}",
-                        Modifier.weight(1f)
+                        Modifier.weight(1f).fillMaxHeight()
                     )
                 }
             }
@@ -765,7 +765,15 @@ fun SearchScreen(query: String, onQuery: (String) -> Unit, results: List<JSONObj
         verticalArrangement = Arrangement.spacedBy(10.dp)
     ) {
         item { PtsPage("Download", "Find a title for the pipeline") }
-        item { PtsErrorBanner("Search works. Adding jobs from the native app is disabled until source selection and ZIP preflight are verified end to end.") }
+        item {
+            PtsCard(Modifier.fillMaxWidth(), padding = 14.dp) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(PtsIcons.Info, null, Modifier.size(19.dp), tint = Pts.accent)
+                    Text("Search is available here. Source selection and job submission still use the web admin.",
+                        Modifier.padding(start = 10.dp), style = MaterialTheme.typography.bodySmall, color = Pts.muted)
+                }
+            }
+        }
         item { PtsSearchField(query, onQuery, "Title or IMDb ID") }
         if (loading) item {
             Column(verticalArrangement = Arrangement.spacedBy(5.dp)) {
