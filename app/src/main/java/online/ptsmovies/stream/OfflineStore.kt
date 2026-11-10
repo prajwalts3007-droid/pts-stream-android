@@ -14,11 +14,17 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
 import java.io.IOException
+import android.os.SystemClock
+import okhttp3.Call
 
 private class DeviceStorageException(message: String) : IOException(message)
 
 data class SavedVideo(val key: String, val titleId: Long, val title: String, val season: Int,
                       val episode: Int, val label: String, val bytes: Long, val file: File)
+data class TransferProgress(val bytes: Long, val total: Long, val speed: Long) {
+    val percent: Int get() = if (total > 0) (bytes * 100 / total).toInt().coerceIn(0, 100) else 0
+    val eta: Long? get() = if (speed > 0 && total >= bytes) (total - bytes) / speed else null
+}
 
 class OfflineStore(private val context: Context, private val api: PtsApi, ownerId: Long) {
     private val prefs = context.getSharedPreferences("offline_index_$ownerId", Context.MODE_PRIVATE)
@@ -54,25 +60,47 @@ class OfflineStore(private val context: Context, private val api: PtsApi, ownerI
     }
 
     // App-private transfer; never puts media on the VPS or public Android Downloads.
-    suspend fun save(title: Title, episode: Episode?, onProgress: (Int) -> Unit): SavedVideo = withContext(Dispatchers.IO) {
+    fun discardPartial(key: String) {
+        require(key.matches(Regex("[0-9]+_[0-9]+")))
+        File(root, "$key.part").delete(); File(root, "$key.source").delete()
+    }
+    suspend fun save(title: Title, episode: Episode?, resume: Boolean = false,
+        onTransfer: (TransferProgress) -> Unit = {}, onCall: (Call?) -> Unit = {},
+        onProgress: (Int) -> Unit): SavedVideo = withContext(Dispatchers.IO) {
         find(title, episode)?.let { return@withContext it }
         if (episode?.container == "hls" || (episode == null && title.container == "hls"))
             throw IOException("This title needs MP4 preparation on the Pi before offline saving; user access is not yet verified")
         val id = key(title, episode)
         val partial = File(root, "$id.part")
         val dest = File(root, "$id.mp4")
+        val sourceInfo = File(root, "$id.source")
         suspend fun transfer(allowFallback: Boolean) {
             val req = Request.Builder().url(api.streamUrl(title, episode, allowFallback))
-                .build()
-            api.http.newCall(req).execute().use { response ->
+            val info = if (resume) runCatching { JSONObject(sourceInfo.readText()) }.getOrNull() else null
+            val validator = info?.optString("validator").orEmpty()
+            val offset = if (validator.isNotBlank() && partial.isFile) partial.length() else 0L
+            if (offset > 0) req.header("Range", "bytes=$offset-").header("If-Range", validator)
+            val call = api.http.newCall(req.build())
+            onCall(call)
+            call.execute().use { response ->
                 if (!response.isSuccessful) throw IOException("Download HTTP ${response.code}")
                 val body = response.body ?: throw IOException("Empty response")
-                if (response.code != 200) throw IOException("Source did not return a complete file")
-                val total = body.contentLength().takeIf { it > 0 }
-                if (total == null || total <= 0) throw IOException("Source size is unknown; safe offline download unavailable")
-                if (total > root.usableSpace - 64L * 1024 * 1024) throw DeviceStorageException("Insufficient device storage")
-                var written = 0L
-                partial.outputStream().buffered().use { out ->
+                val range = response.header("Content-Range").orEmpty().let { Regex("bytes (\\d+)-(\\d+)/(\\d+)").matchEntire(it) }
+                val append = response.code == 206 && offset > 0
+                val responseValidator = response.header("ETag")?.takeUnless { it.startsWith("W/") }
+                    ?: response.header("Last-Modified").orEmpty()
+                if (append && (range == null || range.groupValues[1].toLong() != offset || responseValidator != validator))
+                    throw IOException("Source changed; restart the download")
+                if (response.code != 200 && !append) throw IOException("Source did not return a safe complete file or range")
+                val total = if (append) range!!.groupValues[3].toLong() else body.contentLength()
+                if (total <= 0) throw IOException("Source size is unknown; safe offline download unavailable")
+                val start = if (append) offset else 0L
+                if (total - start > root.usableSpace - 64L * 1024 * 1024) throw DeviceStorageException("Insufficient device storage")
+                sourceInfo.writeText(JSONObject().put("validator", responseValidator).put("total", total).toString())
+                var written = start
+                val started = SystemClock.elapsedRealtime()
+                var lastReport = 0L
+                java.io.FileOutputStream(partial, append).buffered().use { out ->
                     body.byteStream().use { input ->
                         val buffer = ByteArray(256 * 1024)
                         while (true) {
@@ -81,26 +109,34 @@ class OfflineStore(private val context: Context, private val api: PtsApi, ownerI
                             if (n < 0) break
                             out.write(buffer, 0, n)
                             written += n
+                            if (written > total) throw IOException("Source exceeded its declared size")
                             onProgress((written * 100 / total).toInt().coerceIn(0, 100))
+                            val elapsed = SystemClock.elapsedRealtime() - started
+                            if (elapsed - lastReport >= 250 || written == total) {
+                                onTransfer(TransferProgress(written, total, (written - start) * 1000 / elapsed.coerceAtLeast(1)))
+                                lastReport = elapsed
+                            }
                         }
                     }
                 }
                 if (written != total) throw IOException("Incomplete transfer: $written of $total bytes")
                 if (!partial.renameTo(dest)) throw IOException("Cannot finalize offline download")
+                sourceInfo.delete()
             }
+            onCall(null)
         }
         // The source may expire between sessions. A fresh signed URL is obtained for each attempt.
         var succeeded = false
         var last: Throwable? = null
         for (fallback in listOf(false, true)) {
             try {
-                partial.delete() // a full request avoids silently joining unrelated or changed remote files
+                if (!resume) { partial.delete(); sourceInfo.delete() }
                 transfer(fallback)
                 succeeded = true
                 break
-            } catch (e: kotlinx.coroutines.CancellationException) { partial.delete(); throw e }
+            } catch (e: kotlinx.coroutines.CancellationException) { if (!resume) discardPartial(id); throw e }
             catch (e: DeviceStorageException) { partial.delete(); throw e }
-            catch (e: Exception) { partial.delete(); last = e }
+            catch (e: Exception) { currentCoroutineContext().ensureActive(); partial.delete(); sourceInfo.delete(); last = e }
         }
         if (!succeeded) throw IOException("Offline download failed: ${last?.message ?: "source unavailable"}")
         val item = SavedVideo(id, title.id, title.title, episode?.season ?: 0, episode?.episode ?: 0,

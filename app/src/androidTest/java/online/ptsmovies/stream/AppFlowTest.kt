@@ -39,6 +39,8 @@ class AppFlowTest {
     private val failDirectStream = AtomicBoolean(false)
     private val useSeries = AtomicBoolean(false)
     private val useHls = AtomicBoolean(false)
+    private val slowMedia = AtomicBoolean(false)
+    private val avatarCalls = AtomicInteger(0)
     private val clearedTransfers = AtomicBoolean(false)
     private val clearedProgress = AtomicBoolean(false)
     private val progressAfterClear = AtomicInteger(0)
@@ -55,10 +57,14 @@ class AppFlowTest {
             override fun dispatch(request: RecordedRequest): MockResponse {
                 val path = request.requestUrl!!.encodedPath.removePrefix("/api/v1")
                 fun json(body: String) = MockResponse().setHeader("Content-Type", "application/json").setBody(body)
-                val user = """{"user":{"id":90011,"name":"Test Viewer","username":"viewer","role":"$role"}}"""
+                val user = """{"user":{"id":90011,"name":"Test Viewer","username":"viewer","role":"$role","avatar":"/api/v1/auth/avatar/test.png"}}"""
                 if (path == "/auth/csrf") return json("""{"csrf_token":"test-csrf"}""")
                 if (path == "/auth/login") { signedIn.set(true); return json(user) }
                 if (!signedIn.get()) return json("""{"error":"Unauthorized"}""").setResponseCode(401)
+                if (path == "/auth/avatar/test.png") {
+                    avatarCalls.incrementAndGet()
+                    return MockResponse().setHeader("Content-Type", "image/png").setBody(Buffer().write(android.util.Base64.decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aRZkAAAAASUVORK5CYII=", android.util.Base64.DEFAULT)))
+                }
                 if (path.startsWith("/admin/") || path == "/queue" || path == "/system/metrics") {
                     adminCalls.incrementAndGet()
                     if (role != "admin") return json("""{"error":"Forbidden"}""").setResponseCode(403)
@@ -98,6 +104,8 @@ class AppFlowTest {
                             return MockResponse().setResponseCode(503)
                         val start = request.getHeader("Range")?.substringAfter("bytes=")?.substringBefore('-')?.toIntOrNull() ?: 0
                         val response = MockResponse().setHeader("Content-Type", "video/mp4").setHeader("Accept-Ranges", "bytes")
+                        if (slowMedia.get()) response.throttleBody(4096, 100, java.util.concurrent.TimeUnit.MILLISECONDS)
+                        response.setHeader("ETag", "\"synthetic-fixture\"")
                         if (start > 0) response.setResponseCode(206).setHeader("Content-Range", "bytes $start-${media.lastIndex}/${media.size}")
                         response.setBody(Buffer().write(media, start, media.size - start))
                     }
@@ -109,6 +117,9 @@ class AppFlowTest {
         val baseUrl = server.url("/").toString()
         ApiProvider.override = { PtsApi(baseUrl, CookieJar.NO_COOKIES) }
         val context = InstrumentationRegistry.getInstrumentation().targetContext
+        DeviceState(context).clearSession()
+        context.getSharedPreferences("native_ui", 0).edit().putString("theme", "dark").remove("view_Movies").remove("view_Series").apply()
+        context.getSharedPreferences("download_jobs_90011", 0).edit().clear().commit()
         InstrumentationRegistry.getInstrumentation().runOnMainSync {
             val store = OfflineStore(context, ApiProvider.create(), 90011)
             store.list().forEach { store.remove(it) }
@@ -129,7 +140,12 @@ class AppFlowTest {
     private fun launchLoggedIn() {
         signedIn.set(true)
         scenario = ActivityScenario.launch(MainActivity::class.java)
-        waitForText(if (role == "admin") "Dashboard" else "Stream")
+        waitForText("Stream")
+        if (role == "admin") {
+            ui.onNodeWithContentDescription("Open profile").performClick()
+            ui.onNodeWithText("Hub").performScrollTo().performClick()
+            waitForText("Dashboard")
+        }
     }
 
     private fun openMovie() {
@@ -239,11 +255,8 @@ class AppFlowTest {
         pressBack()
         waitForText("Details")
         ui.onNodeWithText("Save offline").performScrollTo().performClick()
-        waitForText("Downloaded")
-        ui.onNodeWithContentDescription("Open profile").performClick()
-        waitForText("Profile")
-        ui.onNodeWithText("My Downloads").performClick()
         waitForText("My Downloads")
+        ui.waitUntil(15000) { ui.onAllNodesWithContentDescription("Play").fetchSemanticsNodes().isNotEmpty() }
         ui.onNodeWithContentDescription("Play").performClick()
         waitForMovingPlayback()
         pauseIfPlaying()
@@ -359,5 +372,66 @@ class AppFlowTest {
         ui.onNodeWithContentDescription("Playback settings").performClick()
         ui.onNodeWithText("1.25×").performClick()
         ui.onNodeWithContentDescription("Playback settings").assertExists()
+    }
+
+    @Test fun downloadPageSurvivesRecreationAndShowsTransferMetrics() {
+        slowMedia.set(true); launchLoggedIn(); openMovie()
+        ui.onNodeWithText("Save offline").performScrollTo().performClick()
+        waitForText("My Downloads")
+        ui.waitUntil(15000) { ui.onAllNodesWithText("/s · ETA", substring = true).fetchSemanticsNodes().isNotEmpty() }
+        capture("native-download-progress")
+        scenario!!.recreate()
+        waitForText("My Downloads")
+        ui.waitUntil(20000) { ui.onAllNodesWithContentDescription("Play").fetchSemanticsNodes().isNotEmpty() }
+        scenario!!.close(); scenario = ActivityScenario.launch(MainActivity::class.java)
+        waitForText("My Downloads")
+        ui.onNodeWithContentDescription("Play").assertExists()
+        assertEquals(0, adminCalls.get())
+        capture("native-download-reopened")
+    }
+
+    @Test fun pausedPlaybackSurvivesActivityRecreationAtItsPosition() {
+        launchLoggedIn(); openMovie(); ui.onNodeWithText("Play").performClick(); waitForMovingPlayback(); pauseIfPlaying()
+        val before = ui.onAllNodesWithText(" / 0:08", substring = true).fetchSemanticsNodes().single().config[SemanticsProperties.Text].single().text
+        scenario!!.recreate()
+        ui.waitUntil(15000) { ui.onAllNodesWithText(before).fetchSemanticsNodes().isNotEmpty() }
+        ui.onNodeWithContentDescription("Play playback").assertExists()
+        assertDecodedTestPattern()
+        capture("native-player-restored")
+    }
+
+    @Test fun nativeThemesViewsAvatarAndUpdatePageAreAvailable() {
+        launchLoggedIn()
+        ui.waitUntil(10000) { avatarCalls.get() > 0 }
+        ui.onNodeWithContentDescription("Movies").performClick()
+        ui.onNodeWithText("List").performClick()
+        ui.onNodeWithText("Synthetic HEVC").assertExists()
+        scenario!!.recreate()
+        ui.onNodeWithText("List").assertExists()
+        capture("native-movies-list")
+        ui.onNodeWithContentDescription("Open profile").performClick()
+        ui.onNodeWithText("Light").performScrollTo().performClick()
+        capture("native-profile-light")
+        ui.onNodeWithText("Check for updates").performScrollTo().performClick()
+        waitForText("App updates")
+        ui.onNodeWithText("Test releases").assertExists()
+        ui.onNodeWithText("Installed", substring = true).assertExists()
+    }
+
+    @Test fun playerGesturesHaveLiveFeedbackAndSeekWorks() {
+        launchLoggedIn(); openMovie(); ui.onNodeWithText("Play").performClick(); waitForMovingPlayback(); pauseIfPlaying()
+        ui.onNodeWithTag("player-gesture-zone").performTouchInput {
+            swipe(androidx.compose.ui.geometry.Offset(width * .14f, height * .68f), androidx.compose.ui.geometry.Offset(width * .14f, height * .28f), 400)
+        }
+        ui.onNodeWithTag("gesture-feedback").assertTextContains("Brightness", substring = true)
+        ui.onNodeWithTag("player-gesture-zone").performTouchInput {
+            swipe(androidx.compose.ui.geometry.Offset(width * .88f, height * .68f), androidx.compose.ui.geometry.Offset(width * .88f, height * .28f), 400)
+        }
+        ui.onNodeWithTag("gesture-feedback").assertTextContains("Volume", substring = true)
+        ui.onNodeWithTag("player-gesture-zone").performTouchInput {
+            doubleClick(androidx.compose.ui.geometry.Offset(width * .1f, height * .42f))
+        }
+        ui.onNodeWithTag("gesture-feedback").assertTextContains("−10 seconds")
+        capture("native-player-gestures")
     }
 }

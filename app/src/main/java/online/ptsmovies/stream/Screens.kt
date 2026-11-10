@@ -228,8 +228,11 @@ fun BrowseScreen(
     query: String,
     onQuery: (String) -> Unit,
     onOpen: (Title) -> Unit,
-    onToggleWatch: (Title) -> Unit
+    onToggleWatch: (Title) -> Unit,
+    initialView: String = "grid",
+    onViewChange: (String) -> Unit = {}
 ) {
+    var view by rememberSaveable(tab) { mutableStateOf(initialView) }
     var genre by remember(tab) { mutableStateOf("") }
     val genres = remember(tab, titles) {
         when (tab) {
@@ -247,7 +250,7 @@ fun BrowseScreen(
     }
     val label = when (tab) { "Movies" -> "Movies"; "Series" -> "TV Shows"; "Watchlist" -> "My List"; else -> tab }
     LazyVerticalGrid(
-        columns = GridCells.Fixed(2),
+        columns = GridCells.Fixed(if (view == "list") 1 else 2),
         contentPadding = PaddingValues(start = 16.dp, end = 16.dp, bottom = 20.dp),
         horizontalArrangement = Arrangement.spacedBy(12.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp)
@@ -257,6 +260,9 @@ fun BrowseScreen(
         }
         item(span = { GridItemSpan(maxLineSpan) }) {
             PtsSearchField(query, onQuery, "Search movies and shows")
+        }
+        item(span = { GridItemSpan(maxLineSpan) }) {
+            PtsSegmented(listOf("grid" to "Grid", "list" to "List"), view) { view = it; onViewChange(it) }
         }
         if (genres.isNotEmpty()) {
             item(span = { GridItemSpan(maxLineSpan) }) {
@@ -280,7 +286,8 @@ fun BrowseScreen(
             }
         }
         items(filtered, key = { it.id }) { t ->
-            PtsPosterCard(t, progress[t.id], t.id in watch, width = null, onOpen = { onOpen(t) }, onToggleWatch = { onToggleWatch(t) })
+            if (view == "grid") PtsPosterCard(t, progress[t.id], t.id in watch, width = null, onOpen = { onOpen(t) }, onToggleWatch = { onToggleWatch(t) })
+            else PtsTitleListRow(t, t.id in watch, { onOpen(t) }, { onToggleWatch(t) })
         }
     }
 }
@@ -428,7 +435,8 @@ internal fun EpisodeRow(
 }
 
 @Composable
-fun DownloadsScreen(saved: List<SavedVideo>, onPlay: (SavedVideo) -> Unit, onDelete: (SavedVideo) -> Unit) {
+fun DownloadsScreen(saved: List<SavedVideo>, onPlay: (SavedVideo) -> Unit, onDelete: (SavedVideo) -> Unit,
+    tasks: List<DownloadTask> = emptyList(), onPause: (String) -> Unit = {}, onResume: (String) -> Unit = {}, onCancel: (String) -> Unit = {}) {
     var confirm by remember { mutableStateOf<SavedVideo?>(null) }
     confirm?.let { item ->
         PtsConfirmDialog(
@@ -441,7 +449,24 @@ fun DownloadsScreen(saved: List<SavedVideo>, onPlay: (SavedVideo) -> Unit, onDel
         verticalArrangement = Arrangement.spacedBy(10.dp)
     ) {
         item { PtsPage("My Downloads", "${saved.size} offline video${if (saved.size == 1) "" else "s"} · stored on this device") }
-        if (saved.isEmpty()) {
+        items(tasks.filter { it.status != "complete" }, key = { "task-${it.key}" }) { task ->
+            PtsCard(Modifier.fillMaxWidth(), padding = 16.dp) {
+                Text(task.label, style = MaterialTheme.typography.titleMedium, color = Pts.text)
+                PtsPill(task.status.replaceFirstChar { it.uppercase() }, active = task.status == "downloading", danger = task.status == "failed")
+                PtsProgressBar(task.progress.percent / 100f)
+                Text("${task.progress.percent}% · ${formatBytes(task.bytes)} / ${if (task.total > 0) formatBytes(task.total) else "calculating size"}",
+                    style = MaterialTheme.typography.bodySmall, color = Pts.muted)
+                Text(if (task.status == "downloading") "${formatBytes(task.speed)}/s · ETA ${task.progress.eta?.let { formatDuration(it) }.orEmpty().ifBlank { "calculating…" }}" else "Kept on this device · resume when ready",
+                    style = MaterialTheme.typography.bodySmall, color = Pts.accent)
+                if (task.error.isNotBlank()) Text(task.error, style = MaterialTheme.typography.bodySmall, color = Pts.danger)
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    if (task.status in listOf("downloading", "queued")) PtsSecondaryButton("Pause", Modifier.weight(1f)) { onPause(task.key) }
+                    else PtsPrimaryButton("Resume", Modifier.weight(1f)) { onResume(task.key) }
+                    PtsSecondaryButton("Cancel", Modifier.weight(1f), danger = true) { onCancel(task.key) }
+                }
+            }
+        }
+        if (saved.isEmpty() && tasks.none { it.status != "complete" }) {
             item { PtsEmpty("No offline videos", "Open a movie or episode and tap Save offline. Rights-cleared MP4 titles can be kept on this device.", icon = PtsIcons.Download) }
         } else {
             saved.groupBy { it.title }.forEach { (title, videos) ->
@@ -472,7 +497,9 @@ fun DownloadsScreen(saved: List<SavedVideo>, onPlay: (SavedVideo) -> Unit, onDel
 }
 
 @Composable
-fun ProfileScreen(user: JSONObject, savedCount: Int, onDownloads: () -> Unit, onUpdate: () -> Unit, onSection: (String) -> Unit, onSignOut: () -> Unit) {
+fun ProfileScreen(user: JSONObject, savedCount: Int, onDownloads: () -> Unit, onUpdate: () -> Unit, onSection: (String) -> Unit, onSignOut: () -> Unit,
+    avatar: String? = null, imageLoader: coil.ImageLoader? = null, theme: String = "dark", onTheme: (String) -> Unit = {},
+    onEdit: () -> Unit = {}, onPhoto: () -> Unit = {}, onRemovePhoto: () -> Unit = {}) {
     val name = user.optString("name").ifBlank { user.optString("username") }
     val role = user.optString("role")
     LazyColumn(
@@ -485,12 +512,26 @@ fun ProfileScreen(user: JSONObject, savedCount: Int, onDownloads: () -> Unit, on
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Box(Modifier.size(60.dp).background(Pts.soft, CircleShape).border(2.dp, Pts.line2, CircleShape), contentAlignment = Alignment.Center) {
                         Text(name.take(1).uppercase(), fontFamily = Nunito, fontWeight = FontWeight.Black, fontSize = 24.sp, color = Pts.accent)
+                        if (avatar != null && imageLoader != null) AsyncImage(avatar, "Profile photo", imageLoader = imageLoader,
+                            modifier = Modifier.fillMaxSize().clip(CircleShape), contentScale = androidx.compose.ui.layout.ContentScale.Crop)
                     }
                     Column(Modifier.weight(1f).padding(start = 14.dp), verticalArrangement = Arrangement.spacedBy(3.dp)) {
                         Text(name, style = MaterialTheme.typography.titleLarge, color = Pts.text)
                         Text("@" + user.optString("username"), style = MaterialTheme.typography.bodySmall, color = Pts.muted)
                         PtsPill(role.ifBlank { "user" }, active = role == "admin")
                     }
+                }
+            }
+        }
+        item {
+            PtsCard(Modifier.fillMaxWidth()) {
+                Text("Appearance", style = MaterialTheme.typography.titleMedium, color = Pts.text)
+                PtsSegmented(listOf("system" to "System", "light" to "Light", "dark" to "Dark"), theme, onTheme)
+                Text("Theme is saved on this device. Profile, library and history sync with your web account.", style = MaterialTheme.typography.bodySmall, color = Pts.muted)
+                PtsSecondaryButton("Edit profile", Modifier.fillMaxWidth(), onClick = onEdit)
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    PtsSecondaryButton("Change photo", Modifier.weight(1f), onClick = onPhoto)
+                    if (avatar != null) PtsSecondaryButton("Remove photo", Modifier.weight(1f), onClick = onRemovePhoto)
                 }
             }
         }

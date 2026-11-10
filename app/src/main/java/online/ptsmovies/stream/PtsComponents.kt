@@ -68,15 +68,17 @@ val PosterShape = RoundedCornerShape(12.dp)
 
 @Composable
 fun PtsBackground(modifier: Modifier = Modifier, content: @Composable BoxScope.() -> Unit) {
+    val accent = Pts.accent
+    val spark = Pts.spark
     Box(
         Modifier.fillMaxSize().background(Pts.bg).then(modifier).drawBehind {
             drawRect(Brush.radialGradient(
-                colors = listOf(Pts.accent.copy(alpha = 0.12f), Color.Transparent),
+                colors = listOf(accent.copy(alpha = 0.12f), Color.Transparent),
                 center = Offset(size.width * 0.92f, size.height * 0.03f),
                 radius = size.width * 0.95f
             ))
             drawRect(Brush.radialGradient(
-                colors = listOf(Pts.spark.copy(alpha = 0.06f), Color.Transparent),
+                colors = listOf(spark.copy(alpha = 0.06f), Color.Transparent),
                 center = Offset(size.width * 0.04f, size.height * 0.48f),
                 radius = size.width * 0.8f
             ))
@@ -86,11 +88,12 @@ fun PtsBackground(modifier: Modifier = Modifier, content: @Composable BoxScope.(
 }
 
 @Composable
-fun PtsTopBar(title: String, initial: String, onAvatar: () -> Unit, onTitle: () -> Unit = {}) {
+fun PtsTopBar(title: String, initial: String, onAvatar: () -> Unit, onTitle: () -> Unit = {}, avatar: String? = null, imageLoader: coil.ImageLoader? = null) {
+    val line = Pts.line
     Row(
         Modifier.fillMaxWidth().background(Pts.card.copy(alpha = 0.96f))
             .drawBehind {
-                drawLine(Pts.line, Offset(0f, size.height), Offset(size.width, size.height), 2.dp.toPx())
+                drawLine(line, Offset(0f, size.height), Offset(size.width, size.height), 2.dp.toPx())
             }
             .padding(horizontal = 16.dp, vertical = 11.dp),
         verticalAlignment = Alignment.CenterVertically
@@ -118,6 +121,8 @@ fun PtsTopBar(title: String, initial: String, onAvatar: () -> Unit, onTitle: () 
             contentAlignment = Alignment.Center
         ) {
             Text(initial.ifBlank { "?" }, fontFamily = Nunito, fontWeight = FontWeight.Black, fontSize = 16.sp, color = Pts.accent)
+            if (avatar != null && imageLoader != null) AsyncImage(avatar, "Profile photo", imageLoader = imageLoader,
+                modifier = Modifier.fillMaxSize().clip(CircleShape), contentScale = ContentScale.Crop)
         }
     }
 }
@@ -135,9 +140,10 @@ fun PtsPage(title: String, subtitle: String? = null, trailing: (@Composable RowS
 
 @Composable
 fun PtsSectionHeader(title: String, count: Int? = null, action: (@Composable () -> Unit)? = null) {
+    val line = Pts.line
     Row(
         Modifier.fillMaxWidth().padding(top = 20.dp, bottom = 10.dp)
-            .drawBehind { drawLine(Pts.line, Offset(0f, size.height), Offset(size.width, size.height), 2.dp.toPx()) },
+            .drawBehind { drawLine(line, Offset(0f, size.height), Offset(size.width, size.height), 2.dp.toPx()) },
         verticalAlignment = Alignment.CenterVertically
     ) {
         Text("✦", color = Pts.spark, fontSize = 16.sp, modifier = Modifier.padding(end = 7.dp))
@@ -357,11 +363,12 @@ fun PtsProgressBar(progress: Float, modifier: Modifier = Modifier, height: Dp = 
 
 @Composable
 fun PtsEmpty(title: String, body: String? = null, actionLabel: String? = null, icon: ImageVector = PtsIcons.Info, onAction: (() -> Unit)? = null) {
+    val line = Pts.line2
     Column(
         Modifier.fillMaxWidth().clip(CardShape).background(Pts.card)
             .drawBehind {
                 drawRoundRect(
-                    color = Pts.line2,
+                    color = line,
                     style = Stroke(width = 2.dp.toPx(), pathEffect = PathEffect.dashPathEffect(floatArrayOf(14f, 10f))),
                     cornerRadius = androidx.compose.ui.geometry.CornerRadius(22.dp.toPx())
                 )
@@ -405,6 +412,7 @@ fun PtsStatTile(
     modifier: Modifier = Modifier,
     icon: ImageVector? = null
 ) {
+    val line = Pts.line2
     Column(
         modifier.clip(RoundedCornerShape(23.dp)).background(tint.copy(alpha = 0.09f))
             .border(2.dp, Pts.line, RoundedCornerShape(23.dp)).padding(16.dp),
@@ -415,7 +423,7 @@ fun PtsStatTile(
             Canvas(Modifier.fillMaxSize()) {
                 val stroke = 8.dp.toPx()
                 val inset = stroke / 2
-                drawArc(Pts.line2.copy(alpha = .8f), 0f, 360f, false,
+                drawArc(line.copy(alpha = .8f), 0f, 360f, false,
                     topLeft = Offset(inset, inset), size = Size(size.width - stroke, size.height - stroke),
                     style = Stroke(stroke, cap = StrokeCap.Round))
                 drawArc(tint, -90f, 360f * fraction.coerceIn(0f, 1f), false,
@@ -571,6 +579,7 @@ data class DockItem(val label: String, val icon: ImageVector, val value: String 
 
 @Composable
 fun PtsDock(items: List<DockItem>, selected: String, onSelect: (String) -> Unit) {
+    val accent = Pts.accent
     Row(
         Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 10.dp).height(66.dp)
             .shadow(16.dp, RoundedCornerShape(22.dp), ambientColor = Color(0x33000000), spotColor = Color(0x44000000))
@@ -586,7 +595,7 @@ fun PtsDock(items: List<DockItem>, selected: String, onSelect: (String) -> Unit)
                 Modifier.weight(1f).fillMaxHeight().clip(RoundedCornerShape(15.dp)).background(bg)
                     .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null) { onSelect(item.value) }
                     .drawBehind {
-                        if (active) drawRect(Pts.accent, topLeft = Offset(8.dp.toPx(), size.height - 3.dp.toPx()),
+                        if (active) drawRect(accent, topLeft = Offset(8.dp.toPx(), size.height - 3.dp.toPx()),
                             size = Size(size.width - 16.dp.toPx(), 3.dp.toPx()))
                     },
                 contentAlignment = Alignment.Center

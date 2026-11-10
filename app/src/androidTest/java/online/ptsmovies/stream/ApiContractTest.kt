@@ -199,4 +199,58 @@ class ApiContractTest {
         assertTrue(api.fileDownloadUrl("pi", "dir/a b.txt").startsWith(server.url("/").toString()))
         assertTrue(api.fileDownloadUrl("pi", "dir/a b.txt").contains("device=pi&path=dir%2Fa+b.txt"))
     }
+
+    @Test fun offlineResumeUsesValidatorAndExactRange() = runBlocking {
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        val store = OfflineStore(context, api, 90020)
+        store.list().forEach { store.remove(it) }
+        val root = java.io.File(context.filesDir, "media/90020")
+        java.io.File(root, "90001_0.part").writeBytes(byteArrayOf(0, 1, 2))
+        java.io.File(root, "90001_0.source").writeText("""{"validator":"\"fixture-v1\"","total":10}""")
+        server.enqueue(MockResponse().setResponseCode(206).setHeader("ETag", "\"fixture-v1\"")
+            .setHeader("Content-Range", "bytes 3-9/10").setBody(Buffer().write(ByteArray(7) { (it + 3).toByte() })))
+        val saved = store.save(movie, null, resume = true) {}
+        val req = request()
+        assertEquals("bytes=3-", req.getHeader("Range")); assertEquals("\"fixture-v1\"", req.getHeader("If-Range"))
+        assertArrayEquals(ByteArray(10) { it.toByte() }, saved.file.readBytes())
+        store.remove(saved)
+    }
+
+    @Test fun changedSourceRestartsInsteadOfJoiningUnrelatedBytes() = runBlocking {
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        val store = OfflineStore(context, api, 90021)
+        store.list().forEach { store.remove(it) }
+        val root = java.io.File(context.filesDir, "media/90021")
+        java.io.File(root, "90001_0.part").writeText("old")
+        java.io.File(root, "90001_0.source").writeText("""{"validator":"\"old\"","total":10}""")
+        server.enqueue(MockResponse().setHeader("ETag", "\"new\"").setBody("new-source"))
+        val saved = store.save(movie, null, resume = true) {}
+        assertEquals("new-source", saved.file.readText()); store.remove(saved)
+    }
+
+    @Test fun testOtaChannelRequiresOptInAndExactRepository() {
+        val release = JSONObject("""{"tag_name":"v9-rc1","prerelease":true,"assets":[{"name":"PTS-Stream-v9.apk","browser_download_url":"https://github.com/${BuildConfig.APP_REPOSITORY}/releases/download/v9-rc1/PTS-Stream-v9.apk"}]}""")
+        assertNull(parseReleaseUpdate(release, 3))
+        assertEquals(9, parseReleaseUpdate(release, 3, allowTest = true)?.code)
+        release.getJSONArray("assets").getJSONObject(0).put("browser_download_url", "https://other.invalid/test.apk")
+        try { parseReleaseUpdate(release, 3, true); fail("Untrusted test APK") } catch (_: IllegalArgumentException) { }
+    }
+
+    @Test fun avatarUploadAndRelativeImageUrlMatchWebContract() = runBlocking {
+        assertEquals(server.url("/api/v1/auth/avatar/a.jpg").toString(), api.imageUrl("/api/v1/auth/avatar/a.jpg"))
+        assertNull(api.imageUrl("//other.invalid/image"))
+        server.enqueue(json("""{"csrf_token":"photo-token"}""")); server.enqueue(json("""{"user":{"id":90011,"avatar":"/photo.jpg"}}"""))
+        api.uploadAvatar(byteArrayOf(1, 2, 3))
+        request(); val req = request()
+        assertEquals("/api/v1/auth/avatar", req.path); assertEquals("photo-token", req.getHeader("X-CSRF-Token"))
+        assertTrue(req.body.readUtf8().contains("name=\"avatar\"; filename=\"avatar.jpg\""))
+    }
+
+    @Test fun cachedLibraryRoundTripsAndTransferMetricsAreSafe() {
+        val library = Library(listOf(movie), setOf(movie.id), mapOf(movie.id to Resume(0, 42, 300)))
+        assertEquals(library, parseLibrary(library.toJson()))
+        assertEquals(50, TransferProgress(500, 1000, 100).percent)
+        assertEquals(5L, TransferProgress(500, 1000, 100).eta)
+        assertNull(TransferProgress(500, 1000, 0).eta)
+    }
 }

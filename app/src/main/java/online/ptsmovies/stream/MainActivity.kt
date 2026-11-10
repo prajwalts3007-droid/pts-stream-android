@@ -4,6 +4,7 @@ import android.Manifest
 import android.app.PictureInPictureParams
 import android.content.pm.PackageManager
 import android.content.res.Configuration
+import android.content.Intent
 import android.provider.OpenableColumns
 import android.media.AudioManager
 import android.media.MediaCodecList
@@ -41,6 +42,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.pointer.positionChange
 import androidx.compose.ui.platform.LocalContext
@@ -80,6 +82,39 @@ class MainActivity : ComponentActivity() {
     private val api = ApiProvider.create()
     private val scope get() = lifecycleScope
     private lateinit var offline: OfflineStore
+    private val device by lazy { DeviceState(this) }
+    private val images by lazy { coil.ImageLoader.Builder(applicationContext).okHttpClient(api.http).build() }
+    private var downloads: DownloadRepository? = null
+    private var downloadWatch: Job? = null
+    private var downloadTasks by mutableStateOf(emptyList<DownloadTask>())
+    private var updatesOpen by mutableStateOf(false)
+    private var editProfile by mutableStateOf(false)
+    private var navigationRestored = false
+    private var restoredPosition = -1L
+    private var restoredAutoplay = true
+    private var resumeAfterBackground = false
+    private var foregroundSync: Job? = null
+    private val selectPhoto = registerForActivityResult(ActivityResultContracts.GetContent()) { uri ->
+        if (uri != null) scope.launch {
+            try {
+                val bytes = kotlinx.coroutines.withContext(Dispatchers.IO) {
+                    val options = android.graphics.BitmapFactory.Options().apply { inJustDecodeBounds = true }
+                    contentResolver.openInputStream(uri)?.use { android.graphics.BitmapFactory.decodeStream(it, null, options) }
+                    require(options.outWidth > 0 && options.outHeight > 0) { "Choose an image file" }
+                    val max = maxOf(options.outWidth, options.outHeight)
+                    val sampled = android.graphics.BitmapFactory.Options().apply { inSampleSize = maxOf(1, max / 512) }
+                    val bitmap = contentResolver.openInputStream(uri)?.use { android.graphics.BitmapFactory.decodeStream(it, null, sampled) } ?: error("Cannot read image")
+                    val scale = minOf(1f, 512f / maxOf(bitmap.width, bitmap.height))
+                    val resized = android.graphics.Bitmap.createScaledBitmap(bitmap, (bitmap.width * scale).toInt().coerceAtLeast(1), (bitmap.height * scale).toInt().coerceAtLeast(1), true)
+                    val output = java.io.ByteArrayOutputStream()
+                    resized.compress(android.graphics.Bitmap.CompressFormat.JPEG, 86, output)
+                    if (resized !== bitmap) resized.recycle(); bitmap.recycle()
+                    output.toByteArray().also { require(it.size <= 1024 * 1024) { "Photo is too large" } }
+                }
+                account = api.uploadAvatar(bytes); device.account(account!!); toast("Profile photo synced", true)
+            } catch (e: Exception) { toast(e.message ?: "Photo upload failed") }
+        }
+    }
 
     private var account by mutableStateOf<JSONObject?>(null)
     private var library by mutableStateOf<Library?>(null)
@@ -170,16 +205,25 @@ class MainActivity : ComponentActivity() {
         }
         scope.launch { restoreSession() }
         setContent {
-            PtsTheme {
+            PtsTheme(device.theme) {
+                val bar = Pts.bg
+                val light = MaterialTheme.colorScheme.background.luminance() > .5f
+                SideEffect {
+                    window.statusBarColor = android.graphics.Color.rgb((bar.red * 255).toInt(), (bar.green * 255).toInt(), (bar.blue * 255).toInt())
+                    window.navigationBarColor = window.statusBarColor
+                    WindowCompat.getInsetsController(window, window.decorView).apply { isAppearanceLightStatusBars = light && !playing; isAppearanceLightNavigationBars = light && !playing }
+                }
                 PtsBackground(Modifier.windowInsetsPadding(WindowInsets.safeDrawing)) {
                     when {
                         loading -> PtsLoading()
                         account == null -> LoginScreen(startupError, busy = false) { user, pass, remember -> signIn(user, pass, remember) }
                         playing && selected != null -> key(selected!!.id, episode?.id) {
+                          PtsTheme("dark") {
                             PlayerScreen(selected!!, episode, offline.find(selected!!, episode)) {
                                 playing = false; episode = null; playerFullscreen = false
                                 requestedOrientation = android.content.pm.ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
                             }
+                          }
                         }
                         else -> AppShell()
                     }
@@ -190,11 +234,20 @@ class MainActivity : ComponentActivity() {
 
     private suspend fun restoreSession() {
         loading = true
+        val cached = device.account()
+        if (cached != null) {
+            account = cached
+            library = device.library(cached.optLong("id"))
+            attachDownloads()
+            mode = "Stream"
+            restoreNavigation()
+            loading = false
+        }
         try {
             account = api.me()
-            offline = OfflineStore(this@MainActivity, api, account!!.optLong("id"))
-            savedVideos = offline.list()
-            mode = if (account!!.optString("role") == "admin") "Hub" else "Stream"
+            device.account(account!!)
+            attachDownloads()
+            if (cached == null) mode = "Stream"
             startupError = ""
             refreshLibrary()
             loadPlaybackPrefs()
@@ -206,9 +259,9 @@ class MainActivity : ComponentActivity() {
             }
         } catch (e: CancellationException) { throw e }
         catch (e: Exception) {
-            startupError = if (e is ApiException && e.status == 401) "" else "Could not restore your session. Check your connection and sign in again."
-            account = null
-            library = null
+            if (e is ApiException && e.status == 401) { account = null; library = null; device.clearSession(); downloads?.pauseAll(); playing = false; selected = null; downloadsOpen = false; profileOpen = false; updatesOpen = false; navigationRestored = false }
+            else if (cached == null) { startupError = "Could not restore your session. Check your connection and sign in again."; account = null; library = null }
+            else toast("Offline · showing the saved library and device downloads")
         } finally { loading = false }
     }
 
@@ -218,9 +271,9 @@ class MainActivity : ComponentActivity() {
             startupError = ""
             try {
                 account = api.login(user, password, remember)
-                offline = OfflineStore(this@MainActivity, api, account!!.optLong("id"))
-                savedVideos = offline.list()
-                mode = if (account!!.optString("role") == "admin") "Hub" else "Stream"
+                device.account(account!!)
+                attachDownloads()
+                mode = "Stream"
                 toast("Welcome back, " + account!!.optString("name").ifBlank { account!!.optString("username") }, ok = true)
                 refreshLibrary()
                 loadPlaybackPrefs()
@@ -236,7 +289,11 @@ class MainActivity : ComponentActivity() {
 
     private suspend fun refreshLibrary() {
         try {
-            library = api.library()
+            val result = api.library()
+            val current = selected?.id?.takeIf { playing }
+            library = if (current != null && library?.progress?.containsKey(current) == true) result.copy(progress = result.progress + (current to library!!.progress.getValue(current))) else result
+            account?.let { device.library(it.optLong("id"), library!!) }
+            selected?.let { old -> library?.titles?.firstOrNull { it.id == old.id }?.let { selected = it } }
         } catch (e: CancellationException) { throw e }
         catch (e: Exception) {
             toast("Library unavailable: ${e.message}")
@@ -244,7 +301,9 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun signOut() {
-        downloadJob?.cancel()
+        persistNavigation()
+        downloads?.pauseAll()
+        downloadWatch?.cancel()
         searchJob?.cancel()
         fileJob?.cancel()
         fileOperation?.cancel()
@@ -255,6 +314,7 @@ class MainActivity : ComponentActivity() {
             catch (_: Exception) { /* Local cookies are cleared even if the server is unreachable. */ }
             finally {
                 account = null; library = null; selected = null; profileOpen = false; downloadsOpen = false
+                device.clearSession(); navigationRestored = false; updatesOpen = false
                 queueJobs = emptyList(); queueDone = emptyList(); metrics = null; users = emptyList()
                 savedVideos = emptyList(); message = ""; startupError = ""
                 fileClipboard = null; fileEditor = null; fileStatus = ""; clearedProgress.clear()
@@ -274,12 +334,14 @@ class MainActivity : ComponentActivity() {
     private fun enterMode(next: String) {
         if (!admin() && next != "Stream") return
         mode = next
-        profileOpen = false; downloadsOpen = false; selected = null; playing = false
+        profileOpen = false; downloadsOpen = false; updatesOpen = false; selected = null; playing = false
+        persistNavigation()
     }
 
     private fun selectTab(name: String) {
         when (mode) { "Hub" -> hubTab = name; "Files" -> filesTab = name; else -> streamTab = name }
-        selected = null; profileOpen = false; downloadsOpen = false
+        selected = null; profileOpen = false; downloadsOpen = name == "Downloads"
+        persistNavigation()
     }
 
     private fun swipeMode(forward: Boolean) {
@@ -302,20 +364,32 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun startDownload(title: Title, ep: Episode?) {
-        if (downloading.isNotBlank()) return
-        downloadJob = scope.launch {
-            downloading = ep?.let { "S${it.season}E${it.episode} · ${it.title.ifBlank { title.title }}" } ?: title.title
-            downloadPercent = 0
-            try {
-                offline.save(title, ep) { value -> runOnUiThread { downloadPercent = value } }
-                savedVideos = offline.list()
-                toast("${ep?.title ?: title.title} is ready offline", ok = true)
-            } catch (e: CancellationException) { throw e }
-            catch (e: Exception) {
-                toast(e.message ?: "Offline download failed")
-            } finally { downloading = "" }
+        try {
+            downloads?.enqueue(title, ep) ?: error("Sign in before downloading")
+            playing = false; playerFullscreen = false
+            requestedOrientation = android.content.pm.ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
+            selected = null; profileOpen = false; updatesOpen = false; mode = "Stream"; streamTab = "Downloads"; downloadsOpen = true
+            persistNavigation()
+        } catch (e: Exception) { toast(e.message ?: "Cannot start download") }
+    }
+
+    private fun attachDownloads() {
+        val user = account ?: return
+        val repo = DeviceDownloads.forOwner(this, api, user.optLong("id"))
+        offline = repo.store
+        if (downloads === repo && downloadWatch?.isActive == true) return
+        downloads = repo; downloadWatch?.cancel(); repo.refresh()
+        savedVideos = repo.state.value.saved; downloadTasks = repo.state.value.tasks
+        downloadWatch = scope.launch {
+            repo.state.collect { snapshot ->
+                savedVideos = snapshot.saved; downloadTasks = snapshot.tasks
+                val active = snapshot.tasks.firstOrNull { it.status == "downloading" }
+                downloading = active?.label.orEmpty(); downloadPercent = active?.progress?.percent ?: 0
+            }
         }
     }
+
+    private fun openUpdates() { profileOpen = false; downloadsOpen = false; updatesOpen = true; NativeUpdates.get(this).check() }
 
     private fun play(title: Title, ep: Episode?) {
         clearedProgress.remove(title.id)
@@ -323,6 +397,8 @@ class MainActivity : ComponentActivity() {
         selected = title
         playing = true
         profileOpen = false; downloadsOpen = false
+        restoredPosition = -1L; restoredAutoplay = true
+        persistNavigation()
     }
 
     private fun loadMetrics() {
@@ -531,6 +607,7 @@ class MainActivity : ComponentActivity() {
     private fun routeBack() {
         when {
             playing -> { playing = false; episode = null }
+            updatesOpen -> updatesOpen = false
             profileOpen -> profileOpen = false
             downloadsOpen -> downloadsOpen = false
             selected != null -> selected = null
@@ -550,6 +627,12 @@ class MainActivity : ComponentActivity() {
     private fun AppShell() {
         BackHandler { routeBack() }
         val user = account ?: return
+        if (editProfile) EditProfileDialog(user, onSave = { name, email ->
+            scope.launch { try {
+                account = api.json("/auth/me", "PUT", JSONObject().put("name", name).put("email", email)).getJSONObject("user")
+                device.account(account!!); editProfile = false; toast("Profile synced", true)
+            } catch (e: Exception) { toast(e.message ?: "Could not save profile") } }
+        }, onClose = { editProfile = false })
         fileEditor?.let { editor -> FileEditorDialog(editor, fileBusy, { saveFileEditor(it) }, { fileEditor = null }) }
         LaunchedEffect(mode, hubTab, user.optLong("id")) {
             if (mode == "Hub" && admin()) lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
@@ -568,36 +651,43 @@ class MainActivity : ComponentActivity() {
                 onAvatar = { profileOpen = true; downloadsOpen = false },
                 onTitle = {
                     if (admin() && mode != "Hub") enterMode("Hub") else if (selected != null) selected = null
-                }
+                }, avatar = api.imageUrl(user.optString("avatar")), imageLoader = images
             )
-            if (downloading.isNotBlank()) Row(Modifier.fillMaxWidth().background(Pts.soft).padding(horizontal = 16.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+            if (downloading.isNotBlank() && !downloadsOpen) Row(Modifier.fillMaxWidth().background(Pts.soft).clickable { mode = "Stream"; downloadsOpen = true; profileOpen = false; updatesOpen = false; streamTab = "Downloads" }.padding(horizontal = 16.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
                 Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                     Text("Saving offline · $downloadPercent%", style = MaterialTheme.typography.labelSmall, color = Pts.accent)
                     Text(downloading, style = MaterialTheme.typography.bodySmall, maxLines = 1, overflow = TextOverflow.Ellipsis, color = Pts.text)
                     PtsProgressBar(downloadPercent / 100f, height = 4.dp)
                 }
-                PtsIconAction(PtsIcons.Close, "Cancel download", { downloadJob?.cancel() }, tint = Pts.muted)
+                PtsIconAction(PtsIcons.Close, "Pause download", { downloadTasks.firstOrNull { it.status == "downloading" }?.let { downloads?.pause(it.key) } }, tint = Pts.muted)
             }
             Box(Modifier.weight(1f)) {
                 when {
+                    updatesOpen -> NativeUpdateScreen(NativeUpdates.get(this@MainActivity), { NativeUpdates.get(this@MainActivity).install(this@MainActivity) }, { updatesOpen = false })
                     profileOpen -> ProfileScreen(user, savedVideos.size, { profileOpen = false; downloadsOpen = true }, {
-                        checkForUpdate(this@MainActivity, scope) { toast(it) }
-                    }, { enterMode(it) }, { signOut() })
+                        openUpdates()
+                    }, { enterMode(it) }, { signOut() }, avatar = api.imageUrl(user.optString("avatar")), imageLoader = images,
+                        theme = device.theme, onTheme = { device.theme(it) }, onEdit = { editProfile = true },
+                        onPhoto = { selectPhoto.launch("image/*") }, onRemovePhoto = {
+                            scope.launch { try { account = api.json("/auth/avatar", "DELETE").getJSONObject("user"); device.account(account!!); toast("Photo removed", true) }
+                                catch (e: Exception) { toast(e.message ?: "Could not remove photo") } }
+                        })
                     downloadsOpen -> DownloadsScreen(savedVideos, { item ->
                         val title = library?.titles?.firstOrNull { it.id == item.titleId }
-                        if (title == null) toast("This title is no longer in the library")
-                        else play(title, title.episodes.firstOrNull { item.key.endsWith("_${it.id}") })
+                        val stored = title ?: downloadTasks.firstOrNull { it.key == item.key }?.title
+                        if (stored == null) toast("Saved title metadata is unavailable")
+                        else play(stored, stored.episodes.firstOrNull { item.key.endsWith("_${it.id}") })
                     }, { item ->
-                        try { offline.remove(item); savedVideos = offline.list(); toast("Download deleted", ok = true) }
+                        try { downloads?.remove(item); toast("Download deleted", ok = true) }
                         catch (e: Exception) { toast(e.message ?: "Could not delete download") }
-                    })
+                    }, tasks = downloadTasks, onPause = { downloads?.pause(it) }, onResume = { downloads?.resume(it) }, onCancel = { downloads?.cancel(it) })
                     mode == "Hub" && admin() -> when (hubTab) {
                         "Dashboard" -> DashboardScreen(name, metrics, metricsTarget, { metricsTarget = it }, { loadMetrics() }, queueJobs, queueDone) { hubTab = "Queue" }
                         "Queue" -> QueueScreen(queueJobs, queueDone, queueStage, { queueStage = it }, { loadQueue() }, { id ->
                             scope.launch { try { api.json("/queue/${java.net.URLEncoder.encode(id, "UTF-8")}", "DELETE"); loadQueue() } catch (e: Exception) { toast(e.message ?: "Delete failed") } }
                         }) { stage, ids -> cancelStage(stage, ids) }
                         "Download" -> SearchScreen(searchQuery, { search(it) }, searchResults, searchLoading)
-                        else -> SettingsScreen(user, users, githubConfigured, { checkForUpdate(this@MainActivity, scope) { toast(it) } }, { signOut() })
+                        else -> SettingsScreen(user, users, githubConfigured, { openUpdates() }, { signOut() })
                     }
                     mode == "Files" && admin() -> if (filesTab == "Transfers") {
                         LaunchedEffect(Unit) { lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) { while (true) { loadOps(); loadRelay(); delay(4000) } } }
@@ -656,11 +746,11 @@ class MainActivity : ComponentActivity() {
                                 play(title, next)
                             }, { toggleWatch(it) }, onSeeAll = { streamTab = it }, onMarkPlayed = { markPlayed(it) })
                             "Movies" -> BrowseScreen("Movies", lib.titles.filter { it.kind == "movie" }, lib.progress, lib.watch,
-                                browseQueries["Movies"].orEmpty(), { browseQueries["Movies"] = it }, { selected = it }, { toggleWatch(it) })
+                                browseQueries["Movies"].orEmpty(), { browseQueries["Movies"] = it }, { selected = it }, { toggleWatch(it) }, device.view("Movies"), { device.view("Movies", it) })
                             "Series" -> BrowseScreen("Series", lib.titles.filter { it.kind == "series" }, lib.progress, lib.watch,
-                                browseQueries["Series"].orEmpty(), { browseQueries["Series"] = it }, { selected = it }, { toggleWatch(it) })
+                                browseQueries["Series"].orEmpty(), { browseQueries["Series"] = it }, { selected = it }, { toggleWatch(it) }, device.view("Series"), { device.view("Series", it) })
                             else -> BrowseScreen("Watchlist", lib.titles, lib.progress, lib.watch,
-                                browseQueries["Watchlist"].orEmpty(), { browseQueries["Watchlist"] = it }, { selected = it }, { toggleWatch(it) })
+                                browseQueries["Watchlist"].orEmpty(), { browseQueries["Watchlist"] = it }, { selected = it }, { toggleWatch(it) }, device.view("Watchlist"), { device.view("Watchlist", it) })
                         }
                     }
                 }
@@ -673,18 +763,19 @@ class MainActivity : ComponentActivity() {
                     else PtsErrorToast(message) { message = "" }
                 }
             }
-            if (!profileOpen && !downloadsOpen) {
+            if (!profileOpen && !updatesOpen) {
                 val pages = when (mode) {
-                    "Hub" -> listOf(DockItem("Dashboard", PtsIcons.Home), DockItem("Download", PtsIcons.Download), DockItem("Queue", PtsIcons.Queue), DockItem("Settings", PtsIcons.Settings))
+                    "Hub" -> listOf(DockItem("Dashboard", PtsIcons.Home), DockItem("Ingest", PtsIcons.Download, "Download"), DockItem("Queue", PtsIcons.Queue), DockItem("Settings", PtsIcons.Settings))
                     "Files" -> listOf(DockItem("Browse", PtsIcons.Browse), DockItem("Transfers", PtsIcons.Transfers))
                     else -> listOf(
                         DockItem("Home", PtsIcons.Home),
                         DockItem("Movies", PtsIcons.Movies),
                         DockItem("TV Shows", PtsIcons.Tv, "Series"),
+                        DockItem("Downloads", PtsIcons.Download),
                         DockItem("My List", PtsIcons.Watchlist, "Watchlist")
                     )
                 }
-                val current = when (mode) { "Hub" -> hubTab; "Files" -> filesTab; else -> streamTab }
+                val current = if (downloadsOpen) "Downloads" else when (mode) { "Hub" -> hubTab; "Files" -> filesTab; else -> streamTab }
                 var swipe by remember(mode) { mutableFloatStateOf(0f) }
                 Box(Modifier.testTag("section-dock").pointerInput(mode) {
                     detectHorizontalDragGestures(onDragStart = { swipe = 0f }, onDragEnd = {
@@ -706,7 +797,8 @@ class MainActivity : ComponentActivity() {
     @Composable
     @androidx.annotation.OptIn(markerClass = [androidx.media3.common.util.UnstableApi::class])
     @OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
-    private fun PlayerScreen(title: Title, ep: Episode?, saved: SavedVideo?, onBack: () -> Unit) {
+    private fun PlayerScreen(title: Title, ep: Episode?, initialSaved: SavedVideo?, onBack: () -> Unit) {
+        val saved = remember(title.id, ep?.id) { initialSaved }
         val context = LocalContext.current
         var fallback by remember(title.id, ep?.id) { mutableStateOf(false) }
         var error by remember { mutableStateOf("") }
@@ -724,6 +816,9 @@ class MainActivity : ComponentActivity() {
         var muted by remember { mutableStateOf(false) }
         var buffering by remember { mutableStateOf(true) }
         var firstFrame by remember { mutableStateOf(false) }
+        var gestureFeedback by remember { mutableStateOf("") }
+        var showGestureHelp by remember { mutableStateOf(false) }
+        LaunchedEffect(gestureFeedback) { if (gestureFeedback.isNotBlank()) { delay(1500); gestureFeedback = "" } }
         var ended by remember { mutableStateOf(false) }
         var cancelNext by remember { mutableStateOf(false) }
         var nextCountdown by remember { mutableIntStateOf(5) }
@@ -735,8 +830,10 @@ class MainActivity : ComponentActivity() {
         fun leavePlayer() { if (playerFullscreen) fullscreen(false) else onBack() }
         fun selectEpisode(next: Episode) { clearedProgress.remove(title.id); episode = next; showEpisodes = false }
         var resumeAt by remember(title.id, ep?.id) {
-            mutableLongStateOf(resumePosition(library?.progress?.get(title.id), ep?.id ?: 0L, ep?.duration?.toLong() ?: 0L) * 1000)
+            mutableLongStateOf(if (restoredPosition >= 0) restoredPosition.also { restoredPosition = -1L }
+                else resumePosition(library?.progress?.get(title.id), ep?.id ?: 0L, ep?.duration?.toLong() ?: 0L) * 1000)
         }
+        val startPlaying = remember { restoredAutoplay.also { restoredAutoplay = true } }
         val hevcAvailable = remember { MediaCodecList(MediaCodecList.REGULAR_CODECS).codecInfos.any { info ->
             !info.isEncoder && info.supportedTypes.any { it.equals("video/hevc", true) }
         } }
@@ -752,7 +849,8 @@ class MainActivity : ComponentActivity() {
                 setHandleAudioBecomingNoisy(true)
                 trackSelectionParameters = trackSelectionParameters.buildUpon()
                     .setPreferredAudioLanguage(playbackPrefs.optString("audio_lang").ifBlank { null })
-                    .setPreferredTextLanguage(playbackPrefs.optString("subtitle_lang").ifBlank { null }).build()
+                    .setPreferredTextLanguage(playbackPrefs.optString("subtitle_lang").ifBlank { null })
+                    .setTrackTypeDisabled(androidx.media3.common.C.TRACK_TYPE_TEXT, playbackPrefs.optString("subtitle_lang").isBlank()).build()
                 if (resumeAt > 0) seekTo(resumeAt)
                 setPlaybackSpeed(speed)
             }
@@ -787,7 +885,7 @@ class MainActivity : ComponentActivity() {
             // rather than racing the first decode against TextureView attachment.
             firstFrame = false
             exo.prepare()
-            exo.playWhenReady = true
+            exo.playWhenReady = startPlaying
             onDispose {
                 val p = exo.currentPosition / 1000
                 val d = exo.duration.coerceAtLeast(0) / 1000
@@ -826,21 +924,15 @@ class MainActivity : ComponentActivity() {
         }
         BoxWithConstraints(Modifier.fillMaxSize().background(Color(0xFF060716))) {
           val landscape = maxWidth > maxHeight || inPip || playerFullscreen
+          DisposableEffect(landscape) {
+              val bars = WindowCompat.getInsetsController(window, window.decorView)
+              if (landscape && !inPip) {
+                  bars.systemBarsBehavior = androidx.core.view.WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+                  bars.hide(androidx.core.view.WindowInsetsCompat.Type.systemBars())
+              }
+              onDispose { bars.show(androidx.core.view.WindowInsetsCompat.Type.systemBars()) }
+          }
           Column(Modifier.fillMaxSize()) {
-            if (!inPip) Row(Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
-                PtsIconAction(PtsIcons.Back, "Back", { leavePlayer() }, tint = Color.White)
-                Column(Modifier.weight(1f).padding(horizontal = 4.dp)) {
-                    Text(title.title, style = MaterialTheme.typography.titleSmall, color = Color.White, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                    if (ep != null) Text("S${ep.season}E${ep.episode} · ${ep.title.ifBlank { "Episode ${ep.episode}" }}",
-                        style = MaterialTheme.typography.labelSmall, color = Color(0xFFD3D6ED), maxLines = 1, overflow = TextOverflow.Ellipsis)
-                }
-                if (Build.VERSION.SDK_INT >= 26) PtsIconAction(PtsIcons.Tv, "Picture in picture", {
-                    try { enterPictureInPictureMode(PictureInPictureParams.Builder().setAspectRatio(Rational(16, 9)).build()) } catch (_: Exception) { }
-                }, tint = Color.White)
-                PtsIconAction(PtsIcons.Subtitles, "Audio and subtitles", { showTracks = true; controls = true }, tint = Color.White)
-                if (ep != null) PtsIconAction(PtsIcons.Series, "Choose episode", { showEpisodes = true; touchControls() }, tint = Color.White)
-                PtsIconAction(PtsIcons.Fit, if (playerFullscreen) "Exit fullscreen" else "Fullscreen", { fullscreen(!playerFullscreen); touchControls() }, tint = Color.White)
-            }
             Box((if (landscape) Modifier.weight(1f).fillMaxWidth() else Modifier.fillMaxWidth().aspectRatio(16f / 9f)).testTag("player-surface").background(Color.Black)) {
                 AndroidView(factory = { ctx -> (android.view.LayoutInflater.from(ctx).inflate(R.layout.native_player, null, false) as PlayerView).apply {
                     player = exo
@@ -849,58 +941,29 @@ class MainActivity : ComponentActivity() {
                     layoutParams = FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
                 } }, update = { it.player = exo; it.keepScreenOn = playingNow || buffering; it.resizeMode = if (fill) AspectRatioFrameLayout.RESIZE_MODE_ZOOM else AspectRatioFrameLayout.RESIZE_MODE_FIT },
                     modifier = Modifier.fillMaxSize())
-                Box(Modifier.fillMaxSize().pointerInput(exo) {
-                    var lastTap = 0L
-                    awaitEachGesture {
-                        val down = awaitFirstDown()
-                        var dx = 0f; var dy = 0f
-                        while (true) {
-                            val event = awaitPointerEvent()
-                            val change = event.changes.firstOrNull { it.id == down.id } ?: break
-                            if (!change.pressed) break
-                            dx += change.positionChange().x; dy += change.positionChange().y
-                            change.consume()
-                        }
-                        val total = duration.coerceAtLeast(1)
-                        when {
-                            abs(dx) > 55f && abs(dx) > abs(dy) -> {
-                                exo.seekTo((exo.currentPosition + (dx / size.width * 120000).roundToLong()).coerceIn(0, total))
-                                touchControls()
-                            }
-                            abs(dy) > 110f && abs(dy) > abs(dx) -> {
-                                if (down.position.x > size.width / 2f) {
-                                    val audio = context.getSystemService(AUDIO_SERVICE) as AudioManager
-                                    val steps = (abs(dy) / 90f).toInt().coerceIn(1, 8)
-                                    repeat(steps) { audio.adjustStreamVolume(AudioManager.STREAM_MUSIC, if (dy < 0) AudioManager.ADJUST_RAISE else AudioManager.ADJUST_LOWER, 0) }
-                                } else {
-                                    val attributes = window.attributes
-                                    val current = attributes.screenBrightness.takeIf { it >= 0f } ?: .5f
-                                    attributes.screenBrightness = (current - dy / size.height).coerceIn(.05f, 1f)
-                                    window.attributes = attributes
-                                }
-                                touchControls()
-                            }
-                            else -> {
-                                val now = System.currentTimeMillis()
-                                if (now - lastTap < 320) {
-                                    val step = if (down.position.x < size.width / 2f) -10_000L else 10_000L
-                                    exo.seekTo((exo.currentPosition + step).coerceIn(0, total)); lastTap = 0; touchControls()
-                                } else { lastTap = now; controls = !controls }
-                            }
-                        }
-                    }
-                })
+                 if (!inPip) PlayerGestures(this@MainActivity, exo.currentPosition, duration,
+                     onTap = { controls = !controls; interaction++ },
+                     onSeekPreview = { seekPreview = it; touchControls() },
+                     onSeek = { exo.seekTo(it); touchControls() },
+                     onFeedback = { gestureFeedback = it; touchControls() })
                 androidx.compose.animation.AnimatedVisibility(visible = controls && !inPip, enter = fadeIn(), exit = fadeOut(), modifier = Modifier.fillMaxSize()) {
-                    Box(Modifier.fillMaxSize().background(Brush.verticalGradient(listOf(Color(0xCC040514), Color(0x11040514), Color(0xE6040514))))) {
-                        Row(Modifier.align(Alignment.Center).offset(y = (-16).dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(26.dp)) {
+                     Box(Modifier.fillMaxSize().background(Brush.verticalGradient(listOf(Color(0xCC040514), Color(0x11040514), Color(0xE6040514))))) {
+                         Row(Modifier.align(Alignment.TopCenter).fillMaxWidth().padding(horizontal = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+                             PtsIconAction(PtsIcons.Back, "Back", { leavePlayer() }, tint = Color.White)
+                             Text(ep?.let { "S${it.season}E${it.episode} · ${title.title}" } ?: title.title, Modifier.weight(1f), style = MaterialTheme.typography.labelMedium, color = Color.White, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                             if (ep != null) PtsIconAction(PtsIcons.Series, "Choose episode", { showEpisodes = true; touchControls() }, tint = Color.White)
+                             PtsIconAction(PtsIcons.Subtitles, "Audio and subtitles", { showTracks = true; touchControls() }, tint = Color.White)
+                             PtsIconAction(PtsIcons.More, "Player options", { showSettings = true; touchControls() }, tint = Color.White)
+                         }
+                         Row(Modifier.align(Alignment.Center), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(24.dp)) {
                             PlayerSeekButton(false) { exo.seekTo((exo.currentPosition - 10000).coerceAtLeast(0)); touchControls() }
-                            Box(Modifier.size(60.dp).background(Color(0xFFFAFAFF), androidx.compose.foundation.shape.CircleShape)
+                             Box(Modifier.size(48.dp).background(Color(0xFFFAFAFF), androidx.compose.foundation.shape.CircleShape)
                                 .clickable { if (exo.isPlaying) exo.pause() else { if (ended) exo.seekTo(0); exo.play() }; touchControls() }, contentAlignment = Alignment.Center) {
                                 Icon(if (playingNow) PtsIcons.Pause else PtsIcons.Play, if (playingNow) "Pause playback" else "Play playback", Modifier.size(30.dp), tint = Pts.onAccent)
                             }
                             PlayerSeekButton(true) { exo.seekTo((exo.currentPosition + 10000).coerceAtMost(duration.coerceAtLeast(0))); touchControls() }
                         }
-                        Column(Modifier.align(Alignment.BottomCenter).fillMaxWidth().padding(horizontal = 13.dp, vertical = 9.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                         Column(Modifier.align(Alignment.BottomCenter).fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp), verticalArrangement = Arrangement.spacedBy(0.dp)) {
                             val shown = seekPreview ?: position
                             Slider(
                                 value = shown.toFloat().coerceIn(0f, duration.coerceAtLeast(1).toFloat()),
@@ -917,18 +980,15 @@ class MainActivity : ComponentActivity() {
                                 },
                                 modifier = Modifier.fillMaxWidth().height(28.dp)
                             )
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Text("${clock(shown)} / ${clock(duration)}", style = MaterialTheme.typography.labelSmall, color = Color(0xFFE7E8FF), modifier = Modifier.weight(1f))
-                                Text(if (saved != null) "Offline" else if (fallback) "VPS fallback" else "Pi stream", style = MaterialTheme.typography.labelSmall, color = Pts.accent)
-                            }
-                            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) {
-                                PlayerTextControl("${if (speed % 1f == 0f) speed.toInt().toString() else speed}×", "Playback settings") { showSettings = true; touchControls() }
-                                PlayerTextControl(if (muted) "Unmute" else "Mute", "Mute audio") { muted = !muted; exo.volume = if (muted) 0f else 1f; touchControls() }
-                                PlayerTextControl("Audio / CC", "Audio tracks") { showTracks = true; touchControls() }
-                                Row(verticalAlignment = Alignment.CenterVertically) {
-                                    PtsIconAction(PtsIcons.Fit, if (fill) "Fit video" else "Fill video", { fill = !fill }, tint = Color.White, size = 40.dp)
-                                }
-                            }
+                             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                                 Text("${clock(shown)} / ${clock(duration)}", style = MaterialTheme.typography.labelSmall, color = Color(0xFFE7E8FF), modifier = Modifier.weight(1f))
+                                 PlayerTextControl("${if (speed % 1f == 0f) speed.toInt().toString() else speed}×", "Playback settings") { showSettings = true; touchControls() }
+                                 PlayerTextControl(if (muted) "Unmute" else "Mute", "Mute audio") { muted = !muted; exo.volume = if (muted) 0f else 1f; touchControls() }
+                                 PtsIconAction(PtsIcons.Fit, if (playerFullscreen) "Exit fullscreen" else "Fullscreen", { fullscreen(!playerFullscreen); touchControls() }, tint = Color.White)
+                 }
+                 if (gestureFeedback.isNotBlank() && !inPip) Text(gestureFeedback,
+                     Modifier.align(Alignment.Center).background(Color.Black.copy(alpha = .9f), RowShape).padding(horizontal = 16.dp, vertical = 10.dp).testTag("gesture-feedback"),
+                     style = MaterialTheme.typography.labelLarge, color = Color.White)
                         }
                     }
                 }
@@ -947,7 +1007,11 @@ class MainActivity : ComponentActivity() {
             }
             if (!landscape) {
              if (!hevcAvailable) PtsErrorBanner("This device may not support HEVC playback", modifier = Modifier.padding(12.dp))
-             Column(Modifier.weight(1f).verticalScroll(rememberScrollState()).padding(16.dp), verticalArrangement = Arrangement.spacedBy(9.dp)) {
+              Column(Modifier.weight(1f).verticalScroll(rememberScrollState()).padding(16.dp), verticalArrangement = Arrangement.spacedBy(9.dp)) {
+                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                    Text(if (saved != null) "Offline" else if (fallback) "VPS fallback" else "Pi stream", Modifier.weight(1f), style = MaterialTheme.typography.labelSmall, color = Pts.accent)
+                    PlayerTextControl("Gesture guide", "Gesture guide") { showGestureHelp = true }
+                }
                 Text(title.title, style = MaterialTheme.typography.titleLarge, color = Color.White)
                 Text(
                     listOfNotNull(
@@ -966,7 +1030,7 @@ class MainActivity : ComponentActivity() {
                 if (downloading.isNotBlank()) {
                     Text("Saving $downloading · $downloadPercent%", style = MaterialTheme.typography.bodySmall, color = Pts.accent)
                     PtsProgressBar(downloadPercent / 100f)
-                    PtsSecondaryButton("Cancel download", Modifier.fillMaxWidth()) { downloadJob?.cancel() }
+                    PtsSecondaryButton("Open Downloads", Modifier.fillMaxWidth()) { playing = false; downloadsOpen = true; mode = "Stream"; streamTab = "Downloads" }
                 }
                 if (title.kind == "series") SeasonEpisodes(title, ep, library?.progress?.get(title.id), savedVideos.map { it.key }.toSet(), downloading,
                     onPlay = { selectEpisode(it) }, onDownload = { startDownload(title, it) })
@@ -981,6 +1045,8 @@ class MainActivity : ComponentActivity() {
               else PtsErrorToast(message) { message = "" }
           }
         }
+        if (showGestureHelp) PtsConfirmDialog("Player gestures", "Double-tap left/right: −10/+10 seconds. Swipe horizontally: seek. Swipe vertically on the left: brightness; on the right: volume. Changes appear live while you drag.", "Got it",
+            onConfirm = { showGestureHelp = false }, onDismiss = { showGestureHelp = false })
         if (showEpisodes) androidx.compose.ui.window.Dialog(onDismissRequest = { showEpisodes = false }) {
             PtsCard(Modifier.fillMaxWidth().heightIn(max = 620.dp).verticalScroll(rememberScrollState()), padding = 16.dp) {
                 SeasonEpisodes(title, ep, library?.progress?.get(title.id), savedVideos.map { it.key }.toSet(), downloading,
@@ -991,6 +1057,12 @@ class MainActivity : ComponentActivity() {
         if (showSettings) androidx.compose.ui.window.Dialog(onDismissRequest = { showSettings = false }) {
             PtsCard(Modifier.fillMaxWidth().heightIn(max = 560.dp).verticalScroll(rememberScrollState())) {
                 Text("Playback settings", style = MaterialTheme.typography.titleLarge, color = Pts.text)
+                PtsSecondaryButton("Picture in picture", Modifier.fillMaxWidth()) {
+                    showSettings = false
+                    try { enterPictureInPictureMode(PictureInPictureParams.Builder().setAspectRatio(Rational(16, 9)).build()) } catch (e: Exception) { toast("PiP unavailable: ${e.message}") }
+                }
+                PtsSecondaryButton(if (fill) "Fit video" else "Fill video", Modifier.fillMaxWidth()) { fill = !fill }
+                PtsSecondaryButton("Gesture guide", Modifier.fillMaxWidth()) { showSettings = false; showGestureHelp = true }
                 PtsSecondaryButton(if (autoplay) "Autoplay next: On" else "Autoplay next: Off", Modifier.fillMaxWidth()) {
                     autoplay = !autoplay; playerPreference("autoplay", autoplay)
                 }
@@ -1066,12 +1138,10 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    override fun onDestroy() {
-        downloadJob?.cancel()
-        super.onDestroy()
-    }
+    override fun onDestroy() { downloadWatch?.cancel(); super.onDestroy() }
 
     override fun onSaveInstanceState(outState: Bundle) {
+        persistNavigation()
         outState.putString("mode", mode)
         outState.putString("hubTab", hubTab)
         outState.putString("filesTab", filesTab)
@@ -1083,20 +1153,74 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun restoreNavigation() {
-        restoredNavigation?.let { state ->
-            mode = if (admin()) state.getString("mode") ?: mode else "Stream"
-            hubTab = state.getString("hubTab") ?: "Dashboard"
-            filesTab = state.getString("filesTab") ?: "Browse"
-            streamTab = state.getString("streamTab") ?: "Home"
-            filesPath = state.getString("filesPath").orEmpty()
-            filesDevice = state.getString("filesDevice") ?: "vps"
-            selected = library?.titles?.firstOrNull { it.id == state.getLong("selected") }
+        if (navigationRestored) return
+        val nav = device.navigation()
+        if (nav.optLong("owner") == account?.optLong("id")) {
+            mode = if (admin()) nav.optString("mode", "Hub") else "Stream"
+            hubTab = nav.optString("hub", "Dashboard"); filesTab = nav.optString("files", "Browse")
+            streamTab = nav.optString("stream", "Home")
+            filesPath = nav.optString("path"); filesDevice = nav.optString("device", "vps")
+            selected = library?.titles?.firstOrNull { it.id == nav.optLong("title") }
+                ?: nav.optJSONObject("selected")?.let { runCatching { parseTitle(it) }.getOrNull() }
+            episode = selected?.episodes?.firstOrNull { it.id == nav.optLong("episode") }
+            downloadsOpen = nav.optBoolean("downloads") || intent?.getBooleanExtra("open_downloads", false) == true
+            profileOpen = nav.optBoolean("profile"); updatesOpen = nav.optBoolean("updates")
+            playing = !downloadsOpen && !updatesOpen && !profileOpen && nav.optBoolean("playing") && selected != null
+            restoredPosition = nav.optLong("position", -1L); restoredAutoplay = nav.optBoolean("autoplay", true)
+            val queries = nav.optJSONObject("queries")
+            queries?.keys()?.forEach { browseQueries[it] = queries.optString(it) }
         }
+        navigationRestored = true
         restoredNavigation = null
     }
 
+    private fun persistNavigation() {
+        val user = account ?: return
+        val exo = player
+        val pos = exo?.currentPosition?.coerceAtLeast(0) ?: restoredPosition
+        val queries = JSONObject(); browseQueries.forEach { (key, value) -> queries.put(key, value) }
+        device.navigation(JSONObject().put("owner", user.optLong("id")).put("mode", mode).put("hub", hubTab)
+            .put("files", filesTab).put("stream", streamTab).put("path", filesPath).put("device", filesDevice)
+            .put("title", selected?.id ?: 0).put("selected", selected?.toJson()).put("episode", episode?.id ?: 0)
+            .put("downloads", downloadsOpen).put("profile", profileOpen).put("updates", updatesOpen)
+            .put("playing", playing).put("position", pos).put("autoplay", resumeAfterBackground || exo?.isPlaying == true)
+            .put("queries", queries))
+        library?.let { device.library(user.optLong("id"), it) }
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent); setIntent(intent)
+        if (intent.getBooleanExtra("open_downloads", false)) { playing = false; mode = "Stream"; downloadsOpen = true; profileOpen = false; updatesOpen = false; streamTab = "Downloads" }
+    }
+
+    override fun onStart() {
+        super.onStart()
+        if (resumeAfterBackground) { player?.play(); resumeAfterBackground = false }
+        foregroundSync?.cancel()
+        foregroundSync = scope.launch {
+            lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
+                while (true) {
+                    if (account != null && !loading) {
+                        try {
+                            val user = api.me()
+                            if (user.optLong("id") == account?.optLong("id")) { account = user; device.account(user); if (!admin() && mode != "Stream") enterMode("Stream") }
+                            refreshLibrary(); loadPlaybackPrefs(); downloads?.refresh()
+                        } catch (e: CancellationException) { throw e }
+                        catch (e: ApiException) { if (e.status == 401) { downloads?.pauseAll(); device.clearSession(); account = null; library = null; playing = false } }
+                        catch (_: Exception) { /* A temporary outage must not destroy the saved session/UI. */ }
+                    }
+                    delay(30000)
+                }
+            }
+        }
+    }
+
     override fun onStop() {
-        if (!isInPictureInPictureMode) player?.pause()
+        if (!isInPictureInPictureMode) {
+            resumeAfterBackground = player?.isPlaying == true
+            persistNavigation()
+            player?.pause()
+        } else persistNavigation()
         super.onStop()
     }
 

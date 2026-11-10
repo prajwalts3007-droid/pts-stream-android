@@ -16,6 +16,7 @@ android {
         versionName = "1.0.${versionCode}"
         buildConfigField("String", "APP_REPOSITORY", "\"prajwalts3007-droid/pts-stream-android\"")
         buildConfigField("String", "RELEASES_API", "\"https://api.github.com/repos/prajwalts3007-droid/pts-stream-android/releases/latest\"")
+        buildConfigField("boolean", "IS_PRERELEASE", (System.getenv("GITHUB_REF_NAME")?.contains("-rc") ?: true).toString())
     }
     buildFeatures { compose = true; buildConfig = true }
     compileOptions { sourceCompatibility = JavaVersion.VERSION_17; targetCompatibility = JavaVersion.VERSION_17 }

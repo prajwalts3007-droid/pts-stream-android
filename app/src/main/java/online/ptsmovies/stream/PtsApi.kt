@@ -74,29 +74,19 @@ class PtsApi(private val baseUrl: String = BASE, cookieJar: CookieJar? = null) {
             cookies.flush()
         }
     }
+    suspend fun uploadAvatar(bytes: ByteArray): JSONObject = withContext(Dispatchers.IO) {
+        require(bytes.size <= 1024 * 1024) { "Profile photo exceeds 1 MiB" }
+        val token = get("/auth/csrf").optString("csrf_token")
+        val body = MultipartBody.Builder().setType(MultipartBody.FORM)
+            .addFormDataPart("avatar", "avatar.jpg", bytes.toRequestBody("image/jpeg".toMediaType())).build()
+        http.newCall(Request.Builder().url(resolveUrl("/api/v1/auth/avatar")).header("X-CSRF-Token", token).post(body).build()).execute().use {
+            val text = it.body?.string().orEmpty()
+            if (!it.isSuccessful) throw ApiException(it.code, "Photo upload HTTP ${it.code}: ${text.take(160)}")
+            JSONObject(text).getJSONObject("user")
+        }
+    }
     suspend fun library(): Library = withContext(Dispatchers.IO) {
-        val result = get("/stream/library")
-        fun JSONArray?.longs(): Set<Long> = (0 until (this?.length() ?: 0)).map { this!!.optLong(it) }.toSet()
-        val list = result.optJSONArray("titles") ?: JSONArray()
-        val titles = (0 until list.length()).map { i ->
-            val t = list.getJSONObject(i)
-            val eps = t.optJSONArray("episodes") ?: JSONArray()
-            val genres = t.optJSONArray("genres") ?: JSONArray()
-            Title(t.getLong("id"), t.optString("kind"), t.optString("title"), t.optInt("year"),
-                t.optString("poster"), t.optString("synopsis"),
-                (0 until genres.length()).map { genres.optString(it) },
-                (0 until eps.length()).map { n ->
-                    val e = eps.getJSONObject(n)
-                    Episode(e.getLong("id"), e.optInt("season"), e.optInt("episode"), e.optString("title"), e.optDouble("duration", 0.0), e.optString("container"), e.optString("description"))
-                }, t.optString("video_codec"), t.optString("container"))
-        }
-        val progress = mutableMapOf<Long, Resume>()
-        val values = result.optJSONArray("progress") ?: JSONArray()
-        for (i in 0 until values.length()) {
-            val p = values.optJSONObject(i) ?: continue
-            progress[p.optLong("title_id")] = Resume(p.optLong("episode_id"), p.optLong("position"), p.optLong("duration"))
-        }
-        Library(titles, result.optJSONArray("watch").longs(), progress)
+        parseLibrary(get("/stream/library"))
     }
     suspend fun watch(title: Long, on: Boolean) = withContext(Dispatchers.IO) {
         request("/stream/watch", JSONObject().put("id", title).put("on", on)); Unit
@@ -143,6 +133,7 @@ class PtsApi(private val baseUrl: String = BASE, cookieJar: CookieJar? = null) {
             if (fallback) "?via=vps" else ""
     fun fileDownloadUrl(device: String, path: String): String =
         baseUrl.trimEnd('/') + "/api/v1/admin/files/download?device=$device&path=" + java.net.URLEncoder.encode(path, "UTF-8")
+    fun resolveUrl(path: String) = baseUrl.trimEnd('/') + path
 }
 
 class ApiException(val status: Int, message: String) : IOException(message)

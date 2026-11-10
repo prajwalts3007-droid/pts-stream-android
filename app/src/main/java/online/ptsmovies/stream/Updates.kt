@@ -22,13 +22,13 @@ import java.io.File
 import java.security.MessageDigest
 import java.util.concurrent.TimeUnit
 
-internal data class ReleaseUpdate(val code: Int, val url: String, val digest: String)
+data class ReleaseUpdate(val code: Int, val url: String, val digest: String)
 
-internal fun parseReleaseUpdate(update: JSONObject, installedVersion: Int): ReleaseUpdate? {
-    if (update.optBoolean("draft") || update.optBoolean("prerelease")) return null
+internal fun parseReleaseUpdate(update: JSONObject, installedVersion: Int, allowTest: Boolean = false): ReleaseUpdate? {
+    if (update.optBoolean("draft") || (update.optBoolean("prerelease") && !allowTest)) return null
     val tag = update.optString("tag_name")
-    require(tag.matches(Regex("v[1-9][0-9]*"))) { "Invalid stable release version" }
-    val code = tag.drop(1).toInt()
+    require(tag.matches(Regex(if (allowTest) "v[1-9][0-9]*(-rc[1-9][0-9]*)?" else "v[1-9][0-9]*"))) { "Invalid release version" }
+    val code = tag.drop(1).substringBefore('-').toInt()
     if (code <= installedVersion) return null
     val assets = update.optJSONArray("assets") ?: error("Release has no APK")
     val name = "PTS-Stream-v$code.apk"
@@ -42,7 +42,7 @@ internal fun parseReleaseUpdate(update: JSONObject, installedVersion: Int): Rele
 private var updateInProgress = false
 
 @Suppress("DEPRECATION")
-private fun verifyUpdate(context: Context, file: File, expected: ReleaseUpdate) {
+internal fun verifyUpdate(context: Context, file: File, expected: ReleaseUpdate) {
     if (expected.digest.startsWith("sha256:")) {
         val digest = MessageDigest.getInstance("SHA-256")
         file.inputStream().use { input ->
