@@ -24,10 +24,10 @@ data class Title(
 data class Resume(val episodeId: Long, val seconds: Long, val duration: Long = 0L)
 data class Library(val titles: List<Title>, val watch: Set<Long>, val progress: Map<Long, Resume>)
 
-class PtsApi {
+class PtsApi(private val baseUrl: String = BASE, cookieJar: CookieJar? = null) {
     private val cookies = CookieManager.getInstance().apply { setAcceptCookie(true) }
     val http: OkHttpClient = OkHttpClient.Builder()
-        .cookieJar(object : CookieJar {
+        .cookieJar(cookieJar ?: object : CookieJar {
             override fun saveFromResponse(url: okhttp3.HttpUrl, received: List<Cookie>) {
                 received.forEach { cookies.setCookie(url.toString(), it.toString()) }
                 cookies.flush()
@@ -39,7 +39,7 @@ class PtsApi {
         .readTimeout(45, TimeUnit.SECONDS).build()
 
     private fun request(path: String, body: JSONObject? = null, method: String = if (body == null) "GET" else "POST"): JSONObject {
-        val url = BASE + "/api/v1" + path
+        val url = baseUrl.trimEnd('/') + "/api/v1" + path
         val builder = Request.Builder().url(url).header("Accept", "application/json")
         if (method != "GET") {
             // A new CSRF token is issued for the current browser-like cookie session.
@@ -50,7 +50,7 @@ class PtsApi {
         }
         http.newCall(builder.build()).execute().use { response ->
             val text = response.body?.string().orEmpty()
-            if (!response.isSuccessful) throw IOException("HTTP ${response.code}: ${text.take(180)}")
+            if (!response.isSuccessful) throw ApiException(response.code, "HTTP ${response.code}: ${text.take(180)}")
             return if (text.isBlank()) JSONObject() else JSONObject(text)
         }
     }
@@ -59,8 +59,8 @@ class PtsApi {
     suspend fun json(path: String, method: String = "GET", body: JSONObject? = null): JSONObject =
         withContext(Dispatchers.IO) { request(path, body, method) }
     suspend fun me(): JSONObject = withContext(Dispatchers.IO) { get("/auth/me").getJSONObject("user") }
-    suspend fun login(user: String, password: String): JSONObject = withContext(Dispatchers.IO) {
-        request("/auth/login", JSONObject().put("username", user).put("password", password).put("remember", true)).getJSONObject("user")
+    suspend fun login(user: String, password: String, remember: Boolean = true): JSONObject = withContext(Dispatchers.IO) {
+        request("/auth/login", JSONObject().put("username", user).put("password", password).put("remember", remember)).getJSONObject("user")
     }
     suspend fun logout() = withContext(Dispatchers.IO) {
         try { request("/auth/logout", JSONObject()) } finally {
@@ -100,7 +100,9 @@ class PtsApi {
             .put("position", position).put("duration", duration)); Unit
     }
     fun streamUrl(title: Title, episode: Episode? = null, fallback: Boolean = false): String =
-        "$BASE/api/v1/stream/${if (episode?.container == "hls" || (episode == null && title.container == "hls")) "hls" else "file"}/${if (episode == null) "movie" else "episode"}/${episode?.id ?: title.id}" +
+        "${baseUrl.trimEnd('/')}/api/v1/stream/${if (episode?.container == "hls" || (episode == null && title.container == "hls")) "hls" else "file"}/${if (episode == null) "movie" else "episode"}/${episode?.id ?: title.id}" +
             (if (episode?.container == "hls" || (episode == null && title.container == "hls")) "/master.m3u8" else "") +
             if (fallback) "?via=vps" else ""
 }
+
+class ApiException(val status: Int, message: String) : IOException(message)

@@ -26,7 +26,7 @@ class OfflineStore(private val context: Context, private val api: PtsApi, ownerI
     private fun key(title: Title, episode: Episode?) = "${title.id}_${episode?.id ?: 0}"
 
     fun list(): List<SavedVideo> {
-        val entries = JSONArray(prefs.getString("items", "[]"))
+        val entries = try { JSONArray(prefs.getString("items", "[]")) } catch (_: org.json.JSONException) { JSONArray() }
         return (0 until entries.length()).mapNotNull { i ->
             val item = entries.optJSONObject(i) ?: return@mapNotNull null
             val k = item.optString("key")
@@ -105,7 +105,7 @@ class OfflineStore(private val context: Context, private val api: PtsApi, ownerI
         writeIndex(list().filterNot { it.key == id } + item)
         try {
             notifier.notify(id.hashCode(), NotificationCompat.Builder(context, "downloads")
-                .setSmallIcon(android.R.drawable.stat_sys_download_done).setContentTitle("PTS Stream")
+                .setSmallIcon(android.R.drawable.stat_sys_download_done).setContentTitle("PTS Library")
                 .setContentText("${item.label} ready offline").setAutoCancel(true).build())
         } catch (_: SecurityException) { /* notification permission is optional */ }
         item

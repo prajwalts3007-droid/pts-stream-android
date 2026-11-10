@@ -44,6 +44,11 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
+import androidx.core.view.WindowCompat
+import androidx.lifecycle.lifecycleScope
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.repeatOnLifecycle
+import androidx.media3.datasource.DefaultDataSource
 import androidx.media3.common.MediaItem
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
@@ -55,6 +60,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import org.json.JSONArray
@@ -65,7 +71,7 @@ import kotlin.math.roundToLong
 
 class MainActivity : ComponentActivity() {
     private val api = PtsApi()
-    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
+    private val scope get() = lifecycleScope
     private lateinit var offline: OfflineStore
 
     private var account by mutableStateOf<JSONObject?>(null)
@@ -90,6 +96,8 @@ class MainActivity : ComponentActivity() {
     private var downloadJob: Job? = null
     private var downloading by mutableStateOf("")
     private var downloadPercent by mutableIntStateOf(0)
+    private var savedVideos by mutableStateOf(emptyList<SavedVideo>())
+    private var fileJob: Job? = null
 
     private var metrics by mutableStateOf<JSONObject?>(null)
     private var metricsTarget by mutableStateOf("vps")
@@ -119,13 +127,14 @@ class MainActivity : ComponentActivity() {
         }
         window.statusBarColor = android.graphics.Color.rgb(17, 19, 45)
         window.navigationBarColor = android.graphics.Color.rgb(32, 35, 67)
+        WindowCompat.setDecorFitsSystemWindows(window, false)
         scope.launch { restoreSession() }
         setContent {
             PtsTheme {
-                PtsBackground {
+                PtsBackground(Modifier.windowInsetsPadding(WindowInsets.safeDrawing)) {
                     when {
                         loading -> PtsLoading()
-                        account == null -> LoginScreen(startupError, busy = false) { user, pass -> signIn(user, pass) }
+                        account == null -> LoginScreen(startupError, busy = false) { user, pass, remember -> signIn(user, pass, remember) }
                         playing && selected != null -> PlayerScreen(selected!!, episode, offline.find(selected!!, episode)) {
                             playing = false
                             episode = null
@@ -142,6 +151,7 @@ class MainActivity : ComponentActivity() {
         try {
             account = api.me()
             offline = OfflineStore(this@MainActivity, api, account!!.optLong("id"))
+            savedVideos = offline.list()
             mode = if (account!!.optString("role") == "admin") "Hub" else "Stream"
             startupError = ""
             refreshLibrary()
@@ -150,26 +160,30 @@ class MainActivity : ComponentActivity() {
                 loadQueue()
                 loadSettings()
             }
-        } catch (e: Exception) {
-            startupError = ""
+        } catch (e: CancellationException) { throw e }
+        catch (e: Exception) {
+            startupError = if (e is ApiException && e.status == 401) "" else "Could not restore your session. Check your connection and sign in again."
+            account = null
             library = null
         } finally { loading = false }
     }
 
-    private fun signIn(user: String, password: String) {
+    private fun signIn(user: String, password: String, remember: Boolean) {
         scope.launch {
             loading = true
             startupError = ""
             try {
-                account = api.login(user, password)
+                account = api.login(user, password, remember)
                 offline = OfflineStore(this@MainActivity, api, account!!.optLong("id"))
+                savedVideos = offline.list()
                 mode = if (account!!.optString("role") == "admin") "Hub" else "Stream"
                 toast("Welcome back, " + account!!.optString("name").ifBlank { account!!.optString("username") }, ok = true)
                 refreshLibrary()
                 if (account!!.optString("role") == "admin") {
                     loadMetrics(); loadQueue(); loadSettings()
                 }
-            } catch (e: Exception) {
+            } catch (e: CancellationException) { throw e }
+            catch (e: Exception) {
                 startupError = e.message ?: "Sign in failed"
             } finally { loading = false }
         }
@@ -178,17 +192,21 @@ class MainActivity : ComponentActivity() {
     private suspend fun refreshLibrary() {
         try {
             library = api.library()
-        } catch (e: Exception) {
-            message = "Library unavailable: ${e.message}"
+        } catch (e: CancellationException) { throw e }
+        catch (e: Exception) {
+            toast("Library unavailable: ${e.message}")
         }
     }
 
     private fun signOut() {
         downloadJob?.cancel()
+        searchJob?.cancel()
+        fileJob?.cancel()
         scope.launch {
             try { api.logout() } finally {
                 account = null; library = null; selected = null; profileOpen = false; downloadsOpen = false
                 queueJobs = emptyList(); queueDone = emptyList(); metrics = null; users = emptyList()
+                savedVideos = emptyList(); message = ""; startupError = ""
             }
         }
     }
@@ -237,8 +255,10 @@ class MainActivity : ComponentActivity() {
             downloadPercent = 0
             try {
                 offline.save(title, ep) { value -> runOnUiThread { downloadPercent = value } }
+                savedVideos = offline.list()
                 toast("${ep?.title ?: title.title} is ready offline", ok = true)
-            } catch (e: Exception) {
+            } catch (e: CancellationException) { throw e }
+            catch (e: Exception) {
                 toast(e.message ?: "Offline download failed")
             } finally { downloading = "" }
         }
@@ -289,11 +309,14 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun loadFiles(device: String = filesDevice, path: String = filesPath) {
+        fileJob?.cancel()
         filesLoading = true
-        scope.launch {
+        fileJob = scope.launch {
             try {
-                filesEntries = api.json("/admin/files?path=${java.net.URLEncoder.encode(path, "UTF-8")}&device=$device").optJSONArray("entries").objects()
-            } catch (e: Exception) { toast("Files: ${e.message}") }
+                val entries = api.json("/admin/files?path=${java.net.URLEncoder.encode(path, "UTF-8")}&device=$device").optJSONArray("entries").objects()
+                if (device == filesDevice && path == filesPath) filesEntries = entries
+            } catch (e: CancellationException) { throw e }
+            catch (e: Exception) { filesEntries = emptyList(); toast("Files: ${e.message}") }
             finally { filesLoading = false }
         }
     }
@@ -382,6 +405,15 @@ class MainActivity : ComponentActivity() {
     private fun AppShell() {
         BackHandler { routeBack() }
         val user = account ?: return
+        LaunchedEffect(mode, hubTab, user.optLong("id")) {
+            if (mode == "Hub" && admin()) lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
+                while (true) {
+                    if (hubTab == "Dashboard") loadMetrics()
+                    if (hubTab == "Dashboard" || hubTab == "Queue") loadQueue()
+                    delay(8000)
+                }
+            }
+        }
         val name = user.optString("name").ifBlank { user.optString("username") }
         Column(Modifier.fillMaxSize()) {
             PtsTopBar(
@@ -392,31 +424,37 @@ class MainActivity : ComponentActivity() {
                     if (admin() && mode != "Hub") enterMode("Hub") else if (selected != null) selected = null
                 }
             )
+            if (downloading.isNotBlank()) Row(Modifier.fillMaxWidth().background(Pts.soft).padding(horizontal = 16.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Text("Saving offline · $downloadPercent%", style = MaterialTheme.typography.labelSmall, color = Pts.accent)
+                    Text(downloading, style = MaterialTheme.typography.bodySmall, maxLines = 1, overflow = TextOverflow.Ellipsis, color = Pts.text)
+                    PtsProgressBar(downloadPercent / 100f, height = 4.dp)
+                }
+                PtsIconAction(PtsIcons.Close, "Cancel download", { downloadJob?.cancel() }, tint = Pts.muted)
+            }
             Box(Modifier.weight(1f)) {
                 when {
-                    profileOpen -> ProfileScreen(user, offline.list().size, { profileOpen = false; downloadsOpen = true }, {
+                    profileOpen -> ProfileScreen(user, savedVideos.size, { profileOpen = false; downloadsOpen = true }, {
                         checkForUpdate(this@MainActivity, scope) { toast(it) }
                     }, { enterMode(it) }, { signOut() })
-                    downloadsOpen -> DownloadsScreen(offline.list(), { item ->
+                    downloadsOpen -> DownloadsScreen(savedVideos, { item ->
                         val title = library?.titles?.firstOrNull { it.id == item.titleId }
                         if (title == null) toast("This title is no longer in the library")
                         else play(title, title.episodes.firstOrNull { item.key.endsWith("_${it.id}") })
                     }, { item ->
-                        try { offline.remove(item); toast("Download deleted", ok = true) }
+                        try { offline.remove(item); savedVideos = offline.list(); toast("Download deleted", ok = true) }
                         catch (e: Exception) { toast(e.message ?: "Could not delete download") }
                     })
                     mode == "Hub" && admin() -> when (hubTab) {
                         "Dashboard" -> DashboardScreen(name, metrics, metricsTarget, { metricsTarget = it }, { loadMetrics() }, queueJobs, queueDone) { hubTab = "Queue" }
                         "Queue" -> QueueScreen(queueJobs, queueDone, queueStage, { queueStage = it }, { loadQueue() }, { id ->
-                            scope.launch { try { api.json("/queue/${java.net.URLEncoder.encode(id, "UTF-8")}/retry", "POST"); loadQueue(); toast("Retry requested", ok = true) } catch (e: Exception) { toast(e.message ?: "Retry failed") } }
-                        }, { id -> toast("Edit the source link from the web admin for job $id") }, { id ->
                             scope.launch { try { api.json("/queue/${java.net.URLEncoder.encode(id, "UTF-8")}", "DELETE"); loadQueue() } catch (e: Exception) { toast(e.message ?: "Delete failed") } }
                         }) { stage, ids -> cancelStage(stage, ids) }
                         "Download" -> SearchScreen(searchQuery, { search(it) }, searchResults, searchLoading)
                         else -> SettingsScreen(user, users, githubConfigured, { checkForUpdate(this@MainActivity, scope) { toast(it) } }, { signOut() })
                     }
                     mode == "Files" && admin() -> if (filesTab == "Transfers") {
-                        LaunchedEffect(Unit) { while (true) { loadOps(); delay(4000) } }
+                        LaunchedEffect(Unit) { lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) { while (true) { loadOps(); delay(4000) } } }
                         TransfersScreen(ops) { id ->
                             scope.launch { try { api.json("/admin/files/ops/cancel", "POST", JSONObject().put("id", id)); loadOps() } catch (e: Exception) { toast(e.message ?: "Cancel failed") } }
                         }
@@ -440,7 +478,7 @@ class MainActivity : ComponentActivity() {
                             }
                         } else if (selected != null) {
                             val t = selected!!
-                            TitleScreen(t, lib.progress[t.id], t.id in lib.watch, offline.list().map { it.key }.toSet(), downloading,
+                            TitleScreen(t, lib.progress[t.id], t.id in lib.watch, savedVideos.map { it.key }.toSet(), downloading,
                                 onBack = { selected = null },
                                 onPlay = { ep -> play(t, ep) },
                                 onToggleWatch = { toggleWatch(t) },
@@ -491,7 +529,7 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun JSONArray?.objects(): List<JSONObject> =
-        (0 until (this?.length() ?: 0)).mapNotNull { optJSONObject(it) }
+        (0 until (this?.length() ?: 0)).mapNotNull { this?.optJSONObject(it) }
 
     // ---------- player ----------
 
@@ -518,7 +556,7 @@ class MainActivity : ComponentActivity() {
         val exo = remember(source) {
             ExoPlayer.Builder(context).setMediaSourceFactory(
                 androidx.media3.exoplayer.source.DefaultMediaSourceFactory(
-                    OkHttpDataSource.Factory(api.http).setUserAgent("PTS-Library-Android")
+                    DefaultDataSource.Factory(context, OkHttpDataSource.Factory(api.http).setUserAgent("PTS-Library-Android"))
                 )).build().apply {
                 setMediaItem(MediaItem.fromUri(source))
                 if (resumeAt > 0) seekTo(resumeAt)
@@ -627,7 +665,7 @@ class MainActivity : ComponentActivity() {
                         }
                     }
                 })
-                AnimatedVisibility(visible = controls, enter = fadeIn(), exit = fadeOut(), modifier = Modifier.fillMaxSize()) {
+                androidx.compose.animation.AnimatedVisibility(visible = controls, enter = fadeIn(), exit = fadeOut(), modifier = Modifier.fillMaxSize()) {
                     Box(Modifier.fillMaxSize().background(Brush.verticalGradient(listOf(Color(0xCC040514), Color(0x11040514), Color(0xE6040514))))) {
                         Column(Modifier.align(Alignment.BottomCenter).fillMaxWidth().padding(horizontal = 13.dp, vertical = 9.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                             val shown = seekPreview ?: position
@@ -744,8 +782,6 @@ class MainActivity : ComponentActivity() {
 
     override fun onDestroy() {
         downloadJob?.cancel()
-        player?.release()
-        player = null
         super.onDestroy()
     }
 }

@@ -63,9 +63,9 @@ val ButtonShape = RoundedCornerShape(14.dp)
 val PosterShape = RoundedCornerShape(12.dp)
 
 @Composable
-fun PtsBackground(content: @Composable BoxScope.() -> Unit) {
+fun PtsBackground(modifier: Modifier = Modifier, content: @Composable BoxScope.() -> Unit) {
     Box(
-        Modifier.fillMaxSize().background(Pts.bg).drawBehind {
+        modifier.fillMaxSize().background(Pts.bg).drawBehind {
             drawRect(Brush.radialGradient(
                 colors = listOf(Pts.accent.copy(alpha = 0.12f), Color.Transparent),
                 center = Offset(size.width * 0.92f, size.height * 0.03f),
@@ -504,46 +504,49 @@ fun PtsPosterCard(
 
 @Composable
 fun PtsPosterShelf(label: String, titles: List<Title>, progress: Map<Long, Resume>, watch: Set<Long>, onOpen: (Title) -> Unit, onToggle: (Title) -> Unit) {
-    PtsSectionHeader(label, titles.size)
-    LazyRow(horizontalArrangement = Arrangement.spacedBy(11.dp), contentPadding = PaddingValues(bottom = 6.dp)) {
-        items(titles, key = { it.id }) { title ->
-            PtsPosterCard(title, progress[title.id], title.id in watch, onOpen = { onOpen(title) }, onToggleWatch = { onToggle(title) })
+    Column {
+        PtsSectionHeader(label, titles.size)
+        LazyRow(horizontalArrangement = Arrangement.spacedBy(11.dp), contentPadding = PaddingValues(bottom = 6.dp)) {
+            items(titles, key = { it.id }) { title ->
+                PtsPosterCard(title, progress[title.id], title.id in watch, onOpen = { onOpen(title) }, onToggleWatch = { onToggle(title) })
+            }
         }
     }
 }
 
 @Composable
 fun PtsHero(title: Title, marked: Boolean, onOpen: () -> Unit, onPlay: () -> Unit, onToggleWatch: () -> Unit) {
-    Box(
-        Modifier.fillMaxWidth().height(330.dp).clip(RoundedCornerShape(26.dp)).background(Color(0xFF201944))
+    BoxWithConstraints(
+        Modifier.fillMaxWidth().heightIn(min = 310.dp).clip(RoundedCornerShape(26.dp)).background(Color(0xFF201944))
             .border(2.dp, Pts.line, RoundedCornerShape(26.dp))
     ) {
+        val wide = maxWidth >= 540.dp
         if (title.poster.startsWith("https://")) {
-            AsyncImage(title.poster, null, Modifier.fillMaxSize(), contentScale = ContentScale.Crop, alpha = 0.6f)
+            AsyncImage(title.poster, null, Modifier.matchParentSize(), contentScale = ContentScale.Crop, alpha = 0.6f)
         }
-        Box(Modifier.fillMaxSize().background(Brush.horizontalGradient(
+        Box(Modifier.matchParentSize().background(Brush.horizontalGradient(
             listOf(Color(0xF2141434), Color(0xCC141434), Color(0x66141434))
         )))
         Row(
-            Modifier.fillMaxSize().padding(18.dp),
+            Modifier.fillMaxWidth().padding(20.dp).padding(top = 36.dp),
             verticalAlignment = Alignment.Bottom
         ) {
-            Box(
+            if (wide) Box(
                 Modifier.width(96.dp).aspectRatio(2f / 3f).clip(PosterShape).background(Pts.soft)
                     .border(2.dp, Color.White.copy(alpha = .46f), PosterShape)
             ) {
                 if (title.poster.startsWith("https://")) AsyncImage(title.poster, null, Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
             }
-            Column(Modifier.weight(1f).padding(start = 14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Column(Modifier.weight(1f).padding(start = if (wide) 14.dp else 0.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 Text("FEATURED · ${if (title.kind == "series") "SERIES" else "MOVIE"}", style = MaterialTheme.typography.labelSmall, color = Pts.spark, letterSpacing = 1.sp)
-                Text(title.title, style = MaterialTheme.typography.headlineSmall, color = Color.White, maxLines = 3, overflow = TextOverflow.Ellipsis)
+                Text(title.title, style = MaterialTheme.typography.headlineLarge, color = Color.White, maxLines = 3, overflow = TextOverflow.Ellipsis)
                 Text(
                     listOfNotNull(title.year.takeIf { it > 0 }?.toString(), title.genres.take(2).joinToString()).joinToString(" · "),
                     style = MaterialTheme.typography.bodySmall, color = Color(0xFFE7E8FF), maxLines = 2, overflow = TextOverflow.Ellipsis
                 )
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(top = 2.dp)) {
-                    PtsPrimaryButton(if (title.kind == "series") "Play series" else "Play", Modifier.weight(1f), icon = PtsIcons.Play, onClick = onPlay)
-                    PtsSecondaryButton(if (marked) "In list" else "My list", Modifier.width(104.dp), icon = if (marked) PtsIcons.Check else PtsIcons.Plus) { onToggleWatch() }
+                    PtsPrimaryButton("Play", Modifier.weight(1f), icon = PtsIcons.Play, onClick = onPlay)
+                    PtsSecondaryButton(if (marked) "In list" else "My list", Modifier.weight(1f), icon = if (marked) PtsIcons.Check else PtsIcons.Plus) { onToggleWatch() }
                 }
             }
         }

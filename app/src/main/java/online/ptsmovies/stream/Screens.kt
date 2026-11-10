@@ -32,6 +32,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import kotlinx.coroutines.launch
 import coil.compose.AsyncImage
 import org.json.JSONArray
 import org.json.JSONObject
@@ -58,22 +59,21 @@ fun formatDuration(seconds: Long): String {
 }
 
 private fun JSONArray?.objects(): List<JSONObject> =
-    (0 until (this?.length() ?: 0)).mapNotNull { optJSONObject(it) }
+    (0 until (this?.length() ?: 0)).mapNotNull { this?.optJSONObject(it) }
 
 private fun JSONObject.array(key: String): List<JSONObject> = optJSONArray(key).objects()
 
 // ---------- login ----------
 
 @Composable
-fun LoginScreen(message: String, busy: Boolean, onLogin: (String, String) -> Unit) {
+fun LoginScreen(message: String, busy: Boolean, onLogin: (String, String, Boolean) -> Unit) {
     var user by remember { mutableStateOf("") }
     var pass by remember { mutableStateOf("") }
     var keep by remember { mutableStateOf(true) }
     Box(Modifier.fillMaxSize().imePadding()) {
         Column(
             Modifier.fillMaxSize().verticalScroll(rememberScrollState())
-                .padding(horizontal = 24.dp, vertical = 30.dp)
-                .navigationBarsPadding().statusBarsPadding(),
+                .padding(horizontal = 24.dp, vertical = 30.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.Center
         ) {
@@ -109,7 +109,7 @@ fun LoginScreen(message: String, busy: Boolean, onLogin: (String, String) -> Uni
                 }
                 if (message.isNotBlank()) PtsErrorBanner(message)
                 PtsPrimaryButton(if (busy) "Signing in…" else "Sign in", Modifier.fillMaxWidth(), enabled = !busy && user.isNotBlank() && pass.isNotBlank()) {
-                    onLogin(user.trim(), pass)
+                    onLogin(user.trim(), pass, keep)
                 }
                 Text("Sessions are stored only on this device. The app never stores your password.",
                     style = MaterialTheme.typography.labelSmall, color = Pts.muted, textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth())
@@ -145,6 +145,7 @@ fun StreamHomeScreen(
             if (featured.isNotEmpty()) {
                 item {
                     val pager = rememberPagerState(pageCount = { featured.size })
+                    val pagerScope = rememberCoroutineScope()
                     Column(verticalArrangement = Arrangement.spacedBy(9.dp)) {
                         HorizontalPager(state = pager, pageSpacing = 12.dp, modifier = Modifier.fillMaxWidth()) { index ->
                             val t = featured[index]
@@ -157,7 +158,7 @@ fun StreamHomeScreen(
                                     Modifier.padding(horizontal = 4.dp).height(9.dp)
                                         .width(if (on) 24.dp else 9.dp)
                                         .background(if (on) Pts.accent else Pts.line2, RoundedCornerShape(99.dp))
-                                        .clickable { }
+                                        .clickable { pagerScope.launch { pager.animateScrollToPage(index) } }
                                 )
                             }
                         }
@@ -209,14 +210,14 @@ fun BrowseScreen(
     onToggleWatch: (Title) -> Unit
 ) {
     var genre by remember(tab) { mutableStateOf("") }
-    val genres = remember(tab) {
+    val genres = remember(tab, titles) {
         when (tab) {
             "Movies" -> titles.flatMap { it.genres }.distinct().sorted()
             "Series" -> titles.flatMap { it.genres }.distinct().sorted()
             else -> emptyList()
         }.take(10)
     }
-    val filtered = remember(titles, genre, query) {
+    val filtered = remember(titles, genre, query, watch, tab) {
         titles.filter { t ->
             (tab != "Watchlist" || t.id in watch) &&
                 (genre.isBlank() || t.genres.any { it.equals(genre, true) }) &&
@@ -314,7 +315,6 @@ fun TitleScreen(
                         Row(horizontalArrangement = Arrangement.spacedBy(5.dp)) {
                             if (title.codec.isNotBlank()) PtsPill(title.codec.uppercase())
                             if (title.container.isNotBlank()) PtsPill(title.container.uppercase())
-                            PtsPill("HEVC", active = true)
                         }
                         Row(horizontalArrangement = Arrangement.spacedBy(5.dp)) {
                             title.genres.take(2).forEach { g -> PtsPill(g) }
@@ -481,9 +481,9 @@ fun ProfileScreen(user: JSONObject, savedCount: Int, onDownloads: () -> Unit, on
                     Text("Sections", style = MaterialTheme.typography.titleMedium, color = Pts.text)
                     Text("Swipe the bottom dock to switch, or choose a section here.", style = MaterialTheme.typography.labelSmall, color = Pts.muted)
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        PtsSecondaryButton("Hub", Modifier.weight(1f), icon = PtsIcons.Home) { onSection("Hub") }
-                        PtsSecondaryButton("Files", Modifier.weight(1f), icon = PtsIcons.Browse) { onSection("Files") }
-                        PtsSecondaryButton("Stream", Modifier.weight(1f), icon = PtsIcons.Film) { onSection("Stream") }
+                        PtsSecondaryButton("Hub", Modifier.weight(1f)) { onSection("Hub") }
+                        PtsSecondaryButton("Files", Modifier.weight(1f)) { onSection("Files") }
+                        PtsSecondaryButton("Stream", Modifier.weight(1f)) { onSection("Stream") }
                     }
                 }
             }
@@ -627,27 +627,32 @@ fun QueueScreen(
     stage: String,
     onStage: (String) -> Unit,
     onRefresh: () -> Unit,
-    onRetry: (String) -> Unit,
-    onEdit: (String) -> Unit,
     onDelete: (String) -> Unit,
     onCancelStage: (String, List<String>) -> Unit
 ) {
     var confirmStage by remember { mutableStateOf<String?>(null) }
     var snapshot by remember { mutableStateOf<List<String>>(emptyList()) }
+    var deleteJob by remember { mutableStateOf<JSONObject?>(null) }
+    deleteJob?.let { job ->
+        PtsConfirmDialog("Remove job?", "Remove ${job.optString("title")} from the queue? This cannot be undone.",
+            "Remove", destructive = true,
+            onConfirm = { onDelete(job.optString("job_id")); deleteJob = null }, onDismiss = { deleteJob = null })
+    }
     val visible = if (stage == "done") completed else jobs.filter { it.optString("stage", "queued") == stage }
     val stageName = stageLabel(stage)
     if (confirmStage != null) {
+        val confirmationName = stageLabel(confirmStage!!)
         var phrase by remember(confirmStage) { mutableStateOf("") }
         PtsConfirmDialog(
             "Cancel ${stageLabel(confirmStage!!).lowercase()} jobs",
-            "Delete the ${snapshot.size} job${if (snapshot.size == 1) "" else "s"} shown when you opened this dialog? This cannot be undone. Type ${stageName.uppercase()} to confirm.",
+            "Delete the ${snapshot.size} job${if (snapshot.size == 1) "" else "s"} shown when you opened this dialog? This cannot be undone. Type ${confirmationName.uppercase()} to confirm.",
             "Delete ${snapshot.size}",
             destructive = true,
-            confirmEnabled = phrase.equals(stageName, true) && snapshot.isNotEmpty(),
+            confirmEnabled = phrase.equals(confirmationName, true) && snapshot.isNotEmpty(),
             onConfirm = { val s = confirmStage!!; val ids = snapshot; confirmStage = null; onCancelStage(s, ids) },
             onDismiss = { confirmStage = null }
         ) {
-            PtsField(phrase, { phrase = it }, "${stageName.uppercase()} to confirm", Modifier.fillMaxWidth())
+            PtsField(phrase, { phrase = it }, "${confirmationName.uppercase()} to confirm", Modifier.fillMaxWidth())
         }
     }
     LazyColumn(
@@ -691,9 +696,7 @@ fun QueueScreen(
         items(visible) { job ->
             QueueJobRow(
                 job = job,
-                onRetry = { onRetry(job.optString("job_id")) },
-                onEdit = { onEdit(job.optString("job_id")) },
-                onDelete = { onDelete(job.optString("job_id")) }
+                onDelete = { deleteJob = job }
             )
         }
     }
@@ -717,9 +720,9 @@ private fun StageTile(label: String, count: Int, active: Boolean, stage: String,
 }
 
 @Composable
-private fun QueueJobRow(job: JSONObject, onRetry: () -> Unit, onEdit: () -> Unit, onDelete: () -> Unit) {
+private fun QueueJobRow(job: JSONObject, onDelete: () -> Unit) {
     val stage = job.optString("stage", "queued")
-    val progress = (job.optDouble("progress") / 100).toFloat()
+    val progress = (job.optDouble("progress", 0.0) / 100).toFloat().takeIf { it.isFinite() } ?: 0f
     val failed = stage == "failed"
     val done = stage == "done"
     val tags = buildList {
@@ -733,8 +736,6 @@ private fun QueueJobRow(job: JSONObject, onRetry: () -> Unit, onEdit: () -> Unit
                 Text(job.optString("title").ifBlank { job.optString("job_id") }, style = MaterialTheme.typography.titleSmall, color = Pts.text, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 Text("· ${tags.joinToString(" · ")}", style = MaterialTheme.typography.labelSmall, color = Pts.muted, maxLines = 1)
             }
-            if (failed) PtsIconAction(PtsIcons.Retry, "Retry", onRetry, tint = Pts.accent, size = 34.dp)
-            PtsIconAction(PtsIcons.Edit, "Edit link", onEdit, tint = Pts.muted, size = 34.dp)
             PtsIconAction(PtsIcons.Close, "Remove", onDelete, tint = Pts.danger, size = 34.dp)
         }
         PtsProgressBar(if (done) 1f else progress, tint = when { failed -> Pts.danger; done -> Pts.ok; stage == "downloading" -> Pts.spark; else -> Pts.accent })
@@ -743,7 +744,7 @@ private fun QueueJobRow(job: JSONObject, onRetry: () -> Unit, onEdit: () -> Unit
             Text(
                 " · " + listOfNotNull(
                     job.optString("message").takeIf { it.isNotBlank() },
-                    job.optString("error").takeIf { it.isNotBlank() && !failed },
+                    job.optString("error").takeIf { it.isNotBlank() },
                     if (progress > 0) "${(progress * 100).toInt()}%" else null
                 ).joinToString(" · "),
                 style = MaterialTheme.typography.labelSmall, color = Pts.muted, maxLines = 1, overflow = TextOverflow.Ellipsis

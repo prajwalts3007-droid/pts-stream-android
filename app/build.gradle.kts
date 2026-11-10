@@ -11,6 +11,7 @@ android {
         applicationId = "online.ptsmovies.stream"
         minSdk = 26
         targetSdk = 35
+        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         versionCode = (providers.gradleProperty("ptsVersionCode").orNull ?: "1").toInt()
         versionName = "1.0.${versionCode}"
         buildConfigField("String", "RELEASES_API", "\"https://api.github.com/repos/sundar211954-debug/pts-stream-android/releases/latest\"")
@@ -55,4 +56,10 @@ dependencies {
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
     implementation("io.coil-kt:coil-compose:2.7.0")
     debugImplementation("androidx.compose.ui:ui-tooling")
+    debugImplementation("androidx.compose.ui:ui-test-manifest")
+    androidTestImplementation(composeBom)
+    androidTestImplementation("androidx.compose.ui:ui-test-junit4")
+    androidTestImplementation("androidx.test.ext:junit:1.2.1")
+    androidTestImplementation("androidx.test:runner:1.6.2")
+    androidTestImplementation("com.squareup.okhttp3:mockwebserver:4.12.0")
 }
