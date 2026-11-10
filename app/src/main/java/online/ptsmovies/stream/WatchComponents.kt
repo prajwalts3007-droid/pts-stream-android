@@ -98,26 +98,13 @@ fun SeasonEpisodes(
     val seasons = remember(title) { title.episodes.map { it.season }.distinct().sorted() }
     var season by rememberSaveable(title.id) { mutableIntStateOf(active?.season
         ?: title.episodes.firstOrNull { it.id == resume?.episodeId }?.season ?: seasons.firstOrNull() ?: 1) }
-    var picker by remember { mutableStateOf(false) }
     LaunchedEffect(active?.id) { active?.let { season = it.season } }
-    if (picker) Dialog(onDismissRequest = { picker = false }) {
-        PtsCard(Modifier.fillMaxWidth().heightIn(max = 480.dp).verticalScroll(rememberScrollState())) {
-            Text("Choose season", style = MaterialTheme.typography.titleLarge, color = Pts.text)
-            seasons.forEach { s ->
-                PtsSecondaryButton("Season $s", Modifier.fillMaxWidth(), icon = if (s == season) PtsIcons.Check else null) {
-                    season = s; picker = false
-                }
-            }
-        }
-    }
+    LaunchedEffect(seasons) { if (season !in seasons) season = seasons.firstOrNull() ?: 1 }
     val episodes = title.episodes.filter { it.season == season }.sortedBy { it.episode }
     Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text("Episodes", Modifier.weight(1f), style = MaterialTheme.typography.titleMedium, color = Pts.text)
-            TextButton({ picker = true }, Modifier.testTag("season-selector")) {
-                Text("Season $season", style = MaterialTheme.typography.labelLarge)
-                Icon(PtsIcons.ChevronDown, null, Modifier.padding(start = 6.dp).size(18.dp))
-            }
+            SeasonDropdown(seasons, season, { season = it })
         }
         Text("${episodes.size} episodes", style = MaterialTheme.typography.bodySmall, color = Pts.muted)
         if (episodes.isEmpty()) PtsEmpty("No episodes available", icon = PtsIcons.Series)
@@ -129,6 +116,22 @@ fun SeasonEpisodes(
                     downloading, { onPlay(ep) }, { onDownload(ep) })
                 if (ep.description.isNotBlank()) ShortSynopsis(ep.description, Modifier.padding(horizontal = 12.dp, vertical = 6.dp))
             }
+        }
+    }
+}
+
+@Composable
+fun SeasonDropdown(seasons: List<Int>, selected: Int, onSelect: (Int) -> Unit, tag: String = "season-selector") {
+    var expanded by remember { mutableStateOf(false) }
+    Box {
+        OutlinedButton({ expanded = true }, Modifier.heightIn(min = 48.dp).testTag(tag), enabled = seasons.isNotEmpty()) {
+            Text("Season $selected", maxLines = 1)
+            Icon(PtsIcons.ChevronDown, null, Modifier.padding(start = 8.dp).size(20.dp))
+        }
+        DropdownMenu(expanded, { expanded = false }, Modifier.heightIn(max = 280.dp)) {
+            seasons.forEach { season -> DropdownMenuItem(text = { Text("Season $season") },
+                leadingIcon = { if (season == selected) Icon(PtsIcons.Check, "Selected season") },
+                onClick = { onSelect(season); expanded = false }) }
         }
     }
 }

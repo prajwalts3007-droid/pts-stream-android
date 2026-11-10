@@ -90,8 +90,9 @@ class MediaRouting internal constructor(private val endpointOverride: (() -> Lan
     override fun intercept(chain: Interceptor.Chain): Response {
         var request = chain.request()
         repeat(10) {
-            val response = tryLocal(request, chain.call()) ?: chain.proceed(request)
-            if (response.code !in listOf(301, 302, 303, 307, 308)) return response
+            val local = tryLocal(request, chain.call())
+            val response = local ?: chain.proceed(request)
+            if (response.code !in listOf(301, 302, 303, 307, 308)) return trackMediaResponse(response, request, local != null)
             val target = response.header("Location")?.let { request.url.resolve(it) } ?: return response
             if (request.url.isHttps && !target.isHttps) { response.close(); throw java.io.IOException("Insecure media redirect refused") }
             if (target.host != request.url.host && request.method !in listOf("GET", "HEAD")) { response.close(); throw java.io.IOException("Cross-host credential redirect refused") }

@@ -66,4 +66,8 @@ object PtsIcons {
     val Film by lazy { stroke("film", "M4 4h16v16H4z M8 4v16 M16 4v16 M4 9h4 M4 15h4 M16 9h4 M16 15h4") }
     val Tv by lazy { stroke("tv", "M3 5h18v12H3z M8 21h8 M10 21v-4 M14 21v-4") }
     val ChevronDown by lazy { stroke("chevrondown", "M6 9l6 6 6-6") }
+    val Volume by lazy { stroke("volume", "M3 9h4l5-4v14l-5-4H3z M16 8c3 2 3 6 0 8 M19 5c5 4 5 10 0 14") }
+    val Muted by lazy { stroke("muted", "M3 9h4l5-4v14l-5-4H3z M16 9l6 6 M22 9l-6 6") }
+    val Previous by lazy { stroke("previous", "M5 5v14 M19 5L8 12l11 7z") }
+    val Next by lazy { stroke("next", "M19 5v14 M5 5l11 7-11 7z") }
 }

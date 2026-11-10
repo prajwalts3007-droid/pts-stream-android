@@ -210,14 +210,17 @@ class MainActivity : ComponentActivity() {
         startAccountSync()
         setContent {
             PtsTheme(device.theme) {
-                val bar = Pts.bg
-                val light = MaterialTheme.colorScheme.background.luminance() > .5f
+                val bar = if (playing) Color.Black else Pts.bg
+                val light = !playing && MaterialTheme.colorScheme.background.luminance() > .5f
                 SideEffect {
                     window.statusBarColor = android.graphics.Color.rgb((bar.red * 255).toInt(), (bar.green * 255).toInt(), (bar.blue * 255).toInt())
                     window.navigationBarColor = window.statusBarColor
+                    if (Build.VERSION.SDK_INT >= 28) window.attributes = window.attributes.apply {
+                        layoutInDisplayCutoutMode = if (playing) android.view.WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES else android.view.WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_DEFAULT
+                    }
                     WindowCompat.getInsetsController(window, window.decorView).apply { isAppearanceLightStatusBars = light; isAppearanceLightNavigationBars = light }
                 }
-                PtsBackground(Modifier.windowInsetsPadding(WindowInsets.safeDrawing)) {
+                PtsBackground(if (playing) Modifier else Modifier.windowInsetsPadding(WindowInsets.safeDrawing)) {
                     episodeDownloadTitle?.let { title ->
                         EpisodeDownloadDialog(title, savedVideos.map { it.key }.toSet(), journal()?.completed().orEmpty(),
                             onStart = { episodes -> episodeDownloadTitle = null; downloads?.enqueueSeason(title, episodes); toast("Downloads queued", true) },
@@ -730,7 +733,7 @@ class MainActivity : ComponentActivity() {
                             scope.launch { try { api.json("/queue/${java.net.URLEncoder.encode(id, "UTF-8")}", "DELETE"); loadQueue() } catch (e: Exception) { toast(e.message ?: "Delete failed") } }
                         }) { stage, ids -> cancelStage(stage, ids) }
                         "Download" -> SearchScreen(searchQuery, { search(it) }, searchResults, searchLoading)
-                        else -> NativeAdminSettings(user, api, { openUpdates() }, { signOut() })
+                        else -> NativeAdminSettings(user, api, { openUpdates() }, { signOut() }, playbackPrefs, { key, value -> playerPreference(key, value) })
                     }
                     mode == "Files" && admin() -> if (filesTab == "Transfers") {
                         LaunchedEffect(Unit) { lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) { while (true) { loadOps(); loadRelay(); delay(4000) } } }
@@ -848,6 +851,13 @@ class MainActivity : ComponentActivity() {
         var showTracks by remember { mutableStateOf(false) }
         var showEpisodes by remember { mutableStateOf(false) }
         var showSettings by remember { mutableStateOf(false) }
+        var optionsPage by remember { mutableStateOf("") }
+        var appearance by remember { mutableStateOf(loadPlayerAppearance(context)) }
+        val timing = remember { PlaybackTiming().apply { subtitlePosition = appearance.subtitlePosition } }
+        var timingRevision by remember { mutableIntStateOf(0) }
+        val telemetry = remember { MediaTelemetry().apply { if (initialSaved != null) accepted(MediaRoute.OFFLINE) } }
+        var traffic by remember { mutableStateOf(telemetry.snapshot()) }
+        var buffered by remember { mutableLongStateOf(0) }
         var speed by remember { mutableFloatStateOf(playbackPrefs.optDouble("speed", 1.0).toFloat().coerceIn(.5f, 2f)) }
         var fill by remember { mutableStateOf(getSharedPreferences("playback_local", MODE_PRIVATE).getString("fit_mode", "fit") == "fill") }
         var zoom by remember { mutableFloatStateOf(if (playbackPrefs.optString("zoom_mode") == "remember") playbackPrefs.optDouble("zoom", 1.0).toFloat().coerceIn(.5f, 3f) else 1f) }
@@ -870,8 +880,13 @@ class MainActivity : ComponentActivity() {
         var nextCountdown by remember { mutableIntStateOf(5) }
         var autoplay by remember { mutableStateOf(playbackPrefs.optBoolean("autoplay", true)) }
         val downloaded = savedVideos.any { it.key == "${title.id}_${ep?.id ?: 0L}" }
-        val nextEpisode = remember(title, ep) { title.episodes.sortedWith(compareBy({ it.season }, { it.episode }))
-            .firstOrNull { ep != null && (it.season > ep.season || (it.season == ep.season && it.episode > ep.episode)) } }
+        val nextEpisode = remember(title, ep, appearance.nextDownloadedOnly, savedVideos) {
+            nextEpisode(title, ep, savedVideos.map { it.key }.toSet(), appearance.nextDownloadedOnly)
+        }
+        val previousEpisode = remember(title, ep, appearance.nextDownloadedOnly, savedVideos) { title.episodes.sortedWith(compareBy({ it.season }, { it.episode })).lastOrNull {
+            ep != null && (it.season < ep.season || (it.season == ep.season && it.episode < ep.episode)) &&
+                (!appearance.nextDownloadedOnly || "${title.id}_${it.id}" in savedVideos.map { v -> v.key })
+        } }
         fun touchControls() { controls = true; interaction++ }
         fun leavePlayer() { if (playerFullscreen) fullscreen(false) else onBack() }
         fun selectEpisode(next: Episode) { clearedProgress.remove(title.id); journal()?.begin(title.id); episode = next; showEpisodes = false }
@@ -880,14 +895,22 @@ class MainActivity : ComponentActivity() {
                 else resumePosition(library?.progress?.get(title.id), ep?.id ?: 0L, ep?.duration?.toLong() ?: 0L) * 1000)
         }
         val startPlaying = remember { restoredAutoplay.also { restoredAutoplay = true } }
+        var desiredPlay by remember { mutableStateOf(startPlaying) }
         val hevcAvailable = remember { MediaCodecList(MediaCodecList.REGULAR_CODECS).codecInfos.any { info ->
             !info.isEncoder && info.supportedTypes.any { it.equals("video/hevc", true) }
         } }
         val source = saved?.file?.toURI()?.toString() ?: api.streamUrl(title, ep, fallback)
-        val exo = remember(source) {
-            ExoPlayer.Builder(context).setMediaSourceFactory(
+        val exo = remember {
+            val dataSource = DefaultDataSource.Factory(context, OkHttpDataSource.Factory(TrackedCallFactory(api.http, telemetry)).setUserAgent("PTS-Library-Android"))
+            if (saved != null) dataSource.setTransferListener(object : androidx.media3.datasource.TransferListener {
+                override fun onTransferInitializing(source: androidx.media3.datasource.DataSource, dataSpec: androidx.media3.datasource.DataSpec, isNetwork: Boolean) = Unit
+                override fun onTransferStart(source: androidx.media3.datasource.DataSource, dataSpec: androidx.media3.datasource.DataSpec, isNetwork: Boolean) = Unit
+                override fun onBytesTransferred(source: androidx.media3.datasource.DataSource, dataSpec: androidx.media3.datasource.DataSpec, isNetwork: Boolean, bytesTransferred: Int) { if (!isNetwork) telemetry.read(MediaRoute.OFFLINE, bytesTransferred.toLong()) }
+                override fun onTransferEnd(source: androidx.media3.datasource.DataSource, dataSpec: androidx.media3.datasource.DataSpec, isNetwork: Boolean) = Unit
+            })
+            ExoPlayer.Builder(context, ptsRenderers(context, timing)).setMediaSourceFactory(
                 androidx.media3.exoplayer.source.DefaultMediaSourceFactory(
-                    DefaultDataSource.Factory(context, OkHttpDataSource.Factory(api.http).setUserAgent("PTS-Library-Android"))
+                    dataSource
                 )).build().apply {
                 setMediaItem(MediaItem.fromUri(source))
                 setAudioAttributes(androidx.media3.common.AudioAttributes.Builder()
@@ -930,7 +953,8 @@ class MainActivity : ComponentActivity() {
                         if (sleepAtEnd) { exo.pause(); cancelNext = true; sleepAtEnd = false }
                     }
                 }
-                override fun onIsPlayingChanged(isPlaying: Boolean) { playingNow = isPlaying }
+                override fun onIsPlayingChanged(isPlaying: Boolean) { playingNow = isPlaying; if (!isPlaying) controls = true }
+                override fun onPlayWhenReadyChanged(playWhenReady: Boolean, reason: Int) { desiredPlay = playWhenReady }
             }
             exo.addListener(listener)
             firstFrame = false
@@ -950,6 +974,29 @@ class MainActivity : ComponentActivity() {
                 if (player === exo) player = null
             }
         }
+        LaunchedEffect(source) {
+            if (exo.currentMediaItem?.localConfiguration?.uri?.toString() != source) {
+                val keepPlaying = desiredPlay
+                exo.setMediaItem(MediaItem.fromUri(source), resumeAt.coerceAtLeast(0)); firstFrame = false; error = ""
+                exo.prepare(); exo.playWhenReady = keepPlaying
+            }
+        }
+        DisposableEffect(exo) {
+            val manager = getSystemService(android.net.ConnectivityManager::class.java)
+            val handler = android.os.Handler(android.os.Looper.getMainLooper())
+            val callback = object : android.net.ConnectivityManager.NetworkCallback() {
+                override fun onAvailable(network: android.net.Network) {
+                    handler.post {
+                        if (player === exo && error.isNotBlank() && playbackOwner == account?.optLong("id") && lifecycle.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.STARTED)) {
+                            val keepPlaying = desiredPlay; val keepPosition = exo.currentPosition
+                            error = ""; exo.seekTo(keepPosition); exo.prepare(); exo.playWhenReady = keepPlaying; touchControls()
+                        }
+                    }
+                }
+            }
+            manager.registerDefaultNetworkCallback(callback)
+            onDispose { runCatching { manager.unregisterNetworkCallback(callback) }; handler.removeCallbacksAndMessages(null) }
+        }
         LaunchedEffect(exo, sleepDeadline) {
             if (sleepDeadline > 0) {
                 delay((sleepDeadline - System.currentTimeMillis()).coerceAtLeast(0))
@@ -960,6 +1007,8 @@ class MainActivity : ComponentActivity() {
             while (true) {
                 if (!exo.isPlaying && exo.playbackState == Player.STATE_IDLE) delay(200) else delay(500)
                 duration = exo.duration.coerceAtLeast(0)
+                buffered = exo.bufferedPosition.coerceAtLeast(0)
+                traffic = telemetry.snapshot()
                 buffering = exo.playbackState == Player.STATE_BUFFERING || exo.playbackState == Player.STATE_IDLE
                 if (seekPreview == null) position = exo.currentPosition.coerceAtLeast(0)
                 playingNow = exo.isPlaying
@@ -971,8 +1020,10 @@ class MainActivity : ComponentActivity() {
                 if (exo.isPlaying && title.id !in clearedProgress) recordProgress(title.id, ep?.id, exo.currentPosition / 1000, exo.duration.coerceAtLeast(0) / 1000)
             }
         }
-        LaunchedEffect(controls, playingNow, interaction, seekPreview != null, showTracks, showEpisodes, showSettings) {
-            if (controls && playingNow && seekPreview == null && !showTracks && !showEpisodes && !showSettings) { delay(4500); controls = false }
+        LaunchedEffect(controls, playingNow, interaction, seekPreview != null, showTracks, showEpisodes, showSettings, showSleep, appearance.controlsSeconds, buffering) {
+            if (controls && controlsShouldHide(playingNow, buffering, seekPreview != null, showTracks || showEpisodes || showSettings || showSleep, appearance.controlsSeconds)) {
+                delay(appearance.controlsSeconds * 1000L); controls = false
+            }
         }
         LaunchedEffect(ended, autoplay, cancelNext) {
             if (ended && autoplay && !cancelNext && nextEpisode != null) {
@@ -980,7 +1031,7 @@ class MainActivity : ComponentActivity() {
                 selectEpisode(nextEpisode)
             }
         }
-        BoxWithConstraints(Modifier.fillMaxSize().background(Pts.bg)) {
+        BoxWithConstraints(Modifier.fillMaxSize().background(Color.Black)) {
           val landscape = maxWidth > maxHeight || inPip || playerFullscreen
           val portraitHeight = (maxWidth * .58f).coerceIn(300.dp, 560.dp).coerceAtMost(maxHeight * .65f)
           DisposableEffect(landscape) {
@@ -1005,7 +1056,15 @@ class MainActivity : ComponentActivity() {
                      if (view.player !== exo) view.player = exo
                      view.keepScreenOn = playingNow || buffering
                       view.resizeMode = if (fill) AspectRatioFrameLayout.RESIZE_MODE_ZOOM else AspectRatioFrameLayout.RESIZE_MODE_FIT
-                      view.subtitleView?.setFractionalTextSize(.0533f * getSharedPreferences("playback_local", MODE_PRIVATE).getFloat("subtitle_size", 1f))
+                       view.subtitleView?.apply {
+                           setFractionalTextSize(.0533f * appearance.subtitleSize)
+                           setApplyEmbeddedStyles(false)
+                           setStyle(androidx.media3.ui.CaptionStyleCompat(
+                               when (appearance.subtitleColor) { "yellow" -> android.graphics.Color.YELLOW; "cyan" -> android.graphics.Color.CYAN; else -> android.graphics.Color.WHITE },
+                               android.graphics.Color.TRANSPARENT, android.graphics.Color.TRANSPARENT,
+                               if (appearance.outline) androidx.media3.ui.CaptionStyleCompat.EDGE_TYPE_OUTLINE else androidx.media3.ui.CaptionStyleCompat.EDGE_TYPE_NONE,
+                               android.graphics.Color.BLACK, null))
+                       }
                      if (view.tag !== exo) {
                          view.tag = exo
                          // Decode only after the native surface has dimensions. A new source
@@ -1014,60 +1073,28 @@ class MainActivity : ComponentActivity() {
                      }
                   }, modifier = Modifier.fillMaxSize().graphicsLayer { scaleX = zoom; scaleY = zoom }) }
                   if (!inPip && !locked) PlayerGestures(this@MainActivity, exo.currentPosition, duration,
-                     onTap = { controls = !controls; interaction++ },
+                      onTap = { controls = !playingNow || !controls; interaction++ },
                      onSeekPreview = { seekPreview = it; touchControls() },
                      onSeek = { exo.seekTo(it); touchControls() },
                       onFeedback = { gestureFeedback = it; touchControls() }, zoom = zoom,
                       onZoom = { value -> zoom = value; gestureFeedback = "Zoom ${"%.2f".format(Locale.US, value)}×"; touchControls() },
                       onZoomEnd = { if (abs(zoom - 1f) <= .04f) zoom = 1f; if (playbackPrefs.optString("zoom_mode") == "remember") playerPreference("zoom", zoom) })
                  androidx.compose.animation.AnimatedVisibility(visible = controls && !inPip && !locked, enter = fadeIn(), exit = fadeOut(), modifier = Modifier.fillMaxSize()) {
-                     Box(Modifier.fillMaxSize().background(Brush.verticalGradient(listOf(Color(0xCC040514), Color(0x11040514), Color(0xE6040514))))) {
-                         Row(Modifier.align(Alignment.TopCenter).fillMaxWidth().padding(horizontal = 4.dp), verticalAlignment = Alignment.CenterVertically) {
-                             PtsIconAction(PtsIcons.Back, "Back", { leavePlayer() }, tint = Color.White)
-                             Text(ep?.let { "S${it.season}E${it.episode} · ${title.title}" } ?: title.title, Modifier.weight(1f), style = MaterialTheme.typography.labelMedium, color = Color.White, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                              if (ep != null) PtsIconAction(PtsIcons.Series, "Choose episode", { showEpisodes = true; touchControls() }, tint = Color.White)
-                              PtsIconAction(PtsIcons.Pip, "Picture in picture", {
-                                  try { enterPictureInPictureMode(PictureInPictureParams.Builder().setAspectRatio(Rational(16, 9)).build()) } catch (_: Exception) { toast("Picture in picture unavailable") }
-                              }, tint = Color.White)
-                             PtsIconAction(PtsIcons.More, "Player options", { showSettings = true; touchControls() }, tint = Color.White)
-                         }
-                         Row(Modifier.align(Alignment.Center), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(24.dp)) {
-                            PlayerSeekButton(false) { exo.seekTo((exo.currentPosition - 10000).coerceAtLeast(0)); touchControls() }
-                             Box(Modifier.size(48.dp).background(Color(0xFFFAFAFF), androidx.compose.foundation.shape.CircleShape)
-                                .clickable { if (exo.isPlaying) exo.pause() else { if (ended) exo.seekTo(0); exo.play() }; touchControls() }, contentAlignment = Alignment.Center) {
-                                Icon(if (playingNow) PtsIcons.Pause else PtsIcons.Play, if (playingNow) "Pause playback" else "Play playback", Modifier.size(30.dp), tint = Pts.onAccent)
-                            }
-                            PlayerSeekButton(true) { exo.seekTo((exo.currentPosition + 10000).coerceAtMost(duration.coerceAtLeast(0))); touchControls() }
-                        }
-                         Column(Modifier.align(Alignment.BottomCenter).fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp), verticalArrangement = Arrangement.spacedBy(0.dp)) {
-                            val shown = seekPreview ?: position
-                            Slider(
-                                value = shown.toFloat().coerceIn(0f, duration.coerceAtLeast(1).toFloat()),
-                                onValueChange = { seekPreview = it.toLong(); touchControls() },
-                                onValueChangeFinished = { seekPreview?.let { exo.seekTo(it) }; seekPreview = null; touchControls() },
-                                valueRange = 0f..duration.coerceAtLeast(1).toFloat(),
-                                colors = SliderDefaults.colors(thumbColor = Pts.accent, activeTrackColor = Pts.accent, inactiveTrackColor = Color.White.copy(alpha = .35f)),
-                                thumb = { Box(Modifier.size(14.dp).background(Pts.accent, androidx.compose.foundation.shape.CircleShape)) },
-                                track = {
-                                    val fraction = (shown.toFloat() / duration.coerceAtLeast(1)).coerceIn(0f, 1f)
-                                    Box(Modifier.fillMaxWidth().height(4.dp).clip(androidx.compose.foundation.shape.RoundedCornerShape(99.dp)).background(Color.White.copy(alpha = .28f))) {
-                                        Box(Modifier.fillMaxHeight().fillMaxWidth(fraction).background(Pts.accent))
-                                    }
-                                },
-                                modifier = Modifier.fillMaxWidth().height(28.dp)
-                            )
-                             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                                 Text("${clock(shown)} / ${clock(duration)}", style = MaterialTheme.typography.labelSmall, color = Color(0xFFE7E8FF), modifier = Modifier.weight(1f))
-                                 PlayerTextControl("${if (speed % 1f == 0f) speed.toInt().toString() else speed}×", "Playback settings") { showSettings = true; touchControls() }
-                                  PlayerTextControl(if (muted) "Unmute" else "Mute", "Mute audio") { muted = !muted; exo.volume = if (muted) 0f else 1f; touchControls() }
-                                  PtsIconAction(PtsIcons.Subtitles, "Audio and subtitles", { showTracks = true; touchControls() }, tint = Color.White)
-                                 PtsIconAction(PtsIcons.Fit, if (playerFullscreen) "Exit fullscreen" else "Fullscreen", { fullscreen(!playerFullscreen); touchControls() }, tint = Color.White)
-                 }
-                         }
-                     }
+                      Box(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.safeDrawing)) {
+                          CinemaControls(ep?.let { "${title.title} · S${it.season}E${it.episode}" } ?: title.title,
+                              playingNow, seekPreview ?: position, duration, buffered, playerFullscreen, muted, traffic.route.label,
+                              ep != null, previousEpisode != null, nextEpisode != null,
+                              onBack = { leavePlayer() }, onToggle = { if (exo.isPlaying) exo.pause() else { if (ended) exo.seekTo(0); exo.play() }; touchControls() },
+                              onSeek = { exo.seekTo(it); touchControls() }, onPreview = { seekPreview = it; touchControls() },
+                              onOptions = { optionsPage = ""; showSettings = true; touchControls() }, onTracks = { showTracks = true; touchControls() },
+                              onEpisodes = { showEpisodes = true; touchControls() }, onPip = { try { enterPictureInPictureMode(PictureInPictureParams.Builder().setAspectRatio(Rational(16, 9)).build()) } catch (_: Exception) { toast("Picture in picture unavailable") } },
+                              onLock = { locked = true }, onMute = { muted = !muted; exo.volume = if (muted) 0f else 1f; touchControls() },
+                              onFullscreen = { fullscreen(!playerFullscreen); touchControls() }, onConnection = { optionsPage = "Connection"; showSettings = true; touchControls() },
+                              onPrevious = { previousEpisode?.let { selectEpisode(it) } }, onNext = { nextEpisode?.let { selectEpisode(it) } })
+                      }
                  }
                   if (locked && !inPip) Box(Modifier.align(Alignment.TopEnd).padding(12.dp).background(Color.Black.copy(alpha = .7f), androidx.compose.foundation.shape.CircleShape)) {
-                      PtsIconAction(PtsIcons.Lock, "Unlock player", { locked = false; touchControls() }, tint = Color.White, size = 48.dp)
+                       CinemaIcon(PtsIcons.Lock, "Unlock player", onClick = { locked = false; touchControls() })
                   }
                   if (gestureFeedback.isNotBlank() && !inPip) Text(gestureFeedback,
                      Modifier.align(Alignment.Center).background(Color.Black.copy(alpha = .9f), RowShape).padding(horizontal = 16.dp, vertical = 10.dp).testTag("gesture-feedback"),
@@ -1077,7 +1104,7 @@ class MainActivity : ComponentActivity() {
                     Text("Playback interrupted", style = MaterialTheme.typography.titleMedium, color = Color.White)
                     Text(error, style = MaterialTheme.typography.bodySmall, color = Pts.muted)
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        PtsPrimaryButton("Retry", Modifier.weight(1f)) { error = ""; exo.prepare(); exo.play(); touchControls() }
+                        PtsPrimaryButton("Retry", Modifier.weight(1f)) { val keepPlaying = desiredPlay; val keepPosition = exo.currentPosition; error = ""; exo.seekTo(keepPosition); exo.prepare(); exo.playWhenReady = keepPlaying; touchControls() }
                         PtsSecondaryButton("Audio / CC", Modifier.weight(1f)) { showTracks = true }
                     }
                 }
@@ -1087,7 +1114,7 @@ class MainActivity : ComponentActivity() {
              } }
              if (!landscape) {
              if (!hevcAvailable) PtsErrorBanner("This device may not support HEVC playback", modifier = Modifier.padding(12.dp))
-              Column(Modifier.weight(1f).verticalScroll(rememberScrollState()).padding(16.dp), verticalArrangement = Arrangement.spacedBy(9.dp)) {
+              Column(Modifier.weight(1f).background(Pts.bg).windowInsetsPadding(WindowInsets.navigationBars).verticalScroll(rememberScrollState()).padding(16.dp), verticalArrangement = Arrangement.spacedBy(9.dp)) {
                  Text(title.title, style = MaterialTheme.typography.titleLarge, color = Pts.text)
                 Text(
                     listOfNotNull(
@@ -1132,23 +1159,20 @@ class MainActivity : ComponentActivity() {
                 PtsSecondaryButton("Close", Modifier.fillMaxWidth()) { showEpisodes = false }
             }
         }
-        if (showSettings) androidx.compose.ui.window.Dialog(onDismissRequest = { showSettings = false }) {
-            PtsCard(Modifier.fillMaxWidth().heightIn(max = 560.dp).verticalScroll(rememberScrollState())) {
-                Text("Playback settings", style = MaterialTheme.typography.titleLarge, color = Pts.text)
-                PtsSecondaryButton("Lock screen", Modifier.fillMaxWidth(), icon = PtsIcons.Lock) { locked = true; showSettings = false }
-                PtsSecondaryButton("Sleep timer", Modifier.fillMaxWidth(), icon = PtsIcons.Clock) { showSettings = false; showSleep = true }
-                PtsSecondaryButton(if (fill) "Fit video" else "Fill video", Modifier.fillMaxWidth()) { fill = !fill }
-                PtsSecondaryButton("Reset zoom", Modifier.fillMaxWidth()) { zoom = 1f; if (playbackPrefs.optString("zoom_mode") == "remember") playerPreference("zoom", 1) }
-                PtsSecondaryButton(if (autoplay) "Autoplay next: On" else "Autoplay next: Off", Modifier.fillMaxWidth()) {
-                    autoplay = !autoplay; playerPreference("autoplay", autoplay)
-                }
-                listOf(.5f, .75f, 1f, 1.25f, 1.5f, 1.75f, 2f).forEach { rate ->
-                    PtsSecondaryButton("${rate}×", Modifier.fillMaxWidth(), icon = if (rate == speed) PtsIcons.Check else null) {
-                        speed = rate; exo.setPlaybackSpeed(rate); playerPreference("speed", rate); showSettings = false; touchControls()
-                    }
-                }
-                PtsSecondaryButton("Close", Modifier.fillMaxWidth()) { showSettings = false }
-            }
+        if (showSettings) PtsTheme("dark") {
+            PlayerOptions(appearance, { value ->
+                val reposition = appearance.subtitlePosition != value.subtitlePosition
+                appearance = value; savePlayerAppearance(context, value); timing.subtitlePosition = value.subtitlePosition
+                if (reposition) exo.seekTo(exo.currentPosition)
+                touchControls()
+            }, speed, { rate -> speed = rate; exo.setPlaybackSpeed(rate); playerPreference("speed", rate); touchControls() },
+                timing, { audio, subtitle -> timing.audioDelayMs = audio; timing.subtitleDelayMs = subtitle; timingRevision++; exo.seekTo(exo.currentPosition); touchControls() },
+                traffic, (buffered - position).coerceAtLeast(0), fill, autoplay,
+                onFit = { fill = !fill; getSharedPreferences("playback_local", MODE_PRIVATE).edit().putString("fit_mode", if (fill) "fill" else "fit").apply() },
+                onZoomReset = { zoom = 1f; if (playbackPrefs.optString("zoom_mode") == "remember") playerPreference("zoom", 1) },
+                onAutoplay = { autoplay = !autoplay; playerPreference("autoplay", autoplay) },
+                onTracks = { showSettings = false; showTracks = true }, onSleep = { showSettings = false; showSleep = true },
+                onLock = { locked = true; showSettings = false }, onClose = { showSettings = false; touchControls() }, initialPage = optionsPage, timingRevision = timingRevision)
         }
         if (showTracks) {
             val audioGroups = exo.currentTracks.groups.filter { it.type == androidx.media3.common.C.TRACK_TYPE_AUDIO }
@@ -1166,6 +1190,7 @@ class MainActivity : ComponentActivity() {
                             PtsSecondaryButton(listOfNotNull(label, format.sampleMimeType?.substringAfter('/'), format.channelCount.takeIf { it > 0 }?.let { "${it}ch" }).joinToString(" · "), Modifier.fillMaxWidth(),
                                 icon = if (group.isTrackSelected(index)) PtsIcons.Check else null, enabled = group.isTrackSupported(index)) {
                                 exo.trackSelectionParameters = exo.trackSelectionParameters.buildUpon()
+                                    .setPreferredAudioLanguage(format.language)
                                     .setOverrideForType(androidx.media3.common.TrackSelectionOverride(group.mediaTrackGroup, index)).build()
                                 format.language?.let { playerPreference("audio_lang", it) }
                                 showTracks = false
@@ -1185,6 +1210,7 @@ class MainActivity : ComponentActivity() {
                             val label = format.label?.takeIf { it.isNotBlank() } ?: format.language?.let { Locale.forLanguageTag(it).displayLanguage } ?: "Subtitle ${index + 1}"
                             PtsSecondaryButton(label.replaceFirstChar { it.uppercase() }, Modifier.fillMaxWidth(), icon = if (group.isTrackSelected(index)) PtsIcons.Check else null, enabled = group.isTrackSupported(index)) {
                                 exo.trackSelectionParameters = exo.trackSelectionParameters.buildUpon()
+                                    .setPreferredTextLanguage(format.language)
                                     .setTrackTypeDisabled(androidx.media3.common.C.TRACK_TYPE_TEXT, false)
                                     .setOverrideForType(androidx.media3.common.TrackSelectionOverride(group.mediaTrackGroup, index)).build()
                                 format.language?.let { playerPreference("subtitle_lang", it) }

@@ -128,6 +128,7 @@ private fun TransferRow(task: DownloadTask, onPause: (String) -> Unit, onResume:
         PtsProgressBar(task.progress.percent / 100f, height = 4.dp)
         Text("${task.progress.percent}% · ${formatBytes(task.bytes)} / ${if (task.total > 0) formatBytes(task.total) else "…"}", style = MaterialTheme.typography.bodySmall, color = Pts.muted)
         if (task.status == "downloading") Text("${formatBytes(task.speed)}/s · ETA ${task.progress.eta?.let { if (it == 0L) "<1s" else formatDuration(it) } ?: "…"}", color = Pts.accent, style = MaterialTheme.typography.bodySmall)
+        if (task.status == "downloading" && task.route.isNotEmpty()) Text(task.route, style = MaterialTheme.typography.labelSmall, color = Pts.accent)
         if (task.error.isNotBlank()) Text(task.error, color = Pts.danger, style = MaterialTheme.typography.bodySmall)
         Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
             TextButton({ if (task.status in listOf("downloading", "queued", "waiting_wifi")) onPause(task.key) else onResume(task.key) }) { Text(if (task.status in listOf("downloading", "queued", "waiting_wifi")) "Pause" else "Resume") }

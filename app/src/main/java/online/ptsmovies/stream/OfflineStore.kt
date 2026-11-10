@@ -76,17 +76,19 @@ class OfflineStore(private val context: Context, private val api: PtsApi, ownerI
     suspend fun save(title: Title, episode: Episode?, resume: Boolean = false,
         onTransfer: (TransferProgress) -> Unit = {}, onCall: (Call?) -> Unit = {}, maxBytes: Long = Long.MAX_VALUE,
         admit: (Long, Long) -> Unit = { _, _ -> },
+        onRoute: (MediaRoute) -> Unit = {},
         onProgress: (Int) -> Unit): SavedVideo = withContext(Dispatchers.IO) {
         find(title, episode)?.let { return@withContext it }
         if (episode?.container == "hls" || (episode == null && title.container == "hls"))
             throw IOException("This title needs MP4 preparation on the Pi before offline saving; user access is not yet verified")
         val id = key(title, episode)
+        val telemetry = MediaTelemetry()
         val partial = File(root, "$id.part")
         val dest = File(root, "$id.mp4")
         val sourceInfo = File(root, "$id.source")
         suspend fun transfer(allowFallback: Boolean) {
             currentCoroutineContext().ensureActive()
-            val req = Request.Builder().url(api.streamUrl(title, episode, allowFallback))
+            val req = Request.Builder().url(api.streamUrl(title, episode, allowFallback)).tag(MediaTelemetry::class.java, telemetry)
             val info = if (resume) runCatching { JSONObject(sourceInfo.readText()) }.getOrNull() else null
             val validator = info?.optString("validator").orEmpty()
             val offset = if (validator.isNotBlank() && partial.isFile) partial.length() else 0L
@@ -130,6 +132,7 @@ class OfflineStore(private val context: Context, private val api: PtsApi, ownerI
                             val elapsed = SystemClock.elapsedRealtime() - started
                             if (elapsed - lastReport >= 250 || written == total) {
                                 onTransfer(TransferProgress(written, total, (written - start) * 1000 / elapsed.coerceAtLeast(1)))
+                                onRoute(telemetry.snapshot().route)
                                 lastReport = elapsed
                             }
                         }

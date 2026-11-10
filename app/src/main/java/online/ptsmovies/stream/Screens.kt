@@ -262,8 +262,9 @@ fun BrowseScreen(
         item(span = { GridItemSpan(maxLineSpan) }) {
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                 PtsSearchField(query, onQuery, "Search", Modifier.weight(1f))
-                PtsIconAction(PtsIcons.Grid, "Grid view", { view = "grid"; onViewChange(view) }, tint = if (view == "grid") Pts.accent else Pts.muted)
-                PtsIconAction(PtsIcons.List, "List view", { view = "list"; onViewChange(view) }, tint = if (view == "list") Pts.accent else Pts.muted)
+                PtsIconAction(if (view == "grid") PtsIcons.List else PtsIcons.Grid, if (view == "grid") "Switch to list view" else "Switch to grid view", {
+                    view = if (view == "grid") "list" else "grid"; onViewChange(view)
+                }, tint = Pts.accent)
             }
         }
         if (genres.isNotEmpty()) {
@@ -347,10 +348,6 @@ fun TitleScreen(
                             listOfNotNull(title.year.takeIf { it > 0 }?.toString(), if (title.kind == "series") "TV Show" else "Movie", formatDuration(title.episodes.firstOrNull()?.duration?.toLong() ?: 0)).joinToString(" · "),
                             style = MaterialTheme.typography.bodySmall, color = Pts.muted
                         )
-                        Row(horizontalArrangement = Arrangement.spacedBy(5.dp)) {
-                            if (title.codec.isNotBlank()) PtsPill(title.codec.uppercase())
-                            if (title.container.isNotBlank()) PtsPill(title.container.uppercase())
-                        }
                         Row(horizontalArrangement = Arrangement.spacedBy(5.dp)) {
                             title.genres.take(2).forEach { g -> PtsPill(g) }
                         }
@@ -560,12 +557,7 @@ fun DashboardScreen(
         }
         item {
             PtsCard(Modifier.fillMaxWidth()) {
-                PtsSegmented(listOf("vps" to "Server", "pi" to "Library"), target, onTarget)
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Box(Modifier.size(9.dp).background(if (online) Pts.ok else Pts.danger, CircleShape))
-                    Spacer(Modifier.weight(1f))
-                    Text(if (online) "Live" else "Offline", style = MaterialTheme.typography.labelSmall, color = if (online) Pts.ok else Pts.danger)
-                }
+                PtsSegmented(listOf("vps" to "VPS", "pi" to "Pi"), target, onTarget)
             }
         }
         if (host == null || !online) {
@@ -597,16 +589,6 @@ fun DashboardScreen(
                         "↓${formatBytes(host.optLong("net_rx_total_bytes"))}  ↑${formatBytes(host.optLong("net_tx_total_bytes"))}",
                         Modifier.weight(1f).fillMaxHeight()
                     )
-                }
-            }
-        }
-        item {
-            val active = queue.count { it.optString("stage") !in setOf("failed", "done") }
-            val failed = queue.count { it.optString("stage") == "failed" }
-            PtsCard(Modifier.fillMaxWidth(), onClick = onQueue) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text("Pipeline", style = MaterialTheme.typography.titleMedium, color = Pts.text, modifier = Modifier.weight(1f))
-                    Icon(PtsIcons.ChevronRight, null, Modifier.size(18.dp), tint = Pts.line2)
                 }
             }
         }
@@ -668,17 +650,10 @@ fun QueueScreen(
             }
         }
         item {
-            Column(verticalArrangement = Arrangement.spacedBy(7.dp)) {
-                stageOrder.chunked(4).forEach { row ->
-                    Row(horizontalArrangement = Arrangement.spacedBy(7.dp)) {
-                        row.forEach { s ->
-                            val count = if (s == "done") completed.size else jobs.count { it.optString("stage", "queued") == s }
-                            StageTile(stageLabel(s), count, stage == s, s, Modifier.weight(1f)) { onStage(s) }
-                        }
-                        repeat(4 - row.size) { Spacer(Modifier.weight(1f)) }
-                    }
-                }
-            }
+            val icons = listOf(PtsIcons.Clock, PtsIcons.Play, PtsIcons.Download, PtsIcons.Cpu, PtsIcons.Upload, PtsIcons.Transfers, PtsIcons.Info, PtsIcons.Check)
+            WebIconTabs(stageOrder.mapIndexed { index, s ->
+                WebTab(s, stageLabel(s), icons[index], if (s == "done") completed.size else jobs.count { it.optString("stage", "queued") == s })
+            }, stage, onStage, "queue-stage-row")
         }
         item {
             Row(verticalAlignment = Alignment.CenterVertically) {

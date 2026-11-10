@@ -20,7 +20,7 @@ import org.json.JSONObject
 import java.util.concurrent.ConcurrentHashMap
 
 data class DownloadTask(val title: Title, val episode: Episode?, val status: String = "queued",
-    val bytes: Long = 0, val total: Long = 0, val speed: Long = 0, val error: String = "") {
+    val bytes: Long = 0, val total: Long = 0, val speed: Long = 0, val error: String = "", val route: String = "") {
     val key get() = "${title.id}_${episode?.id ?: 0}"
     val label get() = episode?.let { "${title.title} · S${it.season}E${it.episode}" } ?: title.title
     val progress get() = TransferProgress(bytes, total, speed)
@@ -112,7 +112,7 @@ class DownloadRepository internal constructor(private val context: Context, priv
             update { s -> s.copy(tasks = s.tasks.map { if (it.status == "waiting_wifi") it.copy(status = "queued") else it }) }
             val available = (options.concurrent - jobs.size).coerceAtLeast(0)
             mutable.value.tasks.filter { it.status == "queued" && it.key !in jobs }.take(available).forEach { next ->
-                task(next.key) { it.copy(status = "downloading", error = "") }
+                task(next.key) { it.copy(status = "downloading", error = "", route = "") }
                 val worker = scope.launch(start = CoroutineStart.LAZY) {
                     try {
                         store.save(next.title, next.episode, resume = true, onCall = { call -> synchronized(lock) {
@@ -129,7 +129,7 @@ class DownloadRepository internal constructor(private val context: Context, priv
                             synchronized(lock) { reservations[next.key] = (p.total - p.bytes).coerceAtLeast(0) }
                             task(next.key) { it.copy(bytes = p.bytes, total = p.total, speed = if (it.status == "downloading") p.speed else 0) }
                             statusCallback?.invoke(mutable.value.tasks.firstOrNull { it.key == next.key })
-                        }) { }
+                        }, onRoute = { route -> task(next.key) { it.copy(route = route.label) } }) { }
                         val finished = store.find(next.title, next.episode) ?: error("Downloaded file is missing")
                         task(next.key) { it.copy(status = "complete", bytes = finished.bytes, total = finished.bytes, speed = 0) }; refresh()
                     } catch (e: CancellationException) {

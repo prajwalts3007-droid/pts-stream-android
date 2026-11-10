@@ -103,22 +103,21 @@ fun NativeFilesScreen(
         ) { if (input) PtsField(name, { name = it }, "Name", Modifier.fillMaxWidth()) }
     }
     LazyColumn(contentPadding = PaddingValues(start = 16.dp, end = 16.dp, bottom = 20.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-        item { PtsPage("Files") }
+        item { PtsPage("Browse") }
         item { PtsSegmented(listOf("vps" to "VPS", "pi" to "Raspberry Pi"), device, onDevice) }
         item {
-            PtsCard(Modifier.fillMaxWidth(), padding = 10.dp) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    PtsIconAction(PtsIcons.Up, "Up one folder", { onPath(path.substringBeforeLast('/', "")) })
+                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                    TextButton({ onPath(path.substringBeforeLast('/', "")) }) { Text("Up") }
                     Text("/$path", Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis, color = Pts.text, style = MaterialTheme.typography.bodySmall)
-                    PtsIconAction(PtsIcons.Refresh, "Refresh", onRefresh)
                 }
-                Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        }
+        item {
+                Row(Modifier.fillMaxWidth().testTag("files-toolbar").horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     PtsSecondaryButton("New folder", enabled = !busy) { request(command("mkdir")) }
                     PtsSecondaryButton("New file", enabled = !busy) { request(command("touch")) }
                     PtsSecondaryButton("Upload", enabled = !busy, onClick = onUpload)
                     PtsSecondaryButton(if (selecting) "Done" else "Select") { selecting = !selecting; selected = emptySet() }
                 }
-            }
         }
         if (clipboard != null) item {
             PtsCard(Modifier.fillMaxWidth(), padding = 12.dp) {
@@ -144,7 +143,7 @@ fun NativeFilesScreen(
         }
         if (status.isNotBlank()) item { Text(status, style = MaterialTheme.typography.bodySmall, color = Pts.accent) }
         if (loading || busy) item { LinearProgressIndicator(Modifier.fillMaxWidth(), color = Pts.accent, trackColor = Pts.soft) }
-        if (!loading && entries.isEmpty()) item { PtsEmpty("This folder is empty", "Use New folder, New file or Upload to add an item.", icon = PtsIcons.Browse) }
+        if (!loading && entries.isEmpty()) item { PtsEmpty("This folder is empty", icon = PtsIcons.Browse) }
         items(entries, key = { it.optString("name") }) { entry ->
             val filename = entry.optString("name")
             val isDir = entry.optBoolean("is_dir")

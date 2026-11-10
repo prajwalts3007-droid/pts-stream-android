@@ -64,7 +64,7 @@ fun PreferenceSwitch(label: String, checked: Boolean, onChange: (Boolean) -> Uni
 }
 
 @Composable
-fun PlaybackPreferencesScreen(prefs: org.json.JSONObject, onChange: (String, Any) -> Unit, onBack: () -> Unit) {
+fun PlaybackPreferencesScreen(prefs: org.json.JSONObject, onChange: (String, Any) -> Unit, onBack: () -> Unit, embedded: Boolean = false) {
     var audio by remember { mutableStateOf(prefs.optString("audio_lang")) }
     var subtitles by remember { mutableStateOf(prefs.optString("subtitle_lang")) }
     var autoplay by remember { mutableStateOf(prefs.optBoolean("autoplay", true)) }
@@ -73,9 +73,9 @@ fun PlaybackPreferencesScreen(prefs: org.json.JSONObject, onChange: (String, Any
     val local = remember { context.getSharedPreferences("playback_local", Context.MODE_PRIVATE) }
     var size by remember { mutableStateOf(local.getFloat("subtitle_size", 1f)) }
     var fit by remember { mutableStateOf(local.getString("fit_mode", "fit") ?: "fit") }
-    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
-        PtsSecondaryButton("Back", onClick = onBack)
-        PtsPage("Playback")
+    Column(if (embedded) Modifier.fillMaxWidth() else Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
+        if (!embedded) PtsSecondaryButton("Back", onClick = onBack)
+        Text("Playback preferences", style = MaterialTheme.typography.titleLarge, color = Pts.text)
         PtsField(audio, { audio = it }, "Audio language (en, hi, ta…)", Modifier.fillMaxWidth())
         PtsField(subtitles, { subtitles = it }, "Subtitle language (blank = off)", Modifier.fillMaxWidth())
         PreferenceSwitch("Autoplay next episode", autoplay) { autoplay = it }
