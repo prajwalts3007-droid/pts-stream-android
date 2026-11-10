@@ -557,14 +557,14 @@ class AppFlowTest {
         ui.onNodeWithText("Gesture guide").assertDoesNotExist()
         ui.onNodeWithContentDescription("Picture in picture").assertExists()
         ui.onNodeWithTag("player-gesture-zone").performTouchInput {
-            pinch(androidx.compose.ui.geometry.Offset(width * .4f, height * .45f), androidx.compose.ui.geometry.Offset(width * .6f, height * .45f),
-                androidx.compose.ui.geometry.Offset(width * .15f, height * .45f), androidx.compose.ui.geometry.Offset(width * .85f, height * .45f), 500)
+            pinch(start0 = androidx.compose.ui.geometry.Offset(width * .4f, height * .3f), end0 = androidx.compose.ui.geometry.Offset(width * .15f, height * .3f),
+                start1 = androidx.compose.ui.geometry.Offset(width * .6f, height * .3f), end1 = androidx.compose.ui.geometry.Offset(width * .85f, height * .3f), durationMillis = 500)
         }
         ui.onNodeWithTag("gesture-feedback").assertTextContains("Zoom", substring = true)
         capture("native-player-pinch-out")
         ui.onNodeWithTag("player-gesture-zone").performTouchInput {
-            pinch(androidx.compose.ui.geometry.Offset(width * .1f, height * .45f), androidx.compose.ui.geometry.Offset(width * .9f, height * .45f),
-                androidx.compose.ui.geometry.Offset(width * .45f, height * .45f), androidx.compose.ui.geometry.Offset(width * .55f, height * .45f), 500)
+            pinch(start0 = androidx.compose.ui.geometry.Offset(width * .1f, height * .3f), end0 = androidx.compose.ui.geometry.Offset(width * .45f, height * .3f),
+                start1 = androidx.compose.ui.geometry.Offset(width * .9f, height * .3f), end1 = androidx.compose.ui.geometry.Offset(width * .55f, height * .3f), durationMillis = 500)
         }
         ui.onNodeWithTag("gesture-feedback").assertTextContains("Zoom 0.50", substring = true)
         capture("native-player-pinch-in")

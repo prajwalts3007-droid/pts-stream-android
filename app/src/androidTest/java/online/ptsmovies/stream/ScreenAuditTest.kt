@@ -255,7 +255,7 @@ class ScreenAuditTest {
         val cancel = ui.onNodeWithText("Cancel").fetchSemanticsNode().boundsInRoot
         val delete = ui.onNodeWithText("Delete").fetchSemanticsNode().boundsInRoot
         assertEquals(cancel.center.y, delete.center.y, 2f)
-        capture("compact-offline-delete-dialog")
+        saveAuditCapture("compact-offline-delete-dialog", checkNotNull(InstrumentationRegistry.getInstrumentation().uiAutomation.takeScreenshot()))
         ui.onNodeWithText("Delete").performClick()
         ui.runOnIdle { assertEquals(listOf(videos[1]), deleted) }
     }

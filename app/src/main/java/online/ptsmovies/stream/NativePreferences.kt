@@ -25,6 +25,7 @@ class NativePreferences(context: Context) {
 fun isPrivateV4(address: String): Boolean {
     val parts = address.split('.').map { it.toIntOrNull() ?: return false }
     if (parts.size != 4 || parts.any { it !in 0..255 }) return false
+    if (parts.joinToString(".") != address) return false
     return parts[0] == 10 || (parts[0] == 192 && parts[1] == 168) || (parts[0] == 172 && parts[1] in 16..31)
 }
 fun onWifi(context: Context): Boolean {

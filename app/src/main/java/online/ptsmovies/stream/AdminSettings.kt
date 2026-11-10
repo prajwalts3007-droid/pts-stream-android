@@ -18,7 +18,7 @@ import kotlin.math.roundToLong
 data class AdminCommand(val path: String, val method: String, val body: JSONObject? = null)
 fun pipelineBody(values: Map<String, String>, original: JSONObject): JSONObject {
     val result = JSONObject()
-    val speed = values.getValue("pi_bwlimit_kbps").toDoubleOrNull() ?: error("Invalid transfer speed")
+    val speed = requireNotNull(values.getValue("pi_bwlimit_kbps").toDoubleOrNull()) { "Invalid transfer speed" }
     require(speed.isFinite() && speed in 0.0..8589.93) { "Speed must be 0–8589.93 Mbps" }
     val prior = original.getLong("pi_bwlimit_kbps")
     val display = kotlin.math.round(prior * 8192.0 / 1000000 * 100) / 100
@@ -26,7 +26,7 @@ fun pipelineBody(values: Map<String, String>, original: JSONObject): JSONObject 
     val ranges = mapOf("max_runners" to 1L..60L, "max_pi_transfers" to 1L..8L, "min_free_gib" to 1L..1000000L,
         "max_staging_gib" to 0L..1000000L, "reserve_per_job_gib" to 1L..100L)
     ranges.forEach { (key, range) ->
-        val value = values.getValue(key).toLongOrNull() ?: error("Enter a whole number for $key")
+        val value = requireNotNull(values.getValue(key).toLongOrNull()) { "Enter a whole number for $key" }
         require(value in range) { "$key must be ${range.first}–${range.last}" }; result.put(key, value)
     }
     return result
@@ -60,13 +60,14 @@ fun NativeAdminSettings(user: JSONObject, api: PtsApi, onUpdate: () -> Unit, onS
     var email by remember { mutableStateOf("") }
     var newPassword by remember { mutableStateOf("") }
     var role by remember { mutableStateOf("user") }
+    val lifecycle = LocalLifecycleOwner.current.lifecycle
     fun run(command: AdminCommand, after: (JSONObject) -> Unit = {}) {
         if (busy) return
         busy = true; error = ""; notice = ""
         scope.launch {
             try { val result = api.json(command.path, command.method, command.body); after(result); notice = "Saved" }
             catch (e: Exception) { error = e.message ?: "Request failed" }
-            finally { busy = false; token = ""; powerPassword = "" }
+            finally { busy = false; token = ""; powerPassword = ""; newPassword = "" }
         }
     }
     fun refreshUsers() { scope.launch { try { val a = api.json("/admin/users").optJSONArray("users"); users = (0 until (a?.length() ?: 0)).map { a!!.getJSONObject(it) } } catch (e: Exception) { error = e.message.orEmpty() } } }
@@ -85,7 +86,6 @@ fun NativeAdminSettings(user: JSONObject, api: PtsApi, onUpdate: () -> Unit, onS
         if (panel == "User management") refreshUsers()
         if (panel != "API management") { password = ""; token = ""; unlocked = false }
     }
-    val lifecycle = LocalLifecycleOwner.current.lifecycle
     DisposableEffect(lifecycle) {
         val observer = LifecycleEventObserver { _, event -> if (event == Lifecycle.Event.ON_STOP) {
             password = ""; token = ""; powerPassword = ""; newPassword = ""; unlocked = false; pending = null; newUser = false
@@ -98,7 +98,11 @@ fun NativeAdminSettings(user: JSONObject, api: PtsApi, onUpdate: () -> Unit, onS
             onConfirm = {
                 pending = null
                 val captured = if (command.path == "/admin/power") command.copy(body = JSONObject(command.body.toString()).put("password", powerPassword)) else command
-                run(captured) { if (command.path.startsWith("/admin/users")) refreshUsers(); if (command.path == "/admin/pipeline-settings") refreshPipeline() }
+                run(captured) { result ->
+                    if (command.path.startsWith("/admin/users")) refreshUsers()
+                    if (command.path == "/admin/pipeline-settings") refreshPipeline()
+                    if (command.path == "/admin/github" && lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED)) github = result
+                }
             }, onDismiss = { pending = null; powerPassword = "" }) {
             PtsField(phrase, { phrase = it }, "Type CONFIRM", Modifier.fillMaxWidth())
             if (command.path == "/admin/power") PtsField(powerPassword, { powerPassword = it }, "Your password", Modifier.fillMaxWidth(), password = true)
@@ -140,8 +144,10 @@ fun NativeAdminSettings(user: JSONObject, api: PtsApi, onUpdate: () -> Unit, onS
                                 PtsField(password, { password = it }, "Your password", Modifier.fillMaxWidth(), password = true)
                                 PtsPrimaryButton("Unlock", Modifier.fillMaxWidth(), enabled = password.isNotBlank() && !busy) {
                                     run(AdminCommand("/admin/github", "POST", JSONObject().put("password", password).put("token", ""))) { cfg ->
-                                        github = cfg; unlocked = true
-                                        scope.launch { try { google = api.json("/admin/google"); clientId = google.optString("client_id") } catch (e: Exception) { error = e.message.orEmpty() } }
+                                        if (lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED) && panel == "API management" && password.isNotBlank()) {
+                                            github = cfg; unlocked = true
+                                            scope.launch { try { val result = api.json("/admin/google"); if (unlocked) { google = result; clientId = result.optString("client_id") } } catch (e: Exception) { error = e.message.orEmpty() } }
+                                        }
                                     }
                                 }
                             } else {

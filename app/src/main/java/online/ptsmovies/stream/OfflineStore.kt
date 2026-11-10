@@ -158,11 +158,11 @@ class OfflineStore(private val context: Context, private val api: PtsApi, ownerI
         if (!succeeded) throw IOException("Offline download failed: ${last?.message ?: "source unavailable"}")
         val item = SavedVideo(id, title.id, title.title, episode?.season ?: 0, episode?.episode ?: 0,
             episode?.title ?: title.title, dest.length(), dest)
-        cachePoster(title)
         synchronized(indexLock) {
             prefs.edit().putString("title_${title.id}", title.toJson().toString()).commit()
             writeIndex(list().filterNot { it.key == id } + item)
         }
+        cachePoster(title)
         try {
             notifier.notify(id.hashCode(), NotificationCompat.Builder(context, "downloads")
                 .setSmallIcon(android.R.drawable.stat_sys_download_done).setContentTitle("PTS Library")

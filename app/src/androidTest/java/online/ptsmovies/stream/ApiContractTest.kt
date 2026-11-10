@@ -378,7 +378,7 @@ class ApiContractTest {
         bitmap.eraseColor(android.graphics.Color.CYAN)
         val png = java.io.ByteArrayOutputStream(); bitmap.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, png); bitmap.recycle()
         val ep = Episode(101, 2, 3, "Synthetic third episode", 2400.0, "mp4", size = 4096)
-        val title = movie.copy(kind = "series", poster = server.url("/poster.png").toString(), episodes = listOf(ep))
+        val title = movie.copy(kind = "series", poster = "/poster.png", episodes = listOf(ep))
         server.enqueue(MockResponse().setBody("media-fixture"))
         server.enqueue(MockResponse().setHeader("Content-Type", "image/png").setBody(Buffer().write(png.toByteArray())))
         store.save(title, ep) {}

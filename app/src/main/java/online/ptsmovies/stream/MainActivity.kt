@@ -245,7 +245,7 @@ class MainActivity : ComponentActivity() {
         val cached = device.account()
         if (cached != null) {
             account = cached
-            library = device.library(cached.optLong("id"))
+            library = device.library(cached.optLong("id"))?.let { ProgressJournal(this, cached.optLong("id")).overlay(it) }
             attachDownloads()
             mode = "Stream"
             restoreNavigation()
@@ -521,6 +521,8 @@ class MainActivity : ComponentActivity() {
         val owner = account?.optLong("id") ?: return
         val log = ProgressJournal(this, owner)
         log.put(title, ep, position, duration, clear)
+        library = library?.let { log.overlay(it) }
+        library?.let { device.library(owner, it) }
         scope.launch { progressMutex.withLock { if (owner == account?.optLong("id")) try { log.flush(api) } catch (_: Exception) { } } }
     }
 
@@ -977,7 +979,7 @@ class MainActivity : ComponentActivity() {
         }
         BoxWithConstraints(Modifier.fillMaxSize().background(Pts.bg)) {
           val landscape = maxWidth > maxHeight || inPip || playerFullscreen
-          val portraitHeight = (maxWidth * .58f).coerceIn(290.dp, 560.dp).coerceAtMost(maxHeight * .65f)
+          val portraitHeight = (maxWidth * .58f).coerceIn(300.dp, 560.dp).coerceAtMost(maxHeight * .65f)
           DisposableEffect(landscape) {
               val bars = WindowCompat.getInsetsController(window, window.decorView)
               if (landscape && !inPip) {
