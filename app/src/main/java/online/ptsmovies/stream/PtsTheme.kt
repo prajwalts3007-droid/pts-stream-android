@@ -1,0 +1,103 @@
+package online.ptsmovies.stream
+
+import androidx.compose.foundation.isSystemInDarkTheme
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Shapes
+import androidx.compose.material3.Typography
+import androidx.compose.material3.darkColorScheme
+import androidx.compose.runtime.Composable
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.font.Font
+import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+
+// Tokens taken from the live PTS Learning Studio stylesheet (education.css).
+object Pts {
+    val bg = Color(0xFF11132D)
+    val card = Color(0xFF202343)
+    val soft = Color(0xFF2B2F57)
+    val text = Color(0xFFF7F7FF)
+    val muted = Color(0xFFC4C9E4)
+    val muted2 = Color(0xFFB3BCDB)
+    val line = Color(0xFF414671)
+    val line2 = Color(0xFF7075A2)
+    val accent = Color(0xFFAAA6FF)
+    val onAccent = Color(0xFF16163F)
+    val spark = Color(0xFFFFB46E)
+    val ok = Color(0xFF79DFB8)
+    val danger = Color(0xFFFF969E)
+
+    val accentSoft = Color(0x28AAA6FF)
+    val sparkSoft = Color(0x1FFFB46E)
+    val okSoft = Color(0x1F79DFB8)
+    val dangerSoft = Color(0x24FF969E)
+}
+
+val DmSans = FontFamily(
+    Font(R.font.dm_sans, FontWeight.Normal),
+    Font(R.font.dm_sans, FontWeight.Medium),
+    Font(R.font.dm_sans, FontWeight.Bold)
+)
+
+val Nunito = FontFamily(
+    Font(R.font.nunito, FontWeight.Bold),
+    Font(R.font.nunito, FontWeight.ExtraBold),
+    Font(R.font.nunito, FontWeight.Black)
+)
+
+private val PtsType = Typography(
+    displaySmall = TextStyle(fontFamily = Nunito, fontWeight = FontWeight.Black, fontSize = 40.sp, lineHeight = 45.sp, letterSpacing = (-0.9).sp),
+    headlineLarge = TextStyle(fontFamily = Nunito, fontWeight = FontWeight.Black, fontSize = 34.sp, lineHeight = 39.sp, letterSpacing = (-0.8).sp),
+    headlineMedium = TextStyle(fontFamily = Nunito, fontWeight = FontWeight.Black, fontSize = 28.sp, lineHeight = 33.sp, letterSpacing = (-0.6).sp),
+    headlineSmall = TextStyle(fontFamily = Nunito, fontWeight = FontWeight.Black, fontSize = 24.sp, lineHeight = 29.sp, letterSpacing = (-0.4).sp),
+    titleLarge = TextStyle(fontFamily = Nunito, fontWeight = FontWeight.Black, fontSize = 20.sp, lineHeight = 25.sp, letterSpacing = (-0.3).sp),
+    titleMedium = TextStyle(fontFamily = Nunito, fontWeight = FontWeight.ExtraBold, fontSize = 16.sp, lineHeight = 21.sp),
+    titleSmall = TextStyle(fontFamily = Nunito, fontWeight = FontWeight.ExtraBold, fontSize = 14.sp, lineHeight = 19.sp),
+    bodyLarge = TextStyle(fontFamily = DmSans, fontWeight = FontWeight.Normal, fontSize = 15.sp, lineHeight = 23.sp),
+    bodyMedium = TextStyle(fontFamily = DmSans, fontWeight = FontWeight.Normal, fontSize = 14.sp, lineHeight = 21.sp),
+    bodySmall = TextStyle(fontFamily = DmSans, fontWeight = FontWeight.Normal, fontSize = 12.sp, lineHeight = 18.sp),
+    labelLarge = TextStyle(fontFamily = DmSans, fontWeight = FontWeight.Bold, fontSize = 14.sp, lineHeight = 18.sp),
+    labelMedium = TextStyle(fontFamily = DmSans, fontWeight = FontWeight.Bold, fontSize = 12.sp, lineHeight = 16.sp, letterSpacing = 0.2.sp),
+    labelSmall = TextStyle(fontFamily = DmSans, fontWeight = FontWeight.Bold, fontSize = 11.sp, lineHeight = 15.sp, letterSpacing = 0.2.sp)
+)
+
+private val PtsShapes = Shapes(
+    extraSmall = androidx.compose.foundation.shape.RoundedCornerShape(10.dp),
+    small = androidx.compose.foundation.shape.RoundedCornerShape(12.dp),
+    medium = androidx.compose.foundation.shape.RoundedCornerShape(16.dp),
+    large = androidx.compose.foundation.shape.RoundedCornerShape(22.dp),
+    extraLarge = androidx.compose.foundation.shape.RoundedCornerShape(26.dp)
+)
+
+private val PtsColors = darkColorScheme(
+    primary = Pts.accent,
+    onPrimary = Pts.onAccent,
+    primaryContainer = Pts.soft,
+    onPrimaryContainer = Pts.text,
+    secondary = Pts.spark,
+    onSecondary = Pts.onAccent,
+    tertiary = Pts.ok,
+    background = Pts.bg,
+    onBackground = Pts.text,
+    surface = Pts.card,
+    onSurface = Pts.text,
+    surfaceVariant = Pts.soft,
+    onSurfaceVariant = Pts.muted,
+    outline = Pts.line,
+    outlineVariant = Pts.line,
+    error = Pts.danger,
+    onError = Pts.onAccent,
+    errorContainer = Pts.dangerSoft,
+    onErrorContainer = Pts.danger
+)
+
+@Composable
+fun PtsTheme(content: @Composable () -> Unit) {
+    MaterialTheme(colorScheme = PtsColors, typography = PtsType, shapes = PtsShapes, content = content)
+}
+
+val SectionTint: Color
+    @Composable get() = if (isSystemInDarkTheme()) Pts.accent else Pts.accent

@@ -27,7 +27,7 @@ fun checkForUpdate(context: Context, scope: CoroutineScope, notify: (String) -> 
             }
             val code = update.optString("tag_name").removePrefix("v").toIntOrNull()
                 ?: throw IllegalStateException("Invalid release version")
-            if (code <= BuildConfig.VERSION_CODE) { notify("PTS Stream is up to date"); return@launch }
+            if (code <= BuildConfig.VERSION_CODE) { notify("PTS Library is up to date"); return@launch }
             val assets = update.optJSONArray("assets") ?: throw IllegalStateException("Release has no APK")
             val asset = (0 until assets.length()).map { assets.getJSONObject(it) }
                 .firstOrNull { it.optString("name") == "PTS-Stream-v$code.apk" }
@@ -40,7 +40,7 @@ fun checkForUpdate(context: Context, scope: CoroutineScope, notify: (String) -> 
             if (file.exists()) file.delete()
             val manager = context.getSystemService(DownloadManager::class.java)
             val id = manager.enqueue(DownloadManager.Request(Uri.parse(url))
-                .setTitle("PTS Stream v$code")
+                .setTitle("PTS Library v$code")
                 .setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
                 .setDestinationInExternalFilesDir(context, null, "updates/${file.name}"))
             notify("Downloading update v$code")

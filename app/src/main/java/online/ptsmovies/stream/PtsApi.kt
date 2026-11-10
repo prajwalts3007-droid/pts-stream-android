@@ -21,7 +21,7 @@ data class Title(
     val id: Long, val kind: String, val title: String, val year: Int, val poster: String,
     val synopsis: String, val genres: List<String>, val episodes: List<Episode>, val codec: String, val container: String
 )
-data class Resume(val episodeId: Long, val seconds: Long)
+data class Resume(val episodeId: Long, val seconds: Long, val duration: Long = 0L)
 data class Library(val titles: List<Title>, val watch: Set<Long>, val progress: Map<Long, Resume>)
 
 class PtsApi {
@@ -88,7 +88,7 @@ class PtsApi {
         val values = result.optJSONArray("progress") ?: JSONArray()
         for (i in 0 until values.length()) {
             val p = values.optJSONObject(i) ?: continue
-            progress[p.optLong("title_id")] = Resume(p.optLong("episode_id"), p.optLong("position"))
+            progress[p.optLong("title_id")] = Resume(p.optLong("episode_id"), p.optLong("position"), p.optLong("duration"))
         }
         Library(titles, result.optJSONArray("watch").longs(), progress)
     }

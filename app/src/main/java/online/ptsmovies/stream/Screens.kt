@@ -1,0 +1,979 @@
+package online.ptsmovies.stream
+
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.GridItemSpan
+import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.pager.HorizontalPager
+import androidx.compose.foundation.pager.rememberPagerState
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.Icon
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Text
+import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import coil.compose.AsyncImage
+import org.json.JSONArray
+import org.json.JSONObject
+import java.util.Locale
+
+// ---------- formatting ----------
+
+fun formatBytes(bytes: Long): String {
+    if (bytes <= 0) return "0 B"
+    val units = arrayOf("B", "KB", "MB", "GB", "TB")
+    var value = bytes.toDouble()
+    var unit = 0
+    while (value >= 1024 && unit < units.lastIndex) { value /= 1024; unit++ }
+    return if (unit == 0) "${bytes} B" else String.format(Locale.US, "%.1f %s", value, units[unit])
+}
+
+fun formatRate(bps: Long): String = if (bps <= 0) "—" else formatBytes(bps) + "/s"
+
+fun formatDuration(seconds: Long): String {
+    if (seconds <= 0) return ""
+    val h = seconds / 3600
+    val m = (seconds % 3600) / 60
+    return if (h > 0) "${h}h ${m}m" else "${m}m"
+}
+
+private fun JSONArray?.objects(): List<JSONObject> =
+    (0 until (this?.length() ?: 0)).mapNotNull { optJSONObject(it) }
+
+private fun JSONObject.array(key: String): List<JSONObject> = optJSONArray(key).objects()
+
+// ---------- login ----------
+
+@Composable
+fun LoginScreen(message: String, busy: Boolean, onLogin: (String, String) -> Unit) {
+    var user by remember { mutableStateOf("") }
+    var pass by remember { mutableStateOf("") }
+    var keep by remember { mutableStateOf(true) }
+    Box(Modifier.fillMaxSize().imePadding()) {
+        Column(
+            Modifier.fillMaxSize().verticalScroll(rememberScrollState())
+                .padding(horizontal = 24.dp, vertical = 30.dp)
+                .navigationBarsPadding().statusBarsPadding(),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.Center
+        ) {
+            Box(
+                Modifier.size(74.dp).background(Pts.accent, RoundedCornerShape(23.dp))
+                    .padding(0.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                Box(
+                    Modifier.fillMaxSize().background(Pts.accent, RoundedCornerShape(23.dp))
+                        .padding(2.dp)
+                        .background(
+                            androidx.compose.ui.graphics.Brush.verticalGradient(listOf(Color(0xFFB9B5FF), Pts.accent)),
+                            RoundedCornerShape(21.dp)
+                        )
+                )
+                Text("PTS", fontFamily = Nunito, fontWeight = FontWeight.Black, fontSize = 24.sp, color = Pts.onAccent)
+            }
+            Text("PTS Library", style = MaterialTheme.typography.headlineLarge, color = Pts.text, modifier = Modifier.padding(top = 14.dp))
+            Text("Your library, everywhere", style = MaterialTheme.typography.bodyMedium, color = Pts.muted, modifier = Modifier.padding(top = 3.dp, bottom = 24.dp))
+            PtsCard(Modifier.fillMaxWidth(), padding = 22.dp) {
+                Text("Welcome back", style = MaterialTheme.typography.headlineMedium, color = Pts.text)
+                Spacer(Modifier.height(4.dp))
+                PtsField(user, { user = it }, "Username or email", Modifier.fillMaxWidth(), keyboardType = KeyboardType.Email, enabled = !busy)
+                PtsField(pass, { pass = it }, "Password", Modifier.fillMaxWidth(), password = true, enabled = !busy)
+                Row(Modifier.fillMaxWidth().clickable { keep = !keep }, verticalAlignment = Alignment.CenterVertically) {
+                    Box(
+                        Modifier.size(21.dp).background(if (keep) Pts.accent else Pts.soft, RoundedCornerShape(5.dp))
+                            .then(if (!keep) Modifier.padding(1.dp).background(Pts.card, RoundedCornerShape(4.dp)) else Modifier),
+                        contentAlignment = Alignment.Center
+                    ) { if (keep) Icon(PtsIcons.Check, null, Modifier.size(15.dp), tint = Pts.onAccent) }
+                    Text("Keep me signed in", style = MaterialTheme.typography.bodyMedium, color = Pts.text, modifier = Modifier.padding(start = 9.dp))
+                }
+                if (message.isNotBlank()) PtsErrorBanner(message)
+                PtsPrimaryButton(if (busy) "Signing in…" else "Sign in", Modifier.fillMaxWidth(), enabled = !busy && user.isNotBlank() && pass.isNotBlank()) {
+                    onLogin(user.trim(), pass)
+                }
+                Text("Sessions are stored only on this device. The app never stores your password.",
+                    style = MaterialTheme.typography.labelSmall, color = Pts.muted, textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth())
+            }
+        }
+    }
+}
+
+// ---------- streaming ----------
+
+@Composable
+fun StreamHomeScreen(
+    library: Library,
+    onOpen: (Title) -> Unit,
+    onPlay: (Title) -> Unit,
+    onToggleWatch: (Title) -> Unit,
+    onSeeAll: (String) -> Unit
+) {
+    val featured = remember(library.titles) { library.titles.filter { it.poster.startsWith("https://") }.ifEmpty { library.titles }.take(4) }
+    val continueWatching = remember(library) {
+        library.titles.filter { (library.progress[it.id]?.seconds ?: 0) > 0 }
+    }
+    val movies = library.titles.filter { it.kind == "movie" }
+    val series = library.titles.filter { it.kind == "series" }
+    LazyColumn(
+        contentPadding = PaddingValues(start = 16.dp, end = 16.dp, bottom = 20.dp),
+        verticalArrangement = Arrangement.spacedBy(2.dp)
+    ) {
+        item { PtsPage("Stream", "Pick up where you left off") }
+        if (library.titles.isEmpty()) {
+            item { PtsEmpty("Your library is empty", "Approved titles will appear here after the pipeline finishes.", icon = PtsIcons.Film) }
+        } else {
+            if (featured.isNotEmpty()) {
+                item {
+                    val pager = rememberPagerState(pageCount = { featured.size })
+                    Column(verticalArrangement = Arrangement.spacedBy(9.dp)) {
+                        HorizontalPager(state = pager, pageSpacing = 12.dp, modifier = Modifier.fillMaxWidth()) { index ->
+                            val t = featured[index]
+                            PtsHero(t, t.id in library.watch, { onOpen(t) }, { onPlay(t) }, { onToggleWatch(t) })
+                        }
+                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Center) {
+                            repeat(featured.size) { index ->
+                                val on = pager.currentPage == index
+                                Box(
+                                    Modifier.padding(horizontal = 4.dp).height(9.dp)
+                                        .width(if (on) 24.dp else 9.dp)
+                                        .background(if (on) Pts.accent else Pts.line2, RoundedCornerShape(99.dp))
+                                        .clickable { }
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+            if (continueWatching.isNotEmpty()) item {
+                PtsPosterShelf("Continue watching", continueWatching, library.progress, library.watch, onOpen, onToggleWatch)
+            }
+            if (movies.isNotEmpty()) item {
+                Column {
+                    PtsSectionHeader("Movies", movies.size) {
+                        Text("See all", style = MaterialTheme.typography.labelLarge, color = Pts.accent,
+                            modifier = Modifier.clickable { onSeeAll("Movies") }.padding(start = 8.dp))
+                    }
+                    androidx.compose.foundation.lazy.LazyRow(horizontalArrangement = Arrangement.spacedBy(11.dp)) {
+                        items(movies, key = { it.id }) { t ->
+                            PtsPosterCard(t, library.progress[t.id], t.id in library.watch, onOpen = { onOpen(t) }, onToggleWatch = { onToggleWatch(t) })
+                        }
+                    }
+                }
+            }
+            if (series.isNotEmpty()) item {
+                Column {
+                    PtsSectionHeader("TV Shows", series.size) {
+                        Text("See all", style = MaterialTheme.typography.labelLarge, color = Pts.accent,
+                            modifier = Modifier.clickable { onSeeAll("Series") }.padding(start = 8.dp))
+                    }
+                    androidx.compose.foundation.lazy.LazyRow(horizontalArrangement = Arrangement.spacedBy(11.dp)) {
+                        items(series, key = { it.id }) { t ->
+                            PtsPosterCard(t, library.progress[t.id], t.id in library.watch, onOpen = { onOpen(t) }, onToggleWatch = { onToggleWatch(t) })
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun BrowseScreen(
+    tab: String,
+    titles: List<Title>,
+    progress: Map<Long, Resume>,
+    watch: Set<Long>,
+    query: String,
+    onQuery: (String) -> Unit,
+    onOpen: (Title) -> Unit,
+    onToggleWatch: (Title) -> Unit
+) {
+    var genre by remember(tab) { mutableStateOf("") }
+    val genres = remember(tab) {
+        when (tab) {
+            "Movies" -> titles.flatMap { it.genres }.distinct().sorted()
+            "Series" -> titles.flatMap { it.genres }.distinct().sorted()
+            else -> emptyList()
+        }.take(10)
+    }
+    val filtered = remember(titles, genre, query) {
+        titles.filter { t ->
+            (tab != "Watchlist" || t.id in watch) &&
+                (genre.isBlank() || t.genres.any { it.equals(genre, true) }) &&
+                (query.isBlank() || t.title.contains(query, true) || t.genres.any { it.contains(query, true) })
+        }
+    }
+    val label = when (tab) { "Movies" -> "Movies"; "Series" -> "TV Shows"; "Watchlist" -> "My List"; else -> tab }
+    LazyVerticalGrid(
+        columns = GridCells.Fixed(2),
+        contentPadding = PaddingValues(start = 16.dp, end = 16.dp, bottom = 20.dp),
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+        item(span = { GridItemSpan(maxLineSpan) }) {
+            PtsPage(label, "${filtered.size} title${if (filtered.size == 1) "" else "s"}")
+        }
+        item(span = { GridItemSpan(maxLineSpan) }) {
+            PtsSearchField(query, onQuery, "Search movies and shows")
+        }
+        if (genres.isNotEmpty()) {
+            item(span = { GridItemSpan(maxLineSpan) }) {
+                Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(7.dp)) {
+                    PtsGenreChip("All", genre.isBlank()) { genre = "" }
+                    genres.forEach { g -> PtsGenreChip(g, genre == g) { genre = if (genre == g) "" else g } }
+                }
+            }
+        }
+        if (filtered.isEmpty()) {
+            item(span = { GridItemSpan(maxLineSpan) }) {
+                PtsEmpty(
+                    if (tab == "Watchlist") "Nothing saved yet" else "No matching titles",
+                    if (tab == "Watchlist") "Use the + button on any poster to add it to My List." else "Try a different search or genre.",
+                    actionLabel = if (tab == "Watchlist") null else "Clear filters",
+                    icon = if (tab == "Watchlist") PtsIcons.Watchlist else PtsIcons.Search
+                ) { genre = ""; onQuery("") }
+            }
+        }
+        items(filtered, key = { it.id }) { t ->
+            PtsPosterCard(t, progress[t.id], t.id in watch, width = null, onOpen = { onOpen(t) }, onToggleWatch = { onToggleWatch(t) })
+        }
+    }
+}
+
+@Composable
+private fun PtsGenreChip(label: String, active: Boolean, onClick: () -> Unit) {
+    Box(
+        Modifier.clip(RoundedCornerShape(999.dp))
+            .background(if (active) Pts.accent else Pts.card)
+            .border(2.dp, if (active) Pts.accent else Pts.line, RoundedCornerShape(999.dp))
+            .clickable(onClick = onClick).padding(horizontal = 13.dp, vertical = 8.dp)
+    ) {
+        Text(label, style = MaterialTheme.typography.labelMedium, color = if (active) Pts.onAccent else Pts.muted)
+    }
+}
+
+@Composable
+fun TitleScreen(
+    title: Title,
+    resume: Resume?,
+    marked: Boolean,
+    savedKeys: Set<String>,
+    downloading: String,
+    onBack: () -> Unit,
+    onPlay: (Episode?) -> Unit,
+    onToggleWatch: () -> Unit,
+    onDownload: (Episode?) -> Unit
+) {
+    val episodes = remember(title) { title.episodes.sortedWith(compareBy({ it.season }, { it.episode })) }
+    LazyColumn(
+        contentPadding = PaddingValues(start = 16.dp, end = 16.dp, bottom = 24.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp)
+    ) {
+        item {
+            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(top = 8.dp)) {
+                PtsIconAction(PtsIcons.Back, "Back", onBack)
+                Text("Details", style = MaterialTheme.typography.labelLarge, color = Pts.muted, modifier = Modifier.padding(start = 2.dp))
+            }
+        }
+        item {
+            PtsCard(Modifier.fillMaxWidth(), padding = 14.dp) {
+                Row {
+                    Box(Modifier.width(116.dp).aspectRatio(2f / 3f).clip(PosterShape).background(Pts.soft)
+                        .border(1.dp, Pts.line, PosterShape)) {
+                        if (title.poster.startsWith("https://")) AsyncImage(title.poster, "Poster", Modifier.fillMaxSize(), contentScale = androidx.compose.ui.layout.ContentScale.Crop)
+                        else Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                            Text(title.title.take(1).uppercase(), fontFamily = Nunito, fontWeight = FontWeight.Black, fontSize = 36.sp, color = Pts.accent)
+                        }
+                    }
+                    Column(Modifier.weight(1f).padding(start = 14.dp), verticalArrangement = Arrangement.spacedBy(7.dp)) {
+                        Text(title.title, style = MaterialTheme.typography.headlineSmall, color = Pts.text, maxLines = 3, overflow = TextOverflow.Ellipsis)
+                        Text(
+                            listOfNotNull(title.year.takeIf { it > 0 }?.toString(), if (title.kind == "series") "TV Show" else "Movie", formatDuration(title.episodes.firstOrNull()?.duration?.toLong() ?: 0)).joinToString(" · "),
+                            style = MaterialTheme.typography.bodySmall, color = Pts.muted
+                        )
+                        Row(horizontalArrangement = Arrangement.spacedBy(5.dp)) {
+                            if (title.codec.isNotBlank()) PtsPill(title.codec.uppercase())
+                            if (title.container.isNotBlank()) PtsPill(title.container.uppercase())
+                            PtsPill("HEVC", active = true)
+                        }
+                        Row(horizontalArrangement = Arrangement.spacedBy(5.dp)) {
+                            title.genres.take(2).forEach { g -> PtsPill(g) }
+                        }
+                    }
+                }
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+                    val resumeAt = resume?.takeIf { it.seconds > 0 }
+                    PtsPrimaryButton(
+                        if (resumeAt != null) "Resume" else if (title.kind == "series") "Play series" else "Play",
+                        Modifier.weight(1f), icon = PtsIcons.Play,
+                        enabled = title.kind == "movie" || episodes.isNotEmpty()
+                    ) { onPlay(if (title.kind == "movie") null else episodes.firstOrNull { it.id == resume?.episodeId } ?: episodes.firstOrNull()) }
+                    PtsSecondaryButton(if (marked) "In list" else "My list", Modifier.weight(1f), icon = if (marked) PtsIcons.Check else PtsIcons.Plus) { onToggleWatch() }
+                }
+                if (resume != null && resume.seconds > 0) {
+                    PtsProgressBar(if (resume.duration > 0) resume.seconds.toFloat() / resume.duration else 0f, tint = Pts.spark)
+                    Text("${formatDuration(resume.seconds)} watched", style = MaterialTheme.typography.labelSmall, color = Pts.muted)
+                }
+            }
+        }
+        if (title.synopsis.isNotBlank()) item {
+            PtsCard(Modifier.fillMaxWidth()) {
+                Text("About", style = MaterialTheme.typography.titleMedium, color = Pts.text)
+                Text(title.synopsis, style = MaterialTheme.typography.bodyMedium, color = Pts.muted)
+            }
+        }
+        if (title.kind == "series") {
+            episodes.groupBy { it.season }.forEach { (season, eps) ->
+                item { PtsSectionHeader("Season $season", eps.size) }
+                items(eps, key = { it.id }) { ep ->
+                    EpisodeRow(
+                        title = title, ep = ep,
+                        resume = resume?.takeIf { it.episodeId == ep.id },
+                        saved = "${title.id}_${ep.id}" in savedKeys,
+                        downloading = downloading,
+                        onPlay = { onPlay(ep) },
+                        onDownload = { onDownload(ep) }
+                    )
+                }
+            }
+        } else {
+            item {
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    PtsSecondaryButton(
+                        if ("${title.id}_0" in savedKeys) "Downloaded" else "Save offline",
+                        Modifier.fillMaxWidth(), icon = if ("${title.id}_0" in savedKeys) PtsIcons.Check else PtsIcons.Download,
+                        enabled = downloading.isBlank() && "${title.id}_0" !in savedKeys
+                    ) { onDownload(null) }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun EpisodeRow(
+    title: Title,
+    ep: Episode,
+    resume: Resume?,
+    saved: Boolean,
+    downloading: String,
+    onPlay: () -> Unit,
+    onDownload: () -> Unit
+) {
+    PtsCard(Modifier.fillMaxWidth(), padding = 12.dp) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Box(
+                Modifier.size(52.dp).clip(RoundedCornerShape(13.dp)).background(Pts.soft)
+                    .border(1.dp, Pts.line, RoundedCornerShape(13.dp)).clickable(onClick = onPlay),
+                contentAlignment = Alignment.Center
+            ) { Icon(PtsIcons.Play, "Play episode", Modifier.size(22.dp), tint = Pts.accent) }
+            Column(Modifier.weight(1f).padding(horizontal = 12.dp), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                Text("E${ep.episode} · ${ep.title.ifBlank { title.title }}", style = MaterialTheme.typography.titleSmall, color = Pts.text, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text(
+                    listOfNotNull(formatDuration(ep.duration.toLong()).takeIf { it.isNotBlank() }, if (saved) "On this device" else null).joinToString(" · ").ifBlank { "Ready to stream" },
+                    style = MaterialTheme.typography.labelSmall, color = if (saved) Pts.ok else Pts.muted
+                )
+                if (resume != null && resume.seconds > 0) PtsProgressBar(
+                    if (resume.duration > 0) resume.seconds.toFloat() / resume.duration else 0f, height = 4.dp, tint = Pts.spark
+                )
+            }
+            PtsIconAction(
+                if (saved) PtsIcons.Check else PtsIcons.Download,
+                if (saved) "Saved" else "Save offline",
+                onDownload,
+                tint = if (saved) Pts.ok else if (downloading.isBlank()) Pts.text else Pts.muted,
+                size = 36.dp
+            )
+        }
+    }
+}
+
+@Composable
+fun DownloadsScreen(saved: List<SavedVideo>, onPlay: (SavedVideo) -> Unit, onDelete: (SavedVideo) -> Unit) {
+    var confirm by remember { mutableStateOf<SavedVideo?>(null) }
+    confirm?.let { item ->
+        PtsConfirmDialog(
+            "Delete download?", "${item.label} will be removed from this device. You can stream it again when online.",
+            "Delete", destructive = true, onConfirm = { onDelete(item); confirm = null }, onDismiss = { confirm = null }
+        )
+    }
+    LazyColumn(
+        contentPadding = PaddingValues(start = 16.dp, end = 16.dp, bottom = 20.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp)
+    ) {
+        item { PtsPage("My Downloads", "${saved.size} offline video${if (saved.size == 1) "" else "s"} · stored on this device") }
+        if (saved.isEmpty()) {
+            item { PtsEmpty("No offline videos", "Open a movie or episode and tap Save offline. Rights-cleared MP4 titles can be kept on this device.", icon = PtsIcons.Download) }
+        } else {
+            saved.groupBy { it.title }.forEach { (title, videos) ->
+                item { PtsSectionHeader(title, videos.size) }
+                videos.sortedWith(compareBy({ it.season }, { it.episode })).forEach { video ->
+                    item(key = video.key) {
+                        PtsCard(Modifier.fillMaxWidth(), padding = 12.dp) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Box(Modifier.size(46.dp).clip(RoundedCornerShape(12.dp)).background(Pts.okSoft), contentAlignment = Alignment.Center) {
+                                    Icon(PtsIcons.Download, null, Modifier.size(22.dp), tint = Pts.ok)
+                                }
+                                Column(Modifier.weight(1f).padding(horizontal = 12.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                                    Text(video.label, style = MaterialTheme.typography.titleSmall, color = Pts.text, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                    Text(
+                                        listOfNotNull(if (video.season > 0) "S${video.season}E${video.episode}" else null, formatBytes(video.bytes)).joinToString(" · "),
+                                        style = MaterialTheme.typography.labelSmall, color = Pts.muted
+                                    )
+                                }
+                                PtsIconAction(PtsIcons.Play, "Play", { onPlay(video) }, tint = Pts.accent, size = 36.dp)
+                                PtsIconAction(PtsIcons.Trash, "Delete", { confirm = video }, tint = Pts.muted, size = 36.dp)
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun ProfileScreen(user: JSONObject, savedCount: Int, onDownloads: () -> Unit, onUpdate: () -> Unit, onSection: (String) -> Unit, onSignOut: () -> Unit) {
+    val name = user.optString("name").ifBlank { user.optString("username") }
+    val role = user.optString("role")
+    LazyColumn(
+        contentPadding = PaddingValues(start = 16.dp, end = 16.dp, bottom = 20.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp)
+    ) {
+        item { PtsPage("Profile", "Account and app settings") }
+        item {
+            PtsCard(Modifier.fillMaxWidth(), padding = 20.dp) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Box(Modifier.size(60.dp).background(Pts.soft, CircleShape).border(2.dp, Pts.line2, CircleShape), contentAlignment = Alignment.Center) {
+                        Text(name.take(1).uppercase(), fontFamily = Nunito, fontWeight = FontWeight.Black, fontSize = 24.sp, color = Pts.accent)
+                    }
+                    Column(Modifier.weight(1f).padding(start = 14.dp), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                        Text(name, style = MaterialTheme.typography.titleLarge, color = Pts.text)
+                        Text("@" + user.optString("username"), style = MaterialTheme.typography.bodySmall, color = Pts.muted)
+                        PtsPill(role.ifBlank { "user" }, active = role == "admin")
+                    }
+                }
+            }
+        }
+        if (role == "admin") {
+            item {
+                PtsCard(Modifier.fillMaxWidth()) {
+                    Text("Sections", style = MaterialTheme.typography.titleMedium, color = Pts.text)
+                    Text("Swipe the bottom dock to switch, or choose a section here.", style = MaterialTheme.typography.labelSmall, color = Pts.muted)
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        PtsSecondaryButton("Hub", Modifier.weight(1f), icon = PtsIcons.Home) { onSection("Hub") }
+                        PtsSecondaryButton("Files", Modifier.weight(1f), icon = PtsIcons.Browse) { onSection("Files") }
+                        PtsSecondaryButton("Stream", Modifier.weight(1f), icon = PtsIcons.Film) { onSection("Stream") }
+                    }
+                }
+            }
+        }
+        item {
+            PtsCard(Modifier.fillMaxWidth(), padding = 0.dp) {
+                MenuRow(PtsIcons.Download, "My Downloads", if (savedCount > 0) "$savedCount on this device" else "Nothing saved") { onDownloads() }
+                MenuDivider()
+                MenuRow(PtsIcons.Refresh, "Check for updates", "Signed releases only") { onUpdate() }
+                MenuDivider()
+                MenuRow(PtsIcons.Shield, "Session", "Signed in · ${role.ifBlank { "user" }}") { }
+                MenuDivider()
+                MenuRow(PtsIcons.Info, "About", "PTS Library ${BuildConfig.VERSION_NAME}") { }
+            }
+        }
+        item {
+            PtsSecondaryButton("Sign out", Modifier.fillMaxWidth(), icon = PtsIcons.Logout, danger = true) { onSignOut() }
+        }
+        item {
+            Text("Offline videos and the session are stored only on this device.",
+                style = MaterialTheme.typography.labelSmall, color = Pts.muted, textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth())
+        }
+    }
+}
+
+@Composable
+private fun MenuRow(icon: androidx.compose.ui.graphics.vector.ImageVector, title: String, sub: String, onClick: () -> Unit) {
+    Row(Modifier.fillMaxWidth().clickable(onClick = onClick).padding(horizontal = 16.dp, vertical = 13.dp), verticalAlignment = Alignment.CenterVertically) {
+        Icon(icon, null, Modifier.size(21.dp), tint = Pts.accent)
+        Column(Modifier.weight(1f).padding(start = 12.dp), verticalArrangement = Arrangement.spacedBy(1.dp)) {
+            Text(title, style = MaterialTheme.typography.bodyLarge, color = Pts.text)
+            Text(sub, style = MaterialTheme.typography.labelSmall, color = Pts.muted)
+        }
+        Icon(PtsIcons.ChevronRight, null, Modifier.size(17.dp), tint = Pts.line2)
+    }
+}
+
+@Composable
+private fun MenuDivider() {
+    Box(Modifier.fillMaxWidth().padding(horizontal = 16.dp).height(1.dp).background(Pts.line))
+}
+
+// ---------- hub ----------
+
+@Composable
+fun DashboardScreen(
+    userName: String,
+    metrics: JSONObject?,
+    target: String,
+    onTarget: (String) -> Unit,
+    onRefresh: () -> Unit,
+    queue: List<JSONObject>,
+    completed: List<JSONObject>,
+    onQueue: () -> Unit
+) {
+    val host = metrics?.optJSONObject(target)
+    val online = host?.optBoolean("online") == true
+    LazyColumn(
+        contentPadding = PaddingValues(start = 16.dp, end = 16.dp, bottom = 20.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+        item {
+            PtsPage("Dashboard", "Signed in as $userName") {
+                PtsIconAction(PtsIcons.Refresh, "Refresh metrics", onRefresh, tint = Pts.muted)
+            }
+        }
+        item {
+            PtsCard(Modifier.fillMaxWidth()) {
+                PtsSegmented(listOf("vps" to "VPS", "pi" to "Raspberry Pi"), target, onTarget)
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Box(Modifier.size(9.dp).background(if (online) Pts.ok else Pts.danger, CircleShape))
+                    Text(host?.optString("hostname")?.takeIf { it.isNotBlank() } ?: if (online) target.uppercase() else "Not connected",
+                        style = MaterialTheme.typography.titleSmall, color = Pts.text, modifier = Modifier.padding(start = 7.dp).weight(1f))
+                    Text(if (online) "Live" else "Offline", style = MaterialTheme.typography.labelSmall, color = if (online) Pts.ok else Pts.danger)
+                }
+            }
+        }
+        if (host == null || !online) {
+            item {
+                PtsEmpty("No metrics for this device", "The agent is offline or has not reported yet. Refresh after it reconnects.", actionLabel = "Refresh", icon = PtsIcons.Info) { onRefresh() }
+            }
+        } else {
+            item {
+                val cpu = host.optDouble("cpu_percent").toFloat() / 100f
+                val mem = host.optDouble("mem_percent").toFloat() / 100f
+                Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    PtsStatTile("CPU", "${(cpu * 100).toInt()}%",
+                        "${host.optInt("cpu_cores")} cores · load ${String.format(Locale.US, "%.2f", host.optDouble("load1"))}",
+                        cpu, Pts.accent, Modifier.weight(1f))
+                    PtsStatTile("Memory", "${(mem * 100).toInt()}%",
+                        "${formatBytes(host.optLong("mem_used_bytes"))} / ${formatBytes(host.optLong("mem_total_bytes"))}",
+                        mem, Pts.spark, Modifier.weight(1f))
+                }
+            }
+            item {
+                val disk = host.optDouble("disk_percent").toFloat() / 100f
+                Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    PtsStatTile("Storage" + host.optString("disk_path").takeIf { it.isNotBlank() }?.let { " · $it" }.orEmpty(),
+                        "${(disk * 100).toInt()}%",
+                        "${formatBytes(host.optLong("disk_used_bytes"))} / ${formatBytes(host.optLong("disk_total_bytes"))}",
+                        disk, Pts.ok, Modifier.weight(1f))
+                    PtsNetworkTile(
+                        formatRate(host.optLong("net_rx_bps")), formatRate(host.optLong("net_tx_bps")),
+                        "↓${formatBytes(host.optLong("net_rx_total_bytes"))}  ↑${formatBytes(host.optLong("net_tx_total_bytes"))}",
+                        Modifier.weight(1f)
+                    )
+                }
+            }
+        }
+        item {
+            val active = queue.count { it.optString("stage") !in setOf("failed", "done") }
+            val failed = queue.count { it.optString("stage") == "failed" }
+            PtsCard(Modifier.fillMaxWidth(), onClick = onQueue) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text("Pipeline", style = MaterialTheme.typography.titleMedium, color = Pts.text, modifier = Modifier.weight(1f))
+                    Icon(PtsIcons.ChevronRight, null, Modifier.size(18.dp), tint = Pts.line2)
+                }
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    PtsPill("$active active", active = active > 0)
+                    PtsPill("$failed failed", danger = failed > 0)
+                    PtsPill("${completed.size} completed")
+                }
+                Text(
+                    if (active > 0) "Jobs are moving through the download and transfer stages." else "No jobs are running right now.",
+                    style = MaterialTheme.typography.bodySmall, color = Pts.muted
+                )
+            }
+        }
+    }
+}
+
+private val stageOrder = listOf("queued", "dispatched", "downloading", "compressing", "uploading", "to_pi", "failed", "done")
+private fun stageLabel(stage: String) = when (stage) {
+    "to_pi" -> "To Pi"; "done" -> "Completed"; "dispatched" -> "Starting"; else -> stage.replaceFirstChar { it.uppercase() }
+}
+
+@Composable
+fun QueueScreen(
+    jobs: List<JSONObject>,
+    completed: List<JSONObject>,
+    stage: String,
+    onStage: (String) -> Unit,
+    onRefresh: () -> Unit,
+    onRetry: (String) -> Unit,
+    onEdit: (String) -> Unit,
+    onDelete: (String) -> Unit,
+    onCancelStage: (String, List<String>) -> Unit
+) {
+    var confirmStage by remember { mutableStateOf<String?>(null) }
+    var snapshot by remember { mutableStateOf<List<String>>(emptyList()) }
+    val visible = if (stage == "done") completed else jobs.filter { it.optString("stage", "queued") == stage }
+    val stageName = stageLabel(stage)
+    if (confirmStage != null) {
+        var phrase by remember(confirmStage) { mutableStateOf("") }
+        PtsConfirmDialog(
+            "Cancel ${stageLabel(confirmStage!!).lowercase()} jobs",
+            "Delete the ${snapshot.size} job${if (snapshot.size == 1) "" else "s"} shown when you opened this dialog? This cannot be undone. Type ${stageName.uppercase()} to confirm.",
+            "Delete ${snapshot.size}",
+            destructive = true,
+            confirmEnabled = phrase.equals(stageName, true) && snapshot.isNotEmpty(),
+            onConfirm = { val s = confirmStage!!; val ids = snapshot; confirmStage = null; onCancelStage(s, ids) },
+            onDismiss = { confirmStage = null }
+        ) {
+            PtsField(phrase, { phrase = it }, "${stageName.uppercase()} to confirm", Modifier.fillMaxWidth())
+        }
+    }
+    LazyColumn(
+        contentPadding = PaddingValues(start = 16.dp, end = 16.dp, bottom = 20.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp)
+    ) {
+        item {
+            PtsPage("Queue", "${jobs.size} active · ${completed.size} completed") {
+                PtsIconAction(PtsIcons.Refresh, "Refresh queue", onRefresh, tint = Pts.muted)
+            }
+        }
+        item {
+            Column(verticalArrangement = Arrangement.spacedBy(7.dp)) {
+                stageOrder.chunked(4).forEach { row ->
+                    Row(horizontalArrangement = Arrangement.spacedBy(7.dp)) {
+                        row.forEach { s ->
+                            val count = if (s == "done") completed.size else jobs.count { it.optString("stage", "queued") == s }
+                            StageTile(stageLabel(s), count, stage == s, s, Modifier.weight(1f)) { onStage(s) }
+                        }
+                        repeat(4 - row.size) { Spacer(Modifier.weight(1f)) }
+                    }
+                }
+            }
+        }
+        item {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(stageName, style = MaterialTheme.typography.titleLarge, color = Pts.text, modifier = Modifier.weight(1f))
+                Text("${visible.size}", style = MaterialTheme.typography.titleMedium, color = Pts.accent)
+                if (stage != "done" && visible.isNotEmpty()) {
+                    Spacer(Modifier.width(10.dp))
+                    PtsSecondaryButton("Cancel all", Modifier.widthIn(max = 132.dp), danger = true) {
+                        snapshot = visible.mapNotNull { it.optString("job_id").takeIf(String::isNotEmpty) }
+                        confirmStage = stage
+                    }
+                }
+            }
+        }
+        if (visible.isEmpty()) {
+            item { PtsEmpty("No ${stageName.lowercase()} jobs", "Jobs appear here as the pipeline moves them between stages.", icon = PtsIcons.Queue) }
+        }
+        items(visible) { job ->
+            QueueJobRow(
+                job = job,
+                onRetry = { onRetry(job.optString("job_id")) },
+                onEdit = { onEdit(job.optString("job_id")) },
+                onDelete = { onDelete(job.optString("job_id")) }
+            )
+        }
+    }
+}
+
+@Composable
+private fun StageTile(label: String, count: Int, active: Boolean, stage: String, modifier: Modifier = Modifier, onClick: () -> Unit) {
+    val tint = when (stage) { "failed" -> Pts.danger; "done" -> Pts.ok; else -> Pts.accent }
+    Box(
+        modifier.height(58.dp).clip(RoundedCornerShape(13.dp))
+            .background(if (active) Pts.accentSoft else Pts.card)
+            .border(2.dp, if (active) Pts.accent else Pts.line, RoundedCornerShape(13.dp))
+            .clickable(onClick = onClick),
+        contentAlignment = Alignment.Center
+    ) {
+        Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(1.dp)) {
+            Text(label, style = MaterialTheme.typography.labelSmall, color = if (active) Pts.accent else Pts.muted, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text("$count", fontFamily = Nunito, fontWeight = FontWeight.Black, fontSize = 15.sp, color = if (count > 0) tint else Pts.muted)
+        }
+    }
+}
+
+@Composable
+private fun QueueJobRow(job: JSONObject, onRetry: () -> Unit, onEdit: () -> Unit, onDelete: () -> Unit) {
+    val stage = job.optString("stage", "queued")
+    val progress = (job.optDouble("progress") / 100).toFloat()
+    val failed = stage == "failed"
+    val done = stage == "done"
+    val tags = buildList {
+        if (job.optInt("season") > 0) add("S%02dE%02d".format(job.optInt("season"), job.optInt("episode")))
+        if (job.optInt("year") > 0) add(job.optInt("year").toString())
+        add(if (job.optString("type") == "series") "series" else "movie")
+    }
+    PtsCard(Modifier.fillMaxWidth(), padding = 13.dp, borderColor = when { failed -> Pts.danger.copy(alpha = .7f); done -> Pts.ok.copy(alpha = .6f); else -> Pts.line }) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                Text(job.optString("title").ifBlank { job.optString("job_id") }, style = MaterialTheme.typography.titleSmall, color = Pts.text, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text("· ${tags.joinToString(" · ")}", style = MaterialTheme.typography.labelSmall, color = Pts.muted, maxLines = 1)
+            }
+            if (failed) PtsIconAction(PtsIcons.Retry, "Retry", onRetry, tint = Pts.accent, size = 34.dp)
+            PtsIconAction(PtsIcons.Edit, "Edit link", onEdit, tint = Pts.muted, size = 34.dp)
+            PtsIconAction(PtsIcons.Close, "Remove", onDelete, tint = Pts.danger, size = 34.dp)
+        }
+        PtsProgressBar(if (done) 1f else progress, tint = when { failed -> Pts.danger; done -> Pts.ok; stage == "downloading" -> Pts.spark; else -> Pts.accent })
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(stageLabel(stage), style = MaterialTheme.typography.labelMedium, color = when { failed -> Pts.danger; done -> Pts.ok; else -> Pts.text })
+            Text(
+                " · " + listOfNotNull(
+                    job.optString("message").takeIf { it.isNotBlank() },
+                    job.optString("error").takeIf { it.isNotBlank() && !failed },
+                    if (progress > 0) "${(progress * 100).toInt()}%" else null
+                ).joinToString(" · "),
+                style = MaterialTheme.typography.labelSmall, color = Pts.muted, maxLines = 1, overflow = TextOverflow.Ellipsis
+            )
+        }
+    }
+}
+
+@Composable
+fun SearchScreen(query: String, onQuery: (String) -> Unit, results: List<JSONObject>, loading: Boolean) {
+    LazyColumn(
+        contentPadding = PaddingValues(start = 16.dp, end = 16.dp, bottom = 20.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp)
+    ) {
+        item { PtsPage("Download", "Find a title for the pipeline") }
+        item { PtsErrorBanner("Search works. Adding jobs from the native app is disabled until source selection and ZIP preflight are verified end to end.") }
+        item { PtsSearchField(query, onQuery, "Title or IMDb ID") }
+        if (loading) item {
+            Column(verticalArrangement = Arrangement.spacedBy(5.dp)) {
+                PtsProgressBar(0f)
+                Text("Searching…", style = MaterialTheme.typography.labelSmall, color = Pts.muted)
+            }
+        }
+        if (query.length >= 2 && results.isEmpty() && !loading) item {
+            PtsEmpty("No results", "Try the full title or an IMDb ID.", icon = PtsIcons.Search)
+        }
+        items(results) { result ->
+            PtsCard(Modifier.fillMaxWidth(), padding = 10.dp) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Box(Modifier.width(54.dp).height(80.dp).clip(RoundedCornerShape(9.dp)).background(Pts.soft).border(1.dp, Pts.line, RoundedCornerShape(9.dp))) {
+                        val poster = result.optString("poster")
+                        if (poster.startsWith("https://")) AsyncImage(poster, null, Modifier.fillMaxSize(), contentScale = androidx.compose.ui.layout.ContentScale.Crop)
+                        else Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                            Text(result.optString("title").take(1).uppercase(), fontFamily = Nunito, fontWeight = FontWeight.Black, color = Pts.accent)
+                        }
+                    }
+                    Column(Modifier.weight(1f).padding(start = 12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        Text(result.optString("title"), style = MaterialTheme.typography.titleSmall, color = Pts.text, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                        Text(
+                            listOfNotNull(result.optString("year").takeIf { it.isNotBlank() }, result.optString("type").takeIf { it.isNotBlank() }).joinToString(" · "),
+                            style = MaterialTheme.typography.labelSmall, color = Pts.muted
+                        )
+                    }
+                    PtsPill(result.optString("type").ifBlank { "title" })
+                }
+            }
+        }
+    }
+}
+
+// ---------- files ----------
+
+@Composable
+fun FilesScreen(
+    device: String,
+    path: String,
+    entries: List<JSONObject>,
+    loading: Boolean,
+    onDevice: (String) -> Unit,
+    onPath: (String) -> Unit,
+    onRefresh: () -> Unit,
+    onDownload: (String) -> Unit,
+    onDelete: (JSONObject) -> Unit,
+    onMkdir: (String) -> Unit
+) {
+    var mkdir by remember { mutableStateOf(false) }
+    var folderName by remember { mutableStateOf("") }
+    var deleteEntry by remember { mutableStateOf<JSONObject?>(null) }
+    if (mkdir) {
+        PtsConfirmDialog(
+            "New folder", "Create a folder inside /${path.ifBlank { "root" }}.",
+            "Create", confirmEnabled = folderName.isNotBlank() && '/' !in folderName && '\\' !in folderName,
+            onConfirm = { onMkdir(folderName.trim()); folderName = ""; mkdir = false },
+            onDismiss = { mkdir = false }
+        ) { PtsField(folderName, { folderName = it }, "Folder name", Modifier.fillMaxWidth()) }
+    }
+    deleteEntry?.let { entry ->
+        PtsConfirmDialog(
+            "Delete file?", "${entry.optString("name")} will be removed from ${device.uppercase()}. This cannot be undone.",
+            "Delete", destructive = true,
+            onConfirm = { onDelete(entry); deleteEntry = null }, onDismiss = { deleteEntry = null }
+        )
+    }
+    LazyColumn(
+        contentPadding = PaddingValues(start = 16.dp, end = 16.dp, bottom = 20.dp),
+        verticalArrangement = Arrangement.spacedBy(9.dp)
+    ) {
+        item { PtsPage("Files", "Browse storage on the VPS and Raspberry Pi") }
+        item { PtsSegmented(listOf("vps" to "VPS", "pi" to "Raspberry Pi"), device, onDevice) }
+        item {
+            PtsCard(Modifier.fillMaxWidth(), padding = 11.dp) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    PtsIconAction(PtsIcons.Up, "Up one folder", {
+                        onPath(if (path.isBlank()) "" else path.substringBeforeLast('/', ""))
+                    }, tint = if (path.isBlank()) Pts.line2 else Pts.text, size = 34.dp)
+                    Text("/${path}", style = MaterialTheme.typography.bodySmall, color = Pts.text,
+                        modifier = Modifier.weight(1f).padding(horizontal = 4.dp), maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    PtsIconAction(PtsIcons.Refresh, "Refresh", onRefresh, tint = Pts.muted, size = 34.dp)
+                }
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    PtsSecondaryButton("New folder", Modifier.weight(1f), icon = PtsIcons.FolderPlus) { mkdir = true }
+                }
+            }
+        }
+        if (loading) item { PtsProgressBar(0f) }
+        if (!loading && entries.isEmpty()) item {
+            PtsEmpty("This folder is empty", "Create a folder or use the web admin to upload files.", icon = PtsIcons.Browse)
+        }
+        items(entries, key = { it.optString("name") }) { entry ->
+            val isDir = entry.optBoolean("is_dir")
+            PtsCard(Modifier.fillMaxWidth(), padding = 10.dp, onClick = if (isDir) {
+                { onPath(if (path.isBlank()) entry.optString("name") else "$path/${entry.optString("name")}") }
+            } else null) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Box(
+                        Modifier.size(40.dp).clip(RoundedCornerShape(11.dp)).background(Pts.soft).border(1.dp, Pts.line, RoundedCornerShape(11.dp)),
+                        contentAlignment = Alignment.Center
+                    ) { Icon(if (isDir) PtsIcons.Browse else PtsIcons.Film, null, Modifier.size(20.dp), tint = Pts.accent) }
+                    Column(Modifier.weight(1f).padding(horizontal = 11.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                        Text(entry.optString("name"), style = MaterialTheme.typography.titleSmall, color = Pts.text, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        Text(if (isDir) "Folder" else formatBytes(entry.optLong("size")), style = MaterialTheme.typography.labelSmall, color = Pts.muted)
+                    }
+                    if (!isDir) PtsIconAction(PtsIcons.Download, "Download", { onDownload(entry.optString("name")) }, tint = Pts.text, size = 34.dp)
+                    PtsIconAction(PtsIcons.More, "More", { deleteEntry = entry }, tint = Pts.muted, size = 34.dp)
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun TransfersScreen(ops: List<JSONObject>, onCancel: (String) -> Unit) {
+    LazyColumn(
+        contentPadding = PaddingValues(start = 16.dp, end = 16.dp, bottom = 20.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp)
+    ) {
+        item { PtsPage("Transfers", "Uploads, copies and archive work on the VPS") }
+        if (ops.isEmpty()) item { PtsEmpty("No transfers", "Background file operations will appear here.", icon = PtsIcons.Transfers) }
+        items(ops) { op ->
+            val running = op.optString("state") == "running"
+            PtsCard(Modifier.fillMaxWidth(), padding = 13.dp) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Box(Modifier.size(38.dp).clip(RoundedCornerShape(11.dp)).background(Pts.soft), contentAlignment = Alignment.Center) {
+                        Icon(if (op.optString("kind") == "upload") PtsIcons.Upload else PtsIcons.Transfers, null, Modifier.size(19.dp), tint = Pts.accent)
+                    }
+                    Column(Modifier.weight(1f).padding(horizontal = 11.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                        Text(op.optString("detail").ifBlank { op.optString("kind") }, style = MaterialTheme.typography.titleSmall, color = Pts.text, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        Text("${op.optString("kind").replaceFirstChar { it.uppercase() }} · ${op.optString("state")}", style = MaterialTheme.typography.labelSmall, color = if (running) Pts.accent else Pts.muted)
+                    }
+                    if (running) PtsIconAction(PtsIcons.Close, "Cancel transfer", { onCancel(op.optString("id")) }, tint = Pts.danger, size = 34.dp)
+                    else PtsPill(op.optString("state"), active = op.optString("state") == "done")
+                }
+                if (running) PtsProgressBar((op.optDouble("pct") / 100).toFloat())
+                if (op.optString("err").isNotBlank()) Text(op.optString("err"), style = MaterialTheme.typography.labelSmall, color = Pts.danger)
+            }
+        }
+    }
+}
+
+// ---------- settings ----------
+
+@Composable
+fun SettingsScreen(
+    user: JSONObject,
+    users: List<JSONObject>,
+    githubConfigured: Boolean,
+    onUpdate: () -> Unit,
+    onSignOut: () -> Unit
+) {
+    val isAdmin = user.optString("role") == "admin"
+    LazyColumn(
+        contentPadding = PaddingValues(start = 16.dp, end = 16.dp, bottom = 20.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp)
+    ) {
+        item { PtsPage("Settings", "Pipeline, accounts and app information") }
+        item {
+            PtsCard(Modifier.fillMaxWidth()) {
+                Text("Account", style = MaterialTheme.typography.titleMedium, color = Pts.text)
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Box(Modifier.size(44.dp).background(Pts.soft, CircleShape).border(2.dp, Pts.line2, CircleShape), contentAlignment = Alignment.Center) {
+                        Text(user.optString("name").ifBlank { user.optString("username") }.take(1).uppercase(), fontFamily = Nunito, fontWeight = FontWeight.Black, color = Pts.accent)
+                    }
+                    Column(Modifier.weight(1f).padding(start = 11.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                        Text(user.optString("name").ifBlank { user.optString("username") }, style = MaterialTheme.typography.bodyLarge, color = Pts.text)
+                        Text("@" + user.optString("username"), style = MaterialTheme.typography.labelSmall, color = Pts.muted)
+                    }
+                    PtsPill(user.optString("role").ifBlank { "user" }, active = isAdmin)
+                }
+            }
+        }
+        if (isAdmin) item {
+            PtsCard(Modifier.fillMaxWidth()) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text("Accounts", style = MaterialTheme.typography.titleMedium, color = Pts.text, modifier = Modifier.weight(1f))
+                    PtsPill("${users.size}")
+                }
+                users.take(8).forEach { u ->
+                    Row(Modifier.fillMaxWidth().padding(vertical = 5.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Text(u.optString("name").ifBlank { u.optString("username") }, style = MaterialTheme.typography.bodyMedium, color = Pts.text, modifier = Modifier.weight(1f))
+                        PtsPill(u.optString("role").ifBlank { "user" }, active = u.optString("role") == "admin")
+                        if (!u.optBoolean("is_active", true)) { Spacer(Modifier.width(5.dp)); PtsPill("off", danger = true) }
+                    }
+                }
+                Text("Create, disable and delete accounts from the web admin. Native account editing is intentionally not exposed yet.",
+                    style = MaterialTheme.typography.labelSmall, color = Pts.muted)
+            }
+        }
+        item {
+            PtsCard(Modifier.fillMaxWidth()) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Box(Modifier.size(38.dp).clip(RoundedCornerShape(11.dp)).background(if (githubConfigured) Pts.okSoft else Pts.dangerSoft), contentAlignment = Alignment.Center) {
+                        Icon(PtsIcons.Shield, null, Modifier.size(19.dp), tint = if (githubConfigured) Pts.ok else Pts.danger)
+                    }
+                    Column(Modifier.weight(1f).padding(start = 11.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                        Text("GitHub pipeline", style = MaterialTheme.typography.titleSmall, color = Pts.text)
+                        Text(if (githubConfigured) "Configured and reachable" else "Status unavailable", style = MaterialTheme.typography.labelSmall, color = Pts.muted)
+                    }
+                    PtsPill(if (githubConfigured) "ready" else "check", active = githubConfigured, danger = !githubConfigured)
+                }
+                Text("Runner accounts and tokens remain server-side and administrator-only.", style = MaterialTheme.typography.labelSmall, color = Pts.muted)
+            }
+        }
+        item {
+            PtsCard(Modifier.fillMaxWidth()) {
+                Text("About", style = MaterialTheme.typography.titleMedium, color = Pts.text)
+                Text("PTS Library ${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})", style = MaterialTheme.typography.bodyMedium, color = Pts.text)
+                Text("Native Android client. Media playback uses HEVC; offline copies are stored in app-private storage.", style = MaterialTheme.typography.labelSmall, color = Pts.muted)
+                PtsSecondaryButton("Check for updates", Modifier.fillMaxWidth(), icon = PtsIcons.Refresh) { onUpdate() }
+            }
+        }
+        item { PtsSecondaryButton("Sign out", Modifier.fillMaxWidth(), icon = PtsIcons.Logout, danger = true) { onSignOut() } }
+    }
+}
