@@ -29,6 +29,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
@@ -385,7 +386,7 @@ fun TitleScreen(
                     PtsSecondaryButton(
                         if ("${title.id}_0" in savedKeys) "Downloaded" else "Save offline",
                         Modifier.fillMaxWidth(), icon = if ("${title.id}_0" in savedKeys) PtsIcons.Check else PtsIcons.Download,
-                        enabled = downloading.isBlank() && "${title.id}_0" !in savedKeys
+                        enabled = "${title.id}_0" !in savedKeys
                     ) { onDownload(null) }
                 }
             }
@@ -503,6 +504,7 @@ fun ProfileScreen(user: JSONObject, savedCount: Int, onDownloads: () -> Unit, on
     val name = user.optString("name").ifBlank { user.optString("username") }
     val role = user.optString("role")
     LazyColumn(
+        modifier = Modifier.testTag("profile-list"),
         contentPadding = PaddingValues(start = 16.dp, end = 16.dp, bottom = 20.dp),
         verticalArrangement = Arrangement.spacedBy(10.dp)
     ) {
@@ -830,7 +832,7 @@ fun SearchScreen(query: String, onQuery: (String) -> Unit, results: List<JSONObj
         contentPadding = PaddingValues(start = 16.dp, end = 16.dp, bottom = 20.dp),
         verticalArrangement = Arrangement.spacedBy(10.dp)
     ) {
-        item { PtsPage("Download", "Find a title for the pipeline") }
+        item { PtsPage("Ingest", "Administrator pipeline metadata search · not device Downloads") }
         item {
             PtsCard(Modifier.fillMaxWidth(), padding = 14.dp) {
                 Row(verticalAlignment = Alignment.CenterVertically) {

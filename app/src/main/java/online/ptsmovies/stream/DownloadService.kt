@@ -58,7 +58,7 @@ class DownloadRepository internal constructor(private val context: Context, priv
     fun enqueue(title: Title, episode: Episode?) {
         require(episode?.container != "hls" && (episode != null || title.container != "hls")) { "This HLS title is not available as an authorized offline MP4" }
         val t = DownloadTask(title, episode)
-        if (mutable.value.saved.any { it.key == t.key } || mutable.value.tasks.any { it.key == t.key && it.status in listOf("queued", "downloading") }) return
+        if (mutable.value.saved.any { it.key == t.key } || mutable.value.tasks.any { it.key == t.key && it.status in listOf("queued", "downloading", "cancelling") }) return
         update { s -> s.copy(tasks = s.tasks.filterNot { it.key == t.key } + t) }
         startService()
     }
@@ -70,22 +70,30 @@ class DownloadRepository internal constructor(private val context: Context, priv
         if (mutable.value.tasks.none { it.key == key && it.status in listOf("paused", "failed") }) return
         task(key) { it.copy(status = "queued", speed = 0, error = "") }; startService()
     }
-    fun pause(key: String) {
-        val active = mutable.value.tasks.firstOrNull { it.key == key }?.status == "downloading"
+    fun pause(key: String): Unit = synchronized(lock) {
+        val status = mutable.value.tasks.firstOrNull { it.key == key }?.status
+        if (status !in listOf("queued", "downloading")) return@synchronized
+        val active = status == "downloading"
         task(key) { it.copy(status = "paused", speed = 0) }
         if (active) { job?.cancel(); call?.cancel() }
     }
     fun cancel(key: String) {
+        val metadata = mutable.value.tasks.firstOrNull { it.key == key } ?: return
         val running = if (mutable.value.tasks.any { it.key == key && it.status == "downloading" }) job else null
         pause(key)
         task(key) { it.copy(status = "cancelling", speed = 0) }
-        scope.launch { running?.join(); store.discardPartial(key); update { s -> s.copy(tasks = s.tasks.filterNot { it.key == key }) } }
+        scope.launch {
+            running?.join(); store.discardPartial(key)
+            store.find(metadata.title, metadata.episode)?.let { store.remove(it) }
+            update { s -> s.copy(tasks = s.tasks.filterNot { it.key == key }, saved = store.list()) }
+        }
     }
     fun pauseAll() { mutable.value.tasks.filter { it.status in listOf("queued", "downloading") }.forEach { pause(it.key) } }
     fun remove(saved: SavedVideo) { store.remove(saved); update { s -> s.copy(saved = store.list(), tasks = s.tasks.filterNot { it.key == saved.key }) } }
     fun refresh() { update { it.copy(saved = store.list()) } }
     fun runNext(onStatus: (DownloadTask?) -> Unit): Unit = synchronized(lock) {
-        if (job?.isActive == true) return@synchronized
+        // A cancelling worker still owns its partial file until finally completes.
+        if (job != null) return@synchronized
         val next = mutable.value.tasks.firstOrNull { it.status == "queued" }
         if (next == null) { onStatus(null); return@synchronized }
         task(next.key) { it.copy(status = "downloading", error = "") }
@@ -135,7 +143,7 @@ class DownloadService : Service() {
         repository = DeviceDownloads.forOwner(this, ApiProvider.create(), owner)
         repository!!.runNext { task ->
             if (task == null) { stopForeground(STOP_FOREGROUND_REMOVE); stopSelf(startId) }
-            else manager.notify(3001, notification(task))
+            else try { manager.notify(3001, notification(task)) } catch (_: SecurityException) { /* The foreground service still owns the transfer when notification visibility is denied. */ }
         }
         return START_NOT_STICKY
     }

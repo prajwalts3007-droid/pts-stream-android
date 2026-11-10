@@ -48,22 +48,29 @@ class AppFlowTest {
     private val deletedJobs = ConcurrentLinkedQueue<String>()
     private val fileCommands = ConcurrentLinkedQueue<Pair<String, JSONObject>>()
     @Volatile private var role = "user"
+    @Volatile private var profileName = "Test Viewer"
     private lateinit var media: ByteArray
+    private lateinit var avatar: ByteArray
 
     @Before fun setup() {
         media = InstrumentationRegistry.getInstrumentation().context.assets.open("synthetic-hevc.mp4").use { it.readBytes() }
+        val bitmap = android.graphics.Bitmap.createBitmap(64, 64, android.graphics.Bitmap.Config.ARGB_8888)
+        bitmap.eraseColor(android.graphics.Color.CYAN)
+        val output = java.io.ByteArrayOutputStream(); bitmap.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, output); bitmap.recycle()
+        avatar = output.toByteArray()
         server = MockWebServer()
         server.dispatcher = object : Dispatcher() {
             override fun dispatch(request: RecordedRequest): MockResponse {
                 val path = request.requestUrl!!.encodedPath.removePrefix("/api/v1")
                 fun json(body: String) = MockResponse().setHeader("Content-Type", "application/json").setBody(body)
-                val user = """{"user":{"id":90011,"name":"Test Viewer","username":"viewer","role":"$role","avatar":"/api/v1/auth/avatar/test.png"}}"""
+                val user = JSONObject().put("user", JSONObject().put("id", 90011).put("name", profileName).put("username", "viewer")
+                    .put("role", role).put("avatar", "/api/v1/auth/avatar/test.png")).toString()
                 if (path == "/auth/csrf") return json("""{"csrf_token":"test-csrf"}""")
                 if (path == "/auth/login") { signedIn.set(true); return json(user) }
                 if (!signedIn.get()) return json("""{"error":"Unauthorized"}""").setResponseCode(401)
                 if (path == "/auth/avatar/test.png") {
                     avatarCalls.incrementAndGet()
-                    return MockResponse().setHeader("Content-Type", "image/png").setBody(Buffer().write(android.util.Base64.decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aRZkAAAAASUVORK5CYII=", android.util.Base64.DEFAULT)))
+                    return MockResponse().setHeader("Content-Type", "image/png").setBody(Buffer().write(avatar))
                 }
                 if (path.startsWith("/admin/") || path == "/queue" || path == "/system/metrics") {
                     adminCalls.incrementAndGet()
@@ -225,7 +232,8 @@ class AppFlowTest {
         capture("app-viewer-downloads")
         pressBack()
         ui.onNodeWithContentDescription("Open profile").performClick()
-        ui.onNodeWithText("Sign out").performScrollTo().performClick()
+        ui.onNodeWithTag("profile-list").performScrollToNode(hasText("Sign out"))
+        ui.onNodeWithText("Sign out").performClick()
         waitForText("Welcome back")
     }
 
@@ -365,6 +373,8 @@ class AppFlowTest {
         launchLoggedIn(); openMovie(); ui.onNodeWithText("Play").performClick(); waitForMovingPlayback()
         pauseIfPlaying()
         ui.onNodeWithContentDescription("Fullscreen").performClick()
+        val system = androidx.test.uiautomator.UiDevice.getInstance(InstrumentationRegistry.getInstrumentation())
+        system.wait(androidx.test.uiautomator.Until.findObject(androidx.test.uiautomator.By.text("Got it")), 3000)?.click()
         ui.waitUntil(10000) { ui.onAllNodesWithContentDescription("Exit fullscreen").fetchSemanticsNodes().isNotEmpty() }
         capture("watch-fullscreen")
         pressBack()
@@ -379,6 +389,9 @@ class AppFlowTest {
         ui.onNodeWithText("Save offline").performScrollTo().performClick()
         waitForText("My Downloads")
         ui.waitUntil(15000) { ui.onAllNodesWithText("/s · ETA", substring = true).fetchSemanticsNodes().isNotEmpty() }
+        ui.waitUntil(15000) { ui.onAllNodesWithText("/s · ETA", substring = true).fetchSemanticsNodes().any { node ->
+            node.config.getOrNull(SemanticsProperties.Text).orEmpty().any { !it.text.startsWith("0 B/s") && !it.text.contains("calculating") }
+        } }
         capture("native-download-progress")
         scenario!!.recreate()
         waitForText("My Downloads")
@@ -403,6 +416,12 @@ class AppFlowTest {
     @Test fun nativeThemesViewsAvatarAndUpdatePageAreAvailable() {
         launchLoggedIn()
         ui.waitUntil(10000) { avatarCalls.get() > 0 }
+        ui.waitUntil(10000) {
+            val bounds = ui.onNodeWithTag("profile-avatar").fetchSemanticsNode().boundsInRoot
+            val image = checkNotNull(InstrumentationRegistry.getInstrumentation().uiAutomation.takeScreenshot())
+            val pixel = image.getPixel(bounds.center.x.toInt(), bounds.center.y.toInt()); image.recycle()
+            android.graphics.Color.green(pixel) > 200 && android.graphics.Color.blue(pixel) > 200 && android.graphics.Color.red(pixel) < 50
+        }
         ui.onNodeWithContentDescription("Movies").performClick()
         ui.onNodeWithText("List").performClick()
         ui.onNodeWithText("Synthetic HEVC").assertExists()
@@ -411,6 +430,12 @@ class AppFlowTest {
         capture("native-movies-list")
         ui.onNodeWithContentDescription("Open profile").performClick()
         ui.onNodeWithText("Light").performScrollTo().performClick()
+        ui.onNode(hasText("Light") and isSelected()).assertExists()
+        ui.waitUntil(5000) {
+            val image = checkNotNull(InstrumentationRegistry.getInstrumentation().uiAutomation.takeScreenshot())
+            val pixel = image.getPixel(10, image.height / 2); image.recycle()
+            android.graphics.Color.red(pixel) > 180 && android.graphics.Color.green(pixel) > 180
+        }
         capture("native-profile-light")
         ui.onNodeWithText("Check for updates").performScrollTo().performClick()
         waitForText("App updates")
@@ -421,11 +446,11 @@ class AppFlowTest {
     @Test fun playerGesturesHaveLiveFeedbackAndSeekWorks() {
         launchLoggedIn(); openMovie(); ui.onNodeWithText("Play").performClick(); waitForMovingPlayback(); pauseIfPlaying()
         ui.onNodeWithTag("player-gesture-zone").performTouchInput {
-            swipe(androidx.compose.ui.geometry.Offset(width * .14f, height * .68f), androidx.compose.ui.geometry.Offset(width * .14f, height * .28f), 400)
+            swipe(androidx.compose.ui.geometry.Offset(width * .14f, height * .58f), androidx.compose.ui.geometry.Offset(width * .14f, height * .28f), 400)
         }
         ui.onNodeWithTag("gesture-feedback").assertTextContains("Brightness", substring = true)
         ui.onNodeWithTag("player-gesture-zone").performTouchInput {
-            swipe(androidx.compose.ui.geometry.Offset(width * .88f, height * .68f), androidx.compose.ui.geometry.Offset(width * .88f, height * .28f), 400)
+            swipe(androidx.compose.ui.geometry.Offset(width * .88f, height * .58f), androidx.compose.ui.geometry.Offset(width * .88f, height * .28f), 400)
         }
         ui.onNodeWithTag("gesture-feedback").assertTextContains("Volume", substring = true)
         ui.onNodeWithTag("player-gesture-zone").performTouchInput {
@@ -447,5 +472,28 @@ class AppFlowTest {
         ui.onNodeWithTag("player-surface").assertExists()
         ui.onNodeWithText(before).assertExists()
         ui.onNodeWithContentDescription("Play playback").assertExists()
+    }
+
+    @Test fun deviceDownloadPauseResumeSurvivesLeavingItsPage() {
+        slowMedia.set(true); launchLoggedIn(); openMovie()
+        ui.onNodeWithText("Save offline").performScrollTo().performClick(); waitForText("My Downloads")
+        ui.waitUntil(10000) { ui.onAllNodesWithText("/s · ETA", substring = true).fetchSemanticsNodes().isNotEmpty() }
+        ui.onNodeWithText("Pause").performClick(); waitForText("Paused")
+        ui.onNodeWithContentDescription("Movies").performClick()
+        ui.onNodeWithContentDescription("Downloads").performClick(); waitForText("Paused")
+        ui.onNodeWithText("Resume").performClick()
+        ui.waitUntil(20000) { ui.onAllNodesWithContentDescription("Play").fetchSemanticsNodes().isNotEmpty() }
+        assertEquals(0, adminCalls.get())
+        capture("native-download-resumed")
+    }
+
+    @Test fun profileChangesOnWebRefreshWhenTheAppReturnsToForeground() {
+        launchLoggedIn()
+        ui.onNodeWithContentDescription("Open profile").performClick(); waitForText("Test Viewer")
+        scenario!!.moveToState(androidx.lifecycle.Lifecycle.State.CREATED)
+        profileName = "Updated on web"
+        scenario!!.moveToState(androidx.lifecycle.Lifecycle.State.RESUMED)
+        waitForText("Updated on web")
+        assertEquals(0, adminCalls.get())
     }
 }

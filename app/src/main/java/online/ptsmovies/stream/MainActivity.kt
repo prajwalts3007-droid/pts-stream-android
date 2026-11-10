@@ -6,7 +6,6 @@ import android.content.pm.PackageManager
 import android.content.res.Configuration
 import android.content.Intent
 import android.provider.OpenableColumns
-import android.media.AudioManager
 import android.media.MediaCodecList
 import android.os.Build
 import android.os.Bundle
@@ -25,8 +24,6 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.foundation.gestures.awaitEachGesture
-import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.material3.Icon
@@ -44,7 +41,6 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.input.pointer.pointerInput
-import androidx.compose.ui.input.pointer.positionChange
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
@@ -65,10 +61,8 @@ import androidx.media3.datasource.okhttp.OkHttpDataSource
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.ui.AspectRatioFrameLayout
 import androidx.media3.ui.PlayerView
-import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
-import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -76,7 +70,6 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.util.Locale
 import kotlin.math.abs
-import kotlin.math.roundToLong
 
 class MainActivity : ComponentActivity() {
     private val api = ApiProvider.create()
@@ -137,7 +130,6 @@ class MainActivity : ComponentActivity() {
     private var playing by mutableStateOf(false)
     private var player: ExoPlayer? = null
     private var inPip by mutableStateOf(false)
-    private var downloadJob: Job? = null
     private var downloading by mutableStateOf("")
     private var downloadPercent by mutableIntStateOf(0)
     private var savedVideos by mutableStateOf(emptyList<SavedVideo>())
@@ -163,7 +155,6 @@ class MainActivity : ComponentActivity() {
     private var filesLoading by mutableStateOf(false)
     private var ops by mutableStateOf(emptyList<JSONObject>())
     private var relayJobs by mutableStateOf(emptyList<JSONObject>())
-    private var restoredNavigation: Bundle? = null
     private var fileClipboard by mutableStateOf<FileClipboard?>(null)
     private var fileEditor by mutableStateOf<FileEditor?>(null)
     private var fileBusy by mutableStateOf(false)
@@ -189,7 +180,6 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        restoredNavigation = savedInstanceState
         if (Build.VERSION.SDK_INT >= 33 && ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
             askNotifications.launch(Manifest.permission.POST_NOTIFICATIONS)
         }
@@ -207,7 +197,7 @@ class MainActivity : ComponentActivity() {
         scope.launch { restoreSession() }
         startAccountSync()
         setContent {
-            PtsTheme(device.theme) {
+            PtsTheme(if (playing) "dark" else device.theme) {
                 val bar = Pts.bg
                 val light = MaterialTheme.colorScheme.background.luminance() > .5f
                 SideEffect {
@@ -875,7 +865,7 @@ class MainActivity : ComponentActivity() {
             val listener = object : Player.Listener {
                 override fun onRenderedFirstFrame() { firstFrame = true }
                 override fun onPlayerError(exception: PlaybackException) {
-                    if (saved == null && !fallback) {
+                    if (saved == null && !fallback && exception.errorCode in 2000..2999) {
                         resumeAt = exo.currentPosition.coerceAtLeast(0)
                         fallback = true
                         controls = true
@@ -1038,7 +1028,7 @@ class MainActivity : ComponentActivity() {
                 if (ended && nextEpisode != null && !cancelNext) UpNextCard(nextEpisode, if (autoplay) nextCountdown else null, { selectEpisode(nextEpisode) }, { cancelNext = true })
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     PtsSecondaryButton("Mark as played", Modifier.weight(1f), icon = PtsIcons.Check) { markPlayed(title) }
-                    PtsSecondaryButton(if (downloaded) "Downloaded" else "Save offline", Modifier.weight(1f), icon = if (downloaded) PtsIcons.Check else PtsIcons.Download, enabled = downloading.isBlank() && !downloaded) { startDownload(title, ep) }
+                    PtsSecondaryButton(if (downloaded) "Downloaded" else "Save offline", Modifier.weight(1f), icon = if (downloaded) PtsIcons.Check else PtsIcons.Download, enabled = !downloaded) { startDownload(title, ep) }
                 }
                 if (downloading.isNotBlank()) {
                     Text("Saving $downloading · $downloadPercent%", style = MaterialTheme.typography.bodySmall, color = Pts.accent)
@@ -1155,13 +1145,6 @@ class MainActivity : ComponentActivity() {
 
     override fun onSaveInstanceState(outState: Bundle) {
         persistNavigation()
-        outState.putString("mode", mode)
-        outState.putString("hubTab", hubTab)
-        outState.putString("filesTab", filesTab)
-        outState.putString("streamTab", streamTab)
-        outState.putString("filesPath", filesPath)
-        outState.putString("filesDevice", filesDevice)
-        outState.putLong("selected", selected?.id ?: 0L)
         super.onSaveInstanceState(outState)
     }
 
@@ -1184,7 +1167,6 @@ class MainActivity : ComponentActivity() {
             queries?.keys()?.forEach { browseQueries[it] = queries.optString(it) }
         }
         navigationRestored = true
-        restoredNavigation = null
     }
 
     private fun persistNavigation() {

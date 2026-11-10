@@ -47,6 +47,8 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.selected
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
@@ -114,7 +116,7 @@ fun PtsTopBar(title: String, initial: String, onAvatar: () -> Unit, onTitle: () 
             maxLines = 1, overflow = TextOverflow.Ellipsis
         )
         Box(
-            Modifier.size(39.dp).background(Pts.soft, CircleShape)
+            Modifier.size(39.dp).testTag("profile-avatar").background(Pts.soft, CircleShape)
                 .border(2.dp, Pts.line2, CircleShape)
                 .semantics { contentDescription = "Open profile" }
                 .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null, onClick = onAvatar),
@@ -325,7 +327,7 @@ fun PtsSegmented(options: List<Pair<String, String>>, selected: String, onSelect
             val active = value == selected
             val bg by animateColorAsState(if (active) Pts.accent else Color.Transparent, label = "seg")
             Box(
-                Modifier.weight(1f).height(44.dp).clip(RoundedCornerShape(12.dp)).background(bg)
+                Modifier.weight(1f).height(44.dp).clip(RoundedCornerShape(12.dp)).background(bg).semantics { this.selected = active }
                     .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null) { onSelect(value) },
                 contentAlignment = Alignment.Center
             ) {

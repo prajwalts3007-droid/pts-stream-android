@@ -75,6 +75,7 @@ class OfflineStore(private val context: Context, private val api: PtsApi, ownerI
         val dest = File(root, "$id.mp4")
         val sourceInfo = File(root, "$id.source")
         suspend fun transfer(allowFallback: Boolean) {
+            currentCoroutineContext().ensureActive()
             val req = Request.Builder().url(api.streamUrl(title, episode, allowFallback))
             val info = if (resume) runCatching { JSONObject(sourceInfo.readText()) }.getOrNull() else null
             val validator = info?.optString("validator").orEmpty()
@@ -82,6 +83,7 @@ class OfflineStore(private val context: Context, private val api: PtsApi, ownerI
             if (offset > 0) req.header("Range", "bytes=$offset-").header("If-Range", validator)
             val call = api.http.newCall(req.build())
             onCall(call)
+            currentCoroutineContext().ensureActive()
             call.execute().use { response ->
                 if (!response.isSuccessful) throw IOException("Download HTTP ${response.code}")
                 val body = response.body ?: throw IOException("Empty response")
@@ -122,6 +124,7 @@ class OfflineStore(private val context: Context, private val api: PtsApi, ownerI
                     }
                 }
                 if (written != total) throw IOException("Incomplete transfer: $written of $total bytes")
+                currentCoroutineContext().ensureActive()
                 if (!partial.renameTo(dest)) throw IOException("Cannot finalize offline download")
                 sourceInfo.delete()
             }
