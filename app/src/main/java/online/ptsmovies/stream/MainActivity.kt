@@ -1072,13 +1072,13 @@ class MainActivity : ComponentActivity() {
                          view.doOnLayout { if (view.player === exo) { exo.prepare(); exo.playWhenReady = startPlaying } }
                      }
                   }, modifier = Modifier.fillMaxSize().graphicsLayer { scaleX = zoom; scaleY = zoom }) }
-                  if (!inPip && !locked) PlayerGestures(this@MainActivity, exo.currentPosition, duration,
+                   PlayerGestures(this@MainActivity, exo.currentPosition, duration,
                       onTap = { controls = !playingNow || !controls; interaction++ },
                      onSeekPreview = { seekPreview = it; touchControls() },
                      onSeek = { exo.seekTo(it); touchControls() },
                       onFeedback = { gestureFeedback = it; touchControls() }, zoom = zoom,
                       onZoom = { value -> zoom = value; gestureFeedback = "Zoom ${"%.2f".format(Locale.US, value)}×"; touchControls() },
-                      onZoomEnd = { if (abs(zoom - 1f) <= .04f) zoom = 1f; if (playbackPrefs.optString("zoom_mode") == "remember") playerPreference("zoom", zoom) })
+                       onZoomEnd = { if (abs(zoom - 1f) <= .04f) zoom = 1f; if (playbackPrefs.optString("zoom_mode") == "remember") playerPreference("zoom", zoom) }, enabled = !inPip && !locked) {
                  androidx.compose.animation.AnimatedVisibility(visible = controls && !inPip && !locked, enter = fadeIn(), exit = fadeOut(), modifier = Modifier.fillMaxSize()) {
                       Box(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.safeDrawing)) {
                           CinemaControls(ep?.let { "${title.title} · S${it.season}E${it.episode}" } ?: title.title,
@@ -1108,10 +1108,11 @@ class MainActivity : ComponentActivity() {
                         PtsSecondaryButton("Audio / CC", Modifier.weight(1f)) { showTracks = true }
                     }
                 }
-                if (landscape && !inPip && ended && nextEpisode != null && !cancelNext) Box(Modifier.align(Alignment.TopEnd).padding(12.dp).widthIn(max = 300.dp)) {
+                 if (landscape && !inPip && ended && nextEpisode != null && !cancelNext) Box(Modifier.align(Alignment.TopEnd).padding(12.dp).widthIn(max = 300.dp)) {
                     UpNextCard(nextEpisode, if (autoplay) nextCountdown else null, { selectEpisode(nextEpisode) }, { cancelNext = true })
-                }
-             } }
+                 }
+                 }
+              } }
              if (!landscape) {
              if (!hevcAvailable) PtsErrorBanner("This device may not support HEVC playback", modifier = Modifier.padding(12.dp))
               Column(Modifier.weight(1f).background(Pts.bg).windowInsetsPadding(WindowInsets.navigationBars).verticalScroll(rememberScrollState()).padding(16.dp), verticalArrangement = Arrangement.spacedBy(9.dp)) {

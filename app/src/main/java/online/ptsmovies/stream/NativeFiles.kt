@@ -7,6 +7,7 @@ import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
@@ -53,32 +54,6 @@ fun NativeFilesScreen(
             } else { pending = c; name = if (c.action == "rename") c.names.single() else "" }
         }
     }
-    menu?.let { entry ->
-        val filename = entry.optString("name")
-        val directory = entry.optBoolean("is_dir")
-        Dialog(onDismissRequest = { menu = null }) {
-            PtsCard(Modifier.fillMaxWidth().heightIn(max = 580.dp).verticalScroll(rememberScrollState()), padding = 16.dp) {
-                Text(filename, style = MaterialTheme.typography.titleLarge, color = Pts.text)
-                val actions = buildList {
-                    add(if (directory) "Open" to "open" else "Download" to "download")
-                    if (!directory && editableFile(filename)) add("Edit" to "edit")
-                    addAll(listOf("Cut" to "cut", "Copy" to "copy", "Rename" to "rename", "Zip" to "zip"))
-                    if (!directory && filename.endsWith(".zip", true)) add("Unzip" to "unzip")
-                    add("Delete" to "delete")
-                }
-                actions.forEach { (label, action) ->
-                    PtsSecondaryButton(label, Modifier.fillMaxWidth(), danger = action == "delete", enabled = !busy) {
-                        menu = null
-                        when (action) {
-                            "open" -> onPath(filePath(path, filename))
-                            "download" -> onDownload(filename)
-                            else -> request(command(action, listOf(filename)))
-                        }
-                    }
-                }
-            }
-        }
-    }
     pending?.let { c ->
         val input = c.action in setOf("mkdir", "touch", "rename")
         val title = when (c.action) { "mkdir" -> "New folder"; "touch" -> "New file"; "rename" -> "Rename"; "zip" -> "Zip"; "unzip" -> "Unzip"; "paste" -> "Paste"; else -> "Delete" }
@@ -102,7 +77,7 @@ fun NativeFilesScreen(
             }, onDismiss = { pending = null }
         ) { if (input) PtsField(name, { name = it }, "Name", Modifier.fillMaxWidth()) }
     }
-    LazyColumn(contentPadding = PaddingValues(start = 16.dp, end = 16.dp, bottom = 20.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+    LazyColumn(contentPadding = PaddingValues(start = 16.dp, end = 16.dp, bottom = 20.dp), verticalArrangement = Arrangement.spacedBy(0.dp)) {
         item { PtsPage("Browse") }
         item { PtsSegmented(listOf("vps" to "VPS", "pi" to "Raspberry Pi"), device, onDevice) }
         item {
@@ -120,37 +95,34 @@ fun NativeFilesScreen(
                 }
         }
         if (clipboard != null) item {
-            PtsCard(Modifier.fillMaxWidth(), padding = 12.dp) {
-                Text("${clipboard.paths.size} item(s) ${if (clipboard.mode == "cut") "cut" else "copied"} · ${clipboard.device.uppercase()}", style = MaterialTheme.typography.bodySmall, color = Pts.muted)
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    PtsPrimaryButton("Paste", Modifier.weight(1f), enabled = !busy) { request(command("paste")) }
-                    PtsSecondaryButton("Clear", Modifier.weight(1f), onClick = onClearClipboard)
-                }
+            Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(vertical = 8.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text("${clipboard.paths.size} item(s) ${if (clipboard.mode == "cut") "cut" else "copied"} · ${clipboard.device.uppercase()}", Modifier.widthIn(max = 170.dp), style = MaterialTheme.typography.bodySmall, color = Pts.muted)
+                PtsPrimaryButton("Paste", enabled = !busy) { request(command("paste")) }
+                PtsSecondaryButton("Clear", onClick = onClearClipboard)
             }
         }
         if (selecting) item {
-            PtsCard(Modifier.fillMaxWidth(), padding = 12.dp) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text("${selected.size} selected", Modifier.weight(1f), color = Pts.accent)
-                    Text("Select all", Modifier.clickable { selected = entries.map { it.optString("name") }.toSet() }.padding(8.dp), color = Pts.accent)
-                }
-                Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(vertical = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Text("${selected.size} selected", color = Pts.accent)
                     listOf("Cut" to "cut", "Copy" to "copy", "Zip" to "zip", "Delete" to "delete").forEach { (label, action) ->
                         PtsSecondaryButton(label, enabled = selected.isNotEmpty() && !busy, danger = action == "delete") { request(command(action, selected.toList())) }
                     }
+                    PtsSecondaryButton("Done") { selecting = false; selected = emptySet() }
                 }
-            }
         }
         if (status.isNotBlank()) item { Text(status, style = MaterialTheme.typography.bodySmall, color = Pts.accent) }
         if (loading || busy) item { LinearProgressIndicator(Modifier.fillMaxWidth(), color = Pts.accent, trackColor = Pts.soft) }
         if (!loading && entries.isEmpty()) item { PtsEmpty("This folder is empty", icon = PtsIcons.Browse) }
-        items(entries, key = { it.optString("name") }) { entry ->
+        item { Spacer(Modifier.height(12.dp)) }
+        itemsIndexed(entries, key = { _, entry -> entry.optString("name") }) { index, entry ->
             val filename = entry.optString("name")
             val isDir = entry.optBoolean("is_dir")
-            PtsCard(Modifier.fillMaxWidth().testTag("file-row-$filename"), padding = 10.dp, borderColor = if (filename in selected) Pts.accent else Pts.line, onClick = {
+            val shape = RoundedCornerShape(topStart = if (index == 0) 14.dp else 0.dp, topEnd = if (index == 0) 14.dp else 0.dp,
+                bottomStart = if (index == entries.lastIndex) 14.dp else 0.dp, bottomEnd = if (index == entries.lastIndex) 14.dp else 0.dp)
+            Box(Modifier.fillMaxWidth().testTag("file-row-$filename").background(Pts.card, shape).border(1.dp, if (filename in selected) Pts.accent else Pts.line, shape).clickable {
                 if (selecting) selected = if (filename in selected) selected - filename else selected + filename
                 else if (isDir) onPath(filePath(path, filename)) else menu = entry
-            }) {
+            }.padding(10.dp)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Box(Modifier.size(40.dp).clip(RoundedCornerShape(11.dp)).background(Pts.soft), contentAlignment = Alignment.Center) {
                         Icon(if (selecting && filename in selected) PtsIcons.Check else if (isDir) PtsIcons.Browse else PtsIcons.Film, null, tint = Pts.accent)
@@ -159,7 +131,22 @@ fun NativeFilesScreen(
                         Text(filename, style = MaterialTheme.typography.titleSmall, color = Pts.text, maxLines = 1, overflow = TextOverflow.Ellipsis)
                         Text(if (isDir) "Folder" else formatBytes(entry.optLong("size")), style = MaterialTheme.typography.bodySmall, color = Pts.muted)
                     }
-                    if (!selecting) PtsIconAction(PtsIcons.More, "More", { menu = entry })
+                    if (!selecting) Box {
+                        PtsIconAction(PtsIcons.More, "More", { menu = entry })
+                        DropdownMenu(menu?.optString("name") == filename, { menu = null }) {
+                            val actions = buildList {
+                                add(if (isDir) "Open" to "open" else "Download" to "download")
+                                if (!isDir && editableFile(filename)) add("Edit" to "edit")
+                                addAll(listOf("Cut" to "cut", "Copy" to "copy", "Rename" to "rename", "Zip" to "zip"))
+                                if (!isDir && filename.endsWith(".zip", true)) add("Unzip" to "unzip")
+                                add("Delete" to "delete")
+                            }
+                            actions.forEach { (label, action) -> DropdownMenuItem(text = { Text(label) }, enabled = !busy, onClick = {
+                                menu = null
+                                when (action) { "open" -> onPath(filePath(path, filename)); "download" -> onDownload(filename); else -> request(command(action, listOf(filename))) }
+                            }) }
+                        }
+                    }
                 }
             }
         }

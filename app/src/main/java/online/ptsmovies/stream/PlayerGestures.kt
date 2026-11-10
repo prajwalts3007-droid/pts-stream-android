@@ -6,11 +6,13 @@ import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.pointer.positionChange
+import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.platform.testTag
 import kotlin.math.abs
 import kotlin.math.roundToInt
@@ -19,7 +21,8 @@ import kotlin.math.roundToInt
 @Composable
 fun PlayerGestures(activity: Activity, position: Long, duration: Long, onTap: () -> Unit,
     onSeekPreview: (Long?) -> Unit, onSeek: (Long) -> Unit, onFeedback: (String) -> Unit,
-    zoom: Float = 1f, onZoom: (Float) -> Unit = {}, onZoomEnd: () -> Unit = {}) {
+    zoom: Float = 1f, onZoom: (Float) -> Unit = {}, onZoomEnd: () -> Unit = {}, enabled: Boolean = true,
+    content: @Composable BoxScope.() -> Unit = {}) {
     val currentPosition by rememberUpdatedState(position)
     val currentDuration by rememberUpdatedState(duration)
     val tap by rememberUpdatedState(onTap)
@@ -29,7 +32,7 @@ fun PlayerGestures(activity: Activity, position: Long, duration: Long, onTap: ()
     val currentZoom by rememberUpdatedState(zoom)
     val changeZoom by rememberUpdatedState(onZoom)
     val endZoom by rememberUpdatedState(onZoomEnd)
-    Box(Modifier.fillMaxSize().testTag("player-gesture-zone")
+    val gestures = Modifier.fillMaxSize().testTag("player-gesture-zone")
         .pointerInput(Unit) {
             detectTapGestures(onTap = { tap() }, onDoubleTap = { offset ->
                 val delta = if (offset.x < size.width / 2f) -10000L else 10000L
@@ -47,7 +50,7 @@ fun PlayerGestures(activity: Activity, position: Long, duration: Long, onTap: ()
                 val startBrightness = activity.window.attributes.screenBrightness.takeIf { it >= 0f }
                     ?: runCatching { android.provider.Settings.System.getInt(activity.contentResolver, android.provider.Settings.System.SCREEN_BRIGHTNESS) / 255f }.getOrDefault(.5f)
                 while (true) {
-                    val event = awaitPointerEvent()
+                    val event = awaitPointerEvent(PointerEventPass.Final)
                     val down = event.changes.filter { it.pressed }
                     if (down.isEmpty()) break
                     if (down.size >= 2) {
@@ -60,6 +63,7 @@ fun PlayerGestures(activity: Activity, position: Long, duration: Long, onTap: ()
                     }
                     if (mode == "zoom") { down.forEach { it.consume() }; continue }
                     val change = event.changes.firstOrNull { it.id == first.id } ?: continue
+                    if (mode.isBlank() && change.isConsumed) continue
                     dx += change.positionChange().x; dy += change.positionChange().y
                     if (mode.isBlank() && maxOf(abs(dx), abs(dy)) >= viewConfiguration.touchSlop) mode = if (abs(dx) > abs(dy)) "seek" else if (right) "volume" else "brightness"
                     if (mode.isNotBlank()) change.consume()
@@ -86,7 +90,8 @@ fun PlayerGestures(activity: Activity, position: Long, duration: Long, onTap: ()
                 if (mode == "zoom") endZoom()
                 preview(null)
             }
-        })
+        }
+    Box(if (enabled) gestures else Modifier.fillMaxSize(), content = content)
 }
 
 fun playerClock(ms: Long): String {

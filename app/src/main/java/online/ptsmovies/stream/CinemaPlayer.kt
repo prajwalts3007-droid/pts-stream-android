@@ -62,7 +62,8 @@ fun CinemaControls(title: String, playing: Boolean, position: Long, duration: Lo
             CinemaIcon(PtsIcons.Pip, "Picture in picture", onClick = onPip)
             CinemaIcon(PtsIcons.Settings, "Player options", onClick = onOptions)
         }
-        Row(Modifier.align(Alignment.Center), horizontalArrangement = Arrangement.spacedBy(28.dp), verticalAlignment = Alignment.CenterVertically) {
+        Box(Modifier.fillMaxSize().padding(top = 48.dp, bottom = 132.dp), contentAlignment = Alignment.Center) {
+        Row(horizontalArrangement = Arrangement.spacedBy(28.dp), verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.size(64.dp).clickable { onSeek((position - 10000).coerceAtLeast(0)) }, horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
                 Icon(PtsIcons.Retry, "Back 10 seconds", Modifier.size(36.dp), tint = Color.White)
                 Text("10", style = MaterialTheme.typography.labelMedium, color = Color.White)
@@ -75,15 +76,17 @@ fun CinemaControls(title: String, playing: Boolean, position: Long, duration: Lo
                 Text("10", style = MaterialTheme.typography.labelMedium, color = Color.White)
             }
         }
+        }
         Column(Modifier.align(Alignment.BottomCenter).fillMaxWidth().padding(horizontal = 12.dp)) {
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                 Text("${playerClock(position)} / ${playerClock(duration)}", Modifier.weight(1f), color = Color.White, style = MaterialTheme.typography.labelMedium)
                 TextButton(onConnection, Modifier.testTag("media-route")) { Text(route, maxLines = 1, color = Pts.accent, style = MaterialTheme.typography.labelMedium) }
             }
             Box(Modifier.fillMaxWidth()) {
+                var target by remember { mutableLongStateOf(position) }
                 LinearProgressIndicator(progress = { (buffered.toFloat() / duration.coerceAtLeast(1)).coerceIn(0f, 1f) }, modifier = Modifier.fillMaxWidth().align(Alignment.Center), color = Color.White.copy(alpha = .5f), trackColor = Color.White.copy(alpha = .15f))
-                Slider(position.toFloat().coerceIn(0f, duration.coerceAtLeast(1).toFloat()), { onPreview(it.toLong()) },
-                    modifier = Modifier.fillMaxWidth().height(36.dp), onValueChangeFinished = { onSeek(position); onPreview(null) }, valueRange = 0f..duration.coerceAtLeast(1).toFloat(),
+                Slider(position.toFloat().coerceIn(0f, duration.coerceAtLeast(1).toFloat()), { target = it.toLong(); onPreview(target) },
+                    modifier = Modifier.fillMaxWidth().height(36.dp), onValueChangeFinished = { onSeek(target); onPreview(null) }, valueRange = 0f..duration.coerceAtLeast(1).toFloat(),
                     colors = SliderDefaults.colors(thumbColor = Pts.accent, activeTrackColor = Pts.accent, inactiveTrackColor = Color.Transparent))
             }
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
