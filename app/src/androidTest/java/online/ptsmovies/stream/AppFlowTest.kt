@@ -168,7 +168,16 @@ class AppFlowTest {
 
     private fun capture(name: String) {
         ui.waitForIdle()
-        saveAuditCapture(name, checkNotNull(InstrumentationRegistry.getInstrumentation().uiAutomation.takeScreenshot()))
+        if (name in setOf("native-download-progress", "native-profile-light", "native-movies-list"))
+            saveAuditCapture(name, ui.onRoot().captureToImage().asAndroidBitmap())
+        else saveAuditCapture(name, checkNotNull(InstrumentationRegistry.getInstrumentation().uiAutomation.takeScreenshot()))
+    }
+
+    @androidx.annotation.OptIn(markerClass = [androidx.media3.common.util.UnstableApi::class])
+    private fun nativePlayer(view: android.view.View): androidx.media3.common.Player? {
+        if (view is androidx.media3.ui.PlayerView) return view.player
+        if (view is android.view.ViewGroup) for (i in 0 until view.childCount) nativePlayer(view.getChildAt(i))?.let { return it }
+        return null
     }
 
     private fun waitForMovingPlayback() {
@@ -405,9 +414,20 @@ class AppFlowTest {
 
     @Test fun pausedPlaybackSurvivesActivityRecreationAtItsPosition() {
         launchLoggedIn(); openMovie(); ui.onNodeWithText("Play").performClick(); waitForMovingPlayback(); pauseIfPlaying()
-        val before = ui.onAllNodesWithText(" / 0:08", substring = true).fetchSemanticsNodes().single().config[SemanticsProperties.Text].single().text
+        var before = 0L
+        scenario!!.onActivity { activity ->
+            val player = checkNotNull(nativePlayer(activity.window.decorView))
+            assertFalse(player.playWhenReady)
+            before = player.currentPosition
+        }
         scenario!!.recreate()
-        ui.waitUntil(15000) { ui.onAllNodesWithText(before).fetchSemanticsNodes().isNotEmpty() }
+        ui.waitUntil(15000) {
+            var restored = false
+            scenario!!.onActivity { activity -> nativePlayer(activity.window.decorView)?.let { player ->
+                restored = !player.playWhenReady && player.playbackState == androidx.media3.common.Player.STATE_READY && kotlin.math.abs(player.currentPosition - before) <= 250
+            } }
+            restored
+        }
         ui.onNodeWithContentDescription("Play playback").assertExists()
         assertDecodedTestPattern()
         capture("native-player-restored")
@@ -478,9 +498,9 @@ class AppFlowTest {
         slowMedia.set(true); launchLoggedIn(); openMovie()
         ui.onNodeWithText("Save offline").performScrollTo().performClick(); waitForText("My Downloads")
         ui.waitUntil(10000) { ui.onAllNodesWithText("/s · ETA", substring = true).fetchSemanticsNodes().isNotEmpty() }
-        ui.onNodeWithText("Pause").performClick(); waitForText("Paused")
+        ui.onNodeWithText("Pause").performClick(); waitForText("PAUSED")
         ui.onNodeWithContentDescription("Movies").performClick()
-        ui.onNodeWithContentDescription("Downloads").performClick(); waitForText("Paused")
+        ui.onNodeWithContentDescription("Downloads").performClick(); waitForText("PAUSED")
         ui.onNodeWithText("Resume").performClick()
         ui.waitUntil(20000) { ui.onAllNodesWithContentDescription("Play").fetchSemanticsNodes().isNotEmpty() }
         assertEquals(0, adminCalls.get())
