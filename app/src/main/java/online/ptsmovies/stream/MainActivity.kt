@@ -78,12 +78,12 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        offline = OfflineStore(this, api)
         if (Build.VERSION.SDK_INT >= 33 && ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
             askNotifications.launch(Manifest.permission.POST_NOTIFICATIONS)
         }
         scope.launch {
-            try { account = api.me(); refresh() } catch (_: Exception) { loading = false }
+            try { account = api.me(); offline = OfflineStore(this@MainActivity, api, account!!.optLong("id")); refresh() }
+            catch (_: Exception) { loading = false }
         }
         window.statusBarColor = android.graphics.Color.rgb(12, 17, 29)
         window.navigationBarColor = android.graphics.Color.rgb(12, 17, 29)
@@ -95,7 +95,11 @@ class MainActivity : ComponentActivity() {
                         account == null -> LoginScreen(message) { user, pass ->
                             scope.launch {
                                 loading = true
-                                try { account = api.login(user, pass); message = ""; refresh() }
+                                try {
+                                    account = api.login(user, pass)
+                                    offline = OfflineStore(this@MainActivity, api, account!!.optLong("id"))
+                                    message = ""; refresh()
+                                }
                                 catch (e: Exception) { message = e.message.orEmpty(); loading = false }
                             }
                         }
@@ -192,7 +196,8 @@ class MainActivity : ComponentActivity() {
                                     Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                                         Text(t.synopsis.ifBlank { t.genres.joinToString() })
                                         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                            Button(onClick = { episode = null; playing = true }) { Text(if (t.kind == "movie") "Play" else "Play series") }
+                                            Button(onClick = { episode = if (t.kind == "movie") null else t.episodes.firstOrNull(); playing = true },
+                                                enabled = t.kind == "movie" || t.episodes.isNotEmpty()) { Text(if (t.kind == "movie") "Play" else "Play series") }
                                             OutlinedButton(onClick = { scope.launch {
                                                 try { api.watch(t.id, t.id !in lib.watch); refresh() }
                                                 catch (e: Exception) { message = e.message.orEmpty() }

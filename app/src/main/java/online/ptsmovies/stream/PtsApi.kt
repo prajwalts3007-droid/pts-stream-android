@@ -16,10 +16,10 @@ import java.util.concurrent.TimeUnit
 
 const val BASE = "https://ptsmovies.online"
 
-data class Episode(val id: Long, val season: Int, val episode: Int, val title: String, val duration: Double)
+data class Episode(val id: Long, val season: Int, val episode: Int, val title: String, val duration: Double, val container: String)
 data class Title(
     val id: Long, val kind: String, val title: String, val year: Int, val poster: String,
-    val synopsis: String, val genres: List<String>, val episodes: List<Episode>, val codec: String
+    val synopsis: String, val genres: List<String>, val episodes: List<Episode>, val codec: String, val container: String
 )
 data class Library(val titles: List<Title>, val watch: Set<Long>, val progress: Map<Long, Long>)
 
@@ -77,8 +77,8 @@ class PtsApi {
                 (0 until genres.length()).map { genres.optString(it) },
                 (0 until eps.length()).map { n ->
                     val e = eps.getJSONObject(n)
-                    Episode(e.getLong("id"), e.optInt("season"), e.optInt("episode"), e.optString("title"), e.optDouble("duration"))
-                }, t.optString("video_codec"))
+                    Episode(e.getLong("id"), e.optInt("season"), e.optInt("episode"), e.optString("title"), e.optDouble("duration"), e.optString("container"))
+                }, t.optString("video_codec"), t.optString("container"))
         }
         val progress = mutableMapOf<Long, Long>()
         val values = result.optJSONArray("progress") ?: JSONArray()
@@ -96,6 +96,7 @@ class PtsApi {
             .put("position", position).put("duration", duration)); Unit
     }
     fun streamUrl(title: Title, episode: Episode? = null, fallback: Boolean = false): String =
-        "$BASE/api/v1/stream/file/${if (episode == null) "movie" else "episode"}/${episode?.id ?: title.id}" +
+        "$BASE/api/v1/stream/${if (episode?.container == "hls" || (episode == null && title.container == "hls")) "hls" else "file"}/${if (episode == null) "movie" else "episode"}/${episode?.id ?: title.id}" +
+            (if (episode?.container == "hls" || (episode == null && title.container == "hls")) "/master.m3u8" else "") +
             if (fallback) "?via=vps" else ""
 }

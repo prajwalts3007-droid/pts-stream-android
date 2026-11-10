@@ -16,9 +16,9 @@ import java.io.IOException
 data class SavedVideo(val key: String, val titleId: Long, val title: String, val season: Int,
                       val episode: Int, val label: String, val bytes: Long, val file: File)
 
-class OfflineStore(private val context: Context, private val api: PtsApi) {
-    private val prefs = context.getSharedPreferences("offline_index", Context.MODE_PRIVATE)
-    private val root = File(context.filesDir, "media").apply { mkdirs() }
+class OfflineStore(private val context: Context, private val api: PtsApi, ownerId: Long) {
+    private val prefs = context.getSharedPreferences("offline_index_$ownerId", Context.MODE_PRIVATE)
+    private val root = File(context.filesDir, "media/$ownerId").apply { mkdirs() }
     private val notifier = context.getSystemService(NotificationManager::class.java)
     init { notifier.createNotificationChannel(NotificationChannel("downloads", "Offline downloads", NotificationManager.IMPORTANCE_LOW)) }
     private fun key(title: Title, episode: Episode?) = "${title.id}_${episode?.id ?: 0}"
@@ -52,6 +52,8 @@ class OfflineStore(private val context: Context, private val api: PtsApi) {
     // App-private transfer; never puts media on the VPS or public Android Downloads.
     suspend fun save(title: Title, episode: Episode?, onProgress: (Int) -> Unit): SavedVideo = withContext(Dispatchers.IO) {
         find(title, episode)?.let { return@withContext it }
+        if (episode?.container == "hls" || (episode == null && title.container == "hls"))
+            throw IOException("This title needs MP4 preparation on the Pi before offline saving; user access is not yet verified")
         val id = key(title, episode)
         val partial = File(root, "$id.part")
         val dest = File(root, "$id.mp4")
