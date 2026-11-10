@@ -60,7 +60,7 @@ fun CinemaControls(title: String, playing: Boolean, position: Long, duration: Lo
             CinemaIcon(PtsIcons.Back, "Back", onClick = onBack)
             Text(title, Modifier.weight(1f).padding(horizontal = 6.dp), color = Color.White, style = MaterialTheme.typography.titleSmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
             CinemaIcon(PtsIcons.Pip, "Picture in picture", onClick = onPip)
-            CinemaIcon(PtsIcons.Settings, "Player options", onClick = onOptions)
+            CinemaIcon(PtsIcons.PlayerSettings, "Player options", onClick = onOptions)
         }
         Box(Modifier.fillMaxSize().padding(top = 48.dp, bottom = 132.dp), contentAlignment = Alignment.Center) {
         Row(horizontalArrangement = Arrangement.spacedBy(28.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -86,7 +86,13 @@ fun CinemaControls(title: String, playing: Boolean, position: Long, duration: Lo
                 var target by remember { mutableLongStateOf(position) }
                 LinearProgressIndicator(progress = { (buffered.toFloat() / duration.coerceAtLeast(1)).coerceIn(0f, 1f) }, modifier = Modifier.fillMaxWidth().align(Alignment.Center), color = Color.White.copy(alpha = .5f), trackColor = Color.White.copy(alpha = .15f))
                 Slider(position.toFloat().coerceIn(0f, duration.coerceAtLeast(1).toFloat()), { target = it.toLong(); onPreview(target) },
-                    modifier = Modifier.fillMaxWidth().height(36.dp), onValueChangeFinished = { onSeek(target); onPreview(null) }, valueRange = 0f..duration.coerceAtLeast(1).toFloat(),
+                    modifier = Modifier.fillMaxWidth().height(36.dp).testTag("player-seek-bar").semantics { contentDescription = "Seek position" }, onValueChangeFinished = { onSeek(target); onPreview(null) }, valueRange = 0f..duration.coerceAtLeast(1).toFloat(),
+                    thumb = { Box(Modifier.size(18.dp).background(Pts.accent, RoundedCornerShape(9.dp))) },
+                    track = {
+                        Box(Modifier.fillMaxWidth().height(4.dp).background(Color.Transparent)) {
+                            Box(Modifier.fillMaxHeight().fillMaxWidth((position.toFloat() / duration.coerceAtLeast(1)).coerceIn(0f, 1f)).background(Pts.accent))
+                        }
+                    },
                     colors = SliderDefaults.colors(thumbColor = Pts.accent, activeTrackColor = Pts.accent, inactiveTrackColor = Color.Transparent))
             }
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
@@ -159,7 +165,7 @@ fun PlayerOptions(appearance: PlayerAppearance, onAppearance: (PlayerAppearance)
                                 PlayerMenuRow(PtsIcons.Clock, "Synchronisation") { page = "Synchronisation" }
                                 PlayerMenuRow(PtsIcons.Fit, "Aspect ratio", if (fill) "Fill" else "Fit") { onFit() }
                                 PlayerMenuRow(PtsIcons.Fit, "Reset zoom") { onZoomReset() }
-                                PlayerMenuRow(PtsIcons.Settings, "Controls") { page = "Controls" }
+                                PlayerMenuRow(PtsIcons.PlayerSettings, "Controls") { page = "Controls" }
                                 PlayerMenuRow(PtsIcons.Info, "Connection", traffic.route.label) { page = "Connection" }
                                 PlayerMenuRow(PtsIcons.Series, "Autoplay next", if (autoplay) "On" else "Off") { onAutoplay() }
                                 PlayerMenuRow(PtsIcons.Clock, "Sleep timer") { onSleep() }
