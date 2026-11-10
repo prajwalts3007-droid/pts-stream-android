@@ -288,7 +288,8 @@ fun TitleScreen(
     onBack: () -> Unit,
     onPlay: (Episode?) -> Unit,
     onToggleWatch: () -> Unit,
-    onDownload: (Episode?) -> Unit
+    onDownload: (Episode?) -> Unit,
+    onMarkPlayed: () -> Unit = {}
 ) {
     val episodes = remember(title) { title.episodes.sortedWith(compareBy({ it.season }, { it.episode })) }
     LazyColumn(
@@ -344,22 +345,13 @@ fun TitleScreen(
         if (title.synopsis.isNotBlank()) item {
             PtsCard(Modifier.fillMaxWidth()) {
                 Text("About", style = MaterialTheme.typography.titleMedium, color = Pts.text)
-                Text(title.synopsis, style = MaterialTheme.typography.bodyMedium, color = Pts.muted)
+                ShortSynopsis(title.synopsis)
             }
         }
         if (title.kind == "series") {
-            episodes.groupBy { it.season }.forEach { (season, eps) ->
-                item { PtsSectionHeader("Season $season", eps.size) }
-                items(eps, key = { it.id }) { ep ->
-                    EpisodeRow(
-                        title = title, ep = ep,
-                        resume = resume?.takeIf { it.episodeId == ep.id },
-                        saved = "${title.id}_${ep.id}" in savedKeys,
-                        downloading = downloading,
-                        onPlay = { onPlay(ep) },
-                        onDownload = { onDownload(ep) }
-                    )
-                }
+            item {
+                SeasonEpisodes(title, resume = resume, savedKeys = savedKeys, downloading = downloading,
+                    onPlay = { onPlay(it) }, onDownload = { onDownload(it) })
             }
         } else {
             item {
@@ -372,11 +364,14 @@ fun TitleScreen(
                 }
             }
         }
+        if (resume != null) item {
+            PtsSecondaryButton("Mark as played", Modifier.fillMaxWidth(), icon = PtsIcons.Check, onClick = onMarkPlayed)
+        }
     }
 }
 
 @Composable
-private fun EpisodeRow(
+internal fun EpisodeRow(
     title: Title,
     ep: Episode,
     resume: Resume?,
@@ -638,6 +633,11 @@ fun QueueScreen(
     var confirmStage by remember { mutableStateOf<String?>(null) }
     var snapshot by remember { mutableStateOf<List<String>>(emptyList()) }
     var deleteJob by remember { mutableStateOf<JSONObject?>(null) }
+    var clearCompleted by remember { mutableStateOf<List<String>?>(null) }
+    clearCompleted?.let { ids ->
+        PtsConfirmDialog("Clear completed?", "Remove ${ids.size} completed records? Files already on the Pi are kept.", "Clear",
+            onConfirm = { clearCompleted = null; onCancelStage("done", ids) }, onDismiss = { clearCompleted = null })
+    }
     deleteJob?.let { job ->
         PtsConfirmDialog("Remove job?", "Remove ${job.optString("title")} from the queue? This cannot be undone.",
             "Remove", destructive = true,
@@ -686,6 +686,12 @@ fun QueueScreen(
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(stageName, style = MaterialTheme.typography.titleLarge, color = Pts.text, modifier = Modifier.weight(1f))
                 Text("${visible.size}", style = MaterialTheme.typography.titleMedium, color = Pts.accent)
+                if (stage == "done" && completed.isNotEmpty()) {
+                    Spacer(Modifier.width(10.dp))
+                    PtsSecondaryButton("Clear completed", Modifier.widthIn(max = 176.dp)) {
+                        clearCompleted = completed.mapNotNull { it.optString("job_id").takeIf(String::isNotEmpty) }.distinct()
+                    }
+                }
                 if (stage != "done" && visible.isNotEmpty()) {
                     Spacer(Modifier.width(10.dp))
                     PtsSecondaryButton("Cancel all", Modifier.widthIn(max = 132.dp), danger = true) {
@@ -811,7 +817,7 @@ fun SearchScreen(query: String, onQuery: (String) -> Unit, results: List<JSONObj
 // ---------- files ----------
 
 @Composable
-fun FilesScreen(
+private fun LegacyFilesScreen(
     device: String,
     path: String,
     entries: List<JSONObject>,
@@ -889,12 +895,18 @@ fun FilesScreen(
 }
 
 @Composable
-fun TransfersScreen(ops: List<JSONObject>, onCancel: (String) -> Unit) {
+fun TransfersScreen(ops: List<JSONObject>, onCancel: (String) -> Unit, onClear: () -> Unit = {}) {
+    var clear by remember { mutableStateOf(false) }
+    if (clear) PtsConfirmDialog("Clear transfers?", "Remove finished transfer records? Running operations and files are kept.", "Clear",
+        onConfirm = { clear = false; onClear() }, onDismiss = { clear = false })
     LazyColumn(
         contentPadding = PaddingValues(start = 16.dp, end = 16.dp, bottom = 20.dp),
         verticalArrangement = Arrangement.spacedBy(10.dp)
     ) {
         item { PtsPage("Transfers", "Uploads, copies and archive work on the VPS") }
+        if (ops.any { it.optString("state") != "running" }) item {
+            PtsSecondaryButton("Clear", Modifier.fillMaxWidth()) { clear = true }
+        }
         if (ops.isEmpty()) item { PtsEmpty("No transfers", "Background file operations will appear here.", icon = PtsIcons.Transfers) }
         items(ops) { op ->
             val running = op.optString("state") == "running"

@@ -9,6 +9,12 @@ import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
+import okhttp3.RequestBody
+import okhttp3.MultipartBody
+import okio.BufferedSink
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
+import java.io.InputStream
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.IOException
@@ -16,7 +22,7 @@ import java.util.concurrent.TimeUnit
 
 const val BASE = "https://ptsmovies.online"
 
-data class Episode(val id: Long, val season: Int, val episode: Int, val title: String, val duration: Double, val container: String)
+data class Episode(val id: Long, val season: Int, val episode: Int, val title: String, val duration: Double, val container: String, val description: String = "")
 data class Title(
     val id: Long, val kind: String, val title: String, val year: Int, val poster: String,
     val synopsis: String, val genres: List<String>, val episodes: List<Episode>, val codec: String, val container: String
@@ -81,7 +87,7 @@ class PtsApi(private val baseUrl: String = BASE, cookieJar: CookieJar? = null) {
                 (0 until genres.length()).map { genres.optString(it) },
                 (0 until eps.length()).map { n ->
                     val e = eps.getJSONObject(n)
-                    Episode(e.getLong("id"), e.optInt("season"), e.optInt("episode"), e.optString("title"), e.optDouble("duration"), e.optString("container"))
+                    Episode(e.getLong("id"), e.optInt("season"), e.optInt("episode"), e.optString("title"), e.optDouble("duration", 0.0), e.optString("container"), e.optString("description"))
                 }, t.optString("video_codec"), t.optString("container"))
         }
         val progress = mutableMapOf<Long, Resume>()
@@ -98,6 +104,38 @@ class PtsApi(private val baseUrl: String = BASE, cookieJar: CookieJar? = null) {
     suspend fun progress(title: Long, episode: Long?, position: Long, duration: Long) = withContext(Dispatchers.IO) {
         request("/stream/progress", JSONObject().put("title_id", title).put("episode_id", episode ?: 0)
             .put("position", position).put("duration", duration)); Unit
+    }
+    suspend fun upload(device: String, path: String, name: String, size: Long, open: () -> InputStream, progress: (Int) -> Unit) = withContext(Dispatchers.IO) {
+        require(size in 0..64L * 1024 * 1024) { "Maximum upload size is 64 MiB per file" }
+        require(validEntryName(name)) { "Invalid upload name" }
+        val coroutine = currentCoroutineContext()
+        val file = object : RequestBody() {
+            override fun contentType() = "application/octet-stream".toMediaType()
+            override fun contentLength() = size
+            override fun writeTo(sink: BufferedSink) {
+                open().use { input ->
+                    val buffer = ByteArray(65536)
+                    var written = 0L
+                    while (true) {
+                        coroutine.ensureActive()
+                        val n = input.read(buffer); if (n < 0) break
+                        written += n
+                        if (written > size || written > 64L * 1024 * 1024) throw IOException("Upload source changed or exceeded limit")
+                        sink.write(buffer, 0, n)
+                        progress(if (size > 0) (written * 100 / size).toInt() else 100)
+                    }
+                    if (written != size) throw IOException("Upload source size changed")
+                }
+            }
+        }
+        val token = get("/auth/csrf").optString("csrf_token")
+        val body = MultipartBody.Builder().setType(MultipartBody.FORM).addFormDataPart("device", device)
+            .addFormDataPart("path", path).addFormDataPart("file", name, file).build()
+        http.newBuilder().writeTimeout(5, TimeUnit.MINUTES).readTimeout(5, TimeUnit.MINUTES).build()
+            .newCall(Request.Builder().url(baseUrl.trimEnd('/') + "/api/v1/admin/files/upload").header("X-CSRF-Token", token).post(body).build())
+            .execute().use { response ->
+                if (!response.isSuccessful) throw ApiException(response.code, "Upload HTTP ${response.code}: ${response.body?.string().orEmpty().take(180)}")
+            }
     }
     fun streamUrl(title: Title, episode: Episode? = null, fallback: Boolean = false): String =
         "${baseUrl.trimEnd('/')}/api/v1/stream/${if (episode?.container == "hls" || (episode == null && title.container == "hls")) "hls" else "file"}/${if (episode == null) "movie" else "episode"}/${episode?.id ?: title.id}" +

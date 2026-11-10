@@ -4,6 +4,7 @@ import android.Manifest
 import android.app.PictureInPictureParams
 import android.content.pm.PackageManager
 import android.content.res.Configuration
+import android.provider.OpenableColumns
 import android.media.AudioManager
 import android.media.MediaCodecList
 import android.os.Build
@@ -28,6 +29,7 @@ import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.material3.Icon
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Slider
 import androidx.compose.material3.SliderDefaults
@@ -125,6 +127,20 @@ class MainActivity : ComponentActivity() {
     private var filesLoading by mutableStateOf(false)
     private var ops by mutableStateOf(emptyList<JSONObject>())
     private var restoredNavigation: Bundle? = null
+    private var fileClipboard by mutableStateOf<FileClipboard?>(null)
+    private var fileEditor by mutableStateOf<FileEditor?>(null)
+    private var fileBusy by mutableStateOf(false)
+    private var fileStatus by mutableStateOf("")
+    private var fileOperation: Job? = null
+    private var uploadDestination: Pair<String, String>? = null
+    private val clearedProgress = mutableSetOf<Long>()
+    private var playerFullscreen by mutableStateOf(false)
+    private var playbackPrefs by mutableStateOf(JSONObject())
+    private val pickUploads = registerForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris ->
+        val destination = uploadDestination
+        uploadDestination = null
+        if (destination != null && admin() && uris.isNotEmpty()) uploadFiles(uris, destination.first, destination.second)
+    }
 
     private val askNotifications = registerForActivityResult(ActivityResultContracts.RequestPermission()) { }
 
@@ -152,9 +168,11 @@ class MainActivity : ComponentActivity() {
                     when {
                         loading -> PtsLoading()
                         account == null -> LoginScreen(startupError, busy = false) { user, pass, remember -> signIn(user, pass, remember) }
-                        playing && selected != null -> PlayerScreen(selected!!, episode, offline.find(selected!!, episode)) {
-                            playing = false
-                            episode = null
+                        playing && selected != null -> key(selected!!.id, episode?.id) {
+                            PlayerScreen(selected!!, episode, offline.find(selected!!, episode)) {
+                                playing = false; episode = null; playerFullscreen = false
+                                requestedOrientation = android.content.pm.ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
+                            }
                         }
                         else -> AppShell()
                     }
@@ -172,6 +190,7 @@ class MainActivity : ComponentActivity() {
             mode = if (account!!.optString("role") == "admin") "Hub" else "Stream"
             startupError = ""
             refreshLibrary()
+            loadPlaybackPrefs()
             restoreNavigation()
             if (account!!.optString("role") == "admin") {
                 loadMetrics()
@@ -197,6 +216,7 @@ class MainActivity : ComponentActivity() {
                 mode = if (account!!.optString("role") == "admin") "Hub" else "Stream"
                 toast("Welcome back, " + account!!.optString("name").ifBlank { account!!.optString("username") }, ok = true)
                 refreshLibrary()
+                loadPlaybackPrefs()
                 if (account!!.optString("role") == "admin") {
                     loadMetrics(); loadQueue(); loadSettings()
                 }
@@ -220,6 +240,7 @@ class MainActivity : ComponentActivity() {
         downloadJob?.cancel()
         searchJob?.cancel()
         fileJob?.cancel()
+        fileOperation?.cancel()
         loading = true
         scope.launch {
             try { api.logout() }
@@ -229,6 +250,7 @@ class MainActivity : ComponentActivity() {
                 account = null; library = null; selected = null; profileOpen = false; downloadsOpen = false
                 queueJobs = emptyList(); queueDone = emptyList(); metrics = null; users = emptyList()
                 savedVideos = emptyList(); message = ""; startupError = ""
+                fileClipboard = null; fileEditor = null; fileStatus = ""; clearedProgress.clear()
                 loading = false
             }
         }
@@ -288,6 +310,7 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun play(title: Title, ep: Episode?) {
+        clearedProgress.remove(title.id)
         episode = ep
         selected = title
         playing = true
@@ -351,6 +374,102 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    private fun loadPlaybackPrefs() {
+        scope.launch { try { val result = api.json("/stream/prefs"); playbackPrefs = result.optJSONObject("prefs") ?: result } catch (_: Exception) { } }
+    }
+
+    private fun markPlayed(title: Title) {
+        scope.launch {
+            try {
+                api.json("/stream/progress/clear", "POST", JSONObject().put("title_id", title.id))
+                clearedProgress.add(title.id)
+                library = library?.let { it.copy(progress = it.progress - title.id) }
+                toast("Marked as played · removed from Continue watching", true)
+            } catch (e: Exception) { toast(e.message ?: "Could not clear progress") }
+        }
+    }
+
+    private fun playerPreference(key: String, value: Any) {
+        val snapshot = JSONObject(playbackPrefs.toString()).put(key, value)
+        playbackPrefs = snapshot
+        scope.launch { try { api.json("/stream/prefs", "PUT", snapshot) } catch (e: Exception) { toast("Could not save playback preference") } }
+    }
+
+    private fun fullscreen(enabled: Boolean) {
+        playerFullscreen = enabled
+        requestedOrientation = if (enabled) android.content.pm.ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE else android.content.pm.ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
+    }
+
+    private fun runFileCommand(command: FileCommand) {
+        if (!admin() || fileBusy) return
+        val user = account?.optLong("id")
+        if (command.action == "cut" || command.action == "copy") {
+            fileClipboard = FileClipboard(command.action, command.device, command.names.map { filePath(command.directory, it) })
+            return
+        }
+        val clipboard = fileClipboard
+        fileBusy = true
+        fileOperation = scope.launch {
+            try {
+                if (command.action == "edit") {
+                    val path = filePath(command.directory, command.names.single())
+                    val data = api.json("/admin/files/content?device=${command.device}&path=${java.net.URLEncoder.encode(path, "UTF-8")}")
+                    if (account?.optLong("id") == user) fileEditor = FileEditor(command.device, path, data.optString("content"))
+                } else {
+                    api.executeFile(command, clipboard)
+                    if (command.action == "paste" && clipboard?.mode == "cut" && clipboard == fileClipboard) fileClipboard = null
+                    toast(if (command.action in setOf("zip", "unzip", "paste")) "${command.action.replaceFirstChar { it.uppercase() }} started · see Transfers" else "${command.action.replaceFirstChar { it.uppercase() }} completed", true)
+                    if (command.device == filesDevice && command.directory == filesPath) loadFiles()
+                    loadOps()
+                }
+            } catch (e: CancellationException) { throw e }
+            catch (e: Exception) { toast(e.message ?: "File operation failed") }
+            finally { fileBusy = false }
+        }
+    }
+
+    private fun saveFileEditor(content: String) {
+        val editor = fileEditor ?: return
+        if (fileBusy || !admin()) return
+        fileBusy = true
+        fileOperation = scope.launch {
+            try {
+                api.json("/admin/files/content", "PUT", JSONObject().put("device", editor.device).put("path", editor.path).put("content", content))
+                fileEditor = null; loadFiles(); toast("File saved", true)
+            } catch (e: CancellationException) { throw e }
+            catch (e: Exception) { toast(e.message ?: "Save failed") }
+            finally { fileBusy = false }
+        }
+    }
+
+    private fun uploadFiles(uris: List<android.net.Uri>, device: String, directory: String) {
+        if (fileBusy) return
+        if (uris.size > 100) { toast("Choose up to 100 files"); return }
+        fileBusy = true
+        fileOperation = scope.launch {
+            try {
+                for (uri in uris) {
+                    val metadata = kotlinx.coroutines.withContext(Dispatchers.IO) {
+                        contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME, OpenableColumns.SIZE), null, null, null)?.use { cursor ->
+                            check(cursor.moveToFirst()) { "Cannot inspect upload" }
+                            check(!cursor.isNull(1)) { "Upload size must be known" }
+                            cursor.getString(0) to cursor.getLong(1)
+                        } ?: error("Cannot inspect upload")
+                    }
+                    fileStatus = "Uploading ${metadata.first}"
+                    api.upload(device, directory, metadata.first, metadata.second,
+                        { contentResolver.openInputStream(uri) ?: error("Cannot open upload") }) { percent ->
+                        runOnUiThread { fileStatus = "Uploading ${metadata.first} · $percent%" }
+                    }
+                }
+                if (device == filesDevice && directory == filesPath) loadFiles()
+                toast("Uploads completed", true)
+            } catch (e: CancellationException) { throw e }
+            catch (e: Exception) { toast(e.message ?: "Upload failed") }
+            finally { fileBusy = false; fileStatus = "" }
+        }
+    }
+
     private fun mkdir(name: String) {
         scope.launch {
             try {
@@ -403,7 +522,7 @@ class MainActivity : ComponentActivity() {
                 try { api.json("/queue/${java.net.URLEncoder.encode(id, "UTF-8")}", "DELETE"); removed++ }
                 catch (e: Exception) { toast("Stopped after $removed/${ids.size}: ${e.message}"); break }
             }
-            if (removed == ids.size) toast("Cancelled $removed ${stage.replace('_', ' ')} job${if (removed == 1) "" else "s"}", ok = true)
+            if (removed == ids.size) toast(if (stage == "done") "Cleared $removed completed records · Pi files kept" else "Cancelled $removed ${stage.replace('_', ' ')} job${if (removed == 1) "" else "s"}", ok = true)
             loadQueue()
         }
     }
@@ -430,6 +549,7 @@ class MainActivity : ComponentActivity() {
     private fun AppShell() {
         BackHandler { routeBack() }
         val user = account ?: return
+        fileEditor?.let { editor -> FileEditorDialog(editor, fileBusy, { saveFileEditor(it) }, { fileEditor = null }) }
         LaunchedEffect(mode, hubTab, user.optLong("id")) {
             if (mode == "Hub" && admin()) lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
                 while (true) {
@@ -480,9 +600,11 @@ class MainActivity : ComponentActivity() {
                     }
                     mode == "Files" && admin() -> if (filesTab == "Transfers") {
                         LaunchedEffect(Unit) { lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) { while (true) { loadOps(); delay(4000) } } }
-                        TransfersScreen(ops) { id ->
+                        TransfersScreen(ops, onCancel = { id ->
                             scope.launch { try { api.json("/admin/files/ops/cancel", "POST", JSONObject().put("id", id)); loadOps() } catch (e: Exception) { toast(e.message ?: "Cancel failed") } }
-                        }
+                        }, onClear = {
+                            scope.launch { try { api.json("/admin/files/ops/clear", "POST", JSONObject()); loadOps(); toast("Finished transfers cleared", true) } catch (e: Exception) { toast(e.message ?: "Clear failed") } }
+                        })
                     } else {
                         LaunchedEffect(filesDevice, filesPath) { loadFiles() }
                         FilesScreen(filesDevice, filesPath, filesEntries, filesLoading,
@@ -490,8 +612,12 @@ class MainActivity : ComponentActivity() {
                             onPath = { filesPath = it },
                             onRefresh = { loadFiles() },
                             onDownload = { downloadFile(it) },
-                            onDelete = { deleteFile(it) },
-                            onMkdir = { mkdir(it) })
+                            onDelete = { runFileCommand(FileCommand("delete", filesDevice, filesPath, listOf(it.optString("name")))) },
+                            onMkdir = { runFileCommand(FileCommand("mkdir", filesDevice, filesPath, value = it)) },
+                            onCommand = { runFileCommand(it) }, clipboard = fileClipboard,
+                            onClearClipboard = { fileClipboard = null },
+                            onUpload = { uploadDestination = filesDevice to filesPath; pickUploads.launch(arrayOf("*/*")) },
+                            busy = fileBusy, status = fileStatus)
                     }
                     else -> {
                         val lib = library
@@ -507,7 +633,7 @@ class MainActivity : ComponentActivity() {
                                 onBack = { selected = null },
                                 onPlay = { ep -> play(t, ep) },
                                 onToggleWatch = { toggleWatch(t) },
-                                onDownload = { ep -> startDownload(t, ep) })
+                                onDownload = { ep -> startDownload(t, ep) }, onMarkPlayed = { markPlayed(t) })
                         } else when (streamTab) {
                             "Home" -> StreamHomeScreen(lib, { selected = it }, { title ->
                                 val resume = lib.progress[title.id]
@@ -571,13 +697,27 @@ class MainActivity : ComponentActivity() {
         var fallback by remember(title.id, ep?.id) { mutableStateOf(false) }
         var error by remember { mutableStateOf("") }
         var showTracks by remember { mutableStateOf(false) }
-        var speed by remember { mutableFloatStateOf(1f) }
+        var showEpisodes by remember { mutableStateOf(false) }
+        var showSettings by remember { mutableStateOf(false) }
+        var speed by remember { mutableFloatStateOf(playbackPrefs.optDouble("speed", 1.0).toFloat().coerceIn(.5f, 2f)) }
         var fill by remember { mutableStateOf(false) }
         var controls by remember { mutableStateOf(true) }
         var position by remember { mutableLongStateOf(0L) }
         var duration by remember { mutableLongStateOf(0L) }
         var playingNow by remember { mutableStateOf(true) }
         var seekPreview by remember { mutableStateOf<Long?>(null) }
+        var interaction by remember { mutableIntStateOf(0) }
+        var muted by remember { mutableStateOf(false) }
+        var buffering by remember { mutableStateOf(true) }
+        var ended by remember { mutableStateOf(false) }
+        var cancelNext by remember { mutableStateOf(false) }
+        var nextCountdown by remember { mutableIntStateOf(5) }
+        var autoplay by remember { mutableStateOf(playbackPrefs.optBoolean("autoplay", true)) }
+        val nextEpisode = remember(title, ep) { title.episodes.sortedWith(compareBy({ it.season }, { it.episode }))
+            .firstOrNull { ep != null && (it.season > ep.season || (it.season == ep.season && it.episode > ep.episode)) } }
+        fun touchControls() { controls = true; interaction++ }
+        fun leavePlayer() { if (playerFullscreen) fullscreen(false) else onBack() }
+        fun selectEpisode(next: Episode) { clearedProgress.remove(title.id); episode = next; showEpisodes = false }
         var resumeAt by remember(title.id, ep?.id) {
             mutableLongStateOf(library?.progress?.get(title.id)?.takeIf { it.episodeId == (ep?.id ?: 0L) }?.seconds?.times(1000) ?: 0L)
         }
@@ -591,12 +731,18 @@ class MainActivity : ComponentActivity() {
                     DefaultDataSource.Factory(context, OkHttpDataSource.Factory(api.http).setUserAgent("PTS-Library-Android"))
                 )).build().apply {
                 setMediaItem(MediaItem.fromUri(source))
+                setAudioAttributes(androidx.media3.common.AudioAttributes.Builder()
+                    .setUsage(androidx.media3.common.C.USAGE_MEDIA).setContentType(androidx.media3.common.C.AUDIO_CONTENT_TYPE_MOVIE).build(), true)
+                setHandleAudioBecomingNoisy(true)
+                trackSelectionParameters = trackSelectionParameters.buildUpon()
+                    .setPreferredAudioLanguage(playbackPrefs.optString("audio_lang").ifBlank { null })
+                    .setPreferredTextLanguage(playbackPrefs.optString("subtitle_lang").ifBlank { null }).build()
                 if (resumeAt > 0) seekTo(resumeAt)
                 setPlaybackSpeed(speed)
                 prepare(); playWhenReady = true
             }
         }
-        BackHandler { onBack() }
+        BackHandler { leavePlayer() }
         DisposableEffect(exo) {
             player = exo
             val originalBrightness = window.attributes.screenBrightness
@@ -606,15 +752,16 @@ class MainActivity : ComponentActivity() {
                         resumeAt = exo.currentPosition.coerceAtLeast(0)
                         fallback = true
                         controls = true
-                    } else error = "Playback failed: ${exception.errorCodeName}"
+                    } else {
+                        val http = (exception.cause as? androidx.media3.datasource.HttpDataSource.InvalidResponseCodeException)?.responseCode
+                        error = "${exception.errorCodeName}${http?.let { " · HTTP $it" }.orEmpty()}. Retry or select another audio track."
+                        controls = true
+                    }
                 }
                 override fun onPlaybackStateChanged(state: Int) {
                     playingNow = state == Player.STATE_READY && exo.playWhenReady
-                    if (state == Player.STATE_ENDED && ep != null) {
-                        val next = title.episodes.sortedWith(compareBy({ it.season }, { it.episode }))
-                            .firstOrNull { it.season > ep.season || (it.season == ep.season && it.episode > ep.episode) }
-                        if (next != null) { episode = next; resumeAt = 0; fallback = false }
-                    }
+                    buffering = state == Player.STATE_BUFFERING || state == Player.STATE_IDLE
+                    ended = state == Player.STATE_ENDED
                     if (state == Player.STATE_ENDED) controls = true
                 }
                 override fun onIsPlayingChanged(isPlaying: Boolean) { playingNow = isPlaying }
@@ -623,8 +770,10 @@ class MainActivity : ComponentActivity() {
             onDispose {
                 val p = exo.currentPosition / 1000
                 val d = exo.duration.coerceAtLeast(0) / 1000
-                library = library?.let { it.copy(progress = it.progress + (title.id to Resume(ep?.id ?: 0L, p, d))) }
-                scope.launch { try { api.progress(title.id, ep?.id, p, d) } catch (_: Exception) { } }
+                if (title.id !in clearedProgress && d > 0) {
+                    library = library?.let { it.copy(progress = it.progress + (title.id to Resume(ep?.id ?: 0L, p, d))) }
+                    scope.launch { try { api.progress(title.id, ep?.id, p, d) } catch (_: Exception) { } }
+                }
                 exo.removeListener(listener); exo.release()
                 window.attributes = window.attributes.apply { screenBrightness = originalBrightness }
                 if (player === exo) player = null
@@ -634,6 +783,7 @@ class MainActivity : ComponentActivity() {
             while (true) {
                 if (!exo.isPlaying && exo.playbackState == Player.STATE_IDLE) delay(200) else delay(500)
                 duration = exo.duration.coerceAtLeast(0)
+                buffering = exo.playbackState == Player.STATE_BUFFERING || exo.playbackState == Player.STATE_IDLE
                 if (seekPreview == null) position = exo.currentPosition.coerceAtLeast(0)
                 playingNow = exo.isPlaying
             }
@@ -641,17 +791,23 @@ class MainActivity : ComponentActivity() {
         LaunchedEffect(exo) {
             while (true) {
                 delay(15000)
-                if (exo.isPlaying) try { api.progress(title.id, ep?.id, exo.currentPosition / 1000, exo.duration.coerceAtLeast(0) / 1000) } catch (_: Exception) { }
+                if (exo.isPlaying && title.id !in clearedProgress) try { api.progress(title.id, ep?.id, exo.currentPosition / 1000, exo.duration.coerceAtLeast(0) / 1000) } catch (_: Exception) { }
             }
         }
-        LaunchedEffect(controls, playingNow) {
-            if (controls && playingNow) { delay(4500); controls = false }
+        LaunchedEffect(controls, playingNow, interaction, seekPreview != null, showTracks, showEpisodes, showSettings) {
+            if (controls && playingNow && seekPreview == null && !showTracks && !showEpisodes && !showSettings) { delay(4500); controls = false }
+        }
+        LaunchedEffect(ended, autoplay, cancelNext) {
+            if (ended && autoplay && !cancelNext && nextEpisode != null) {
+                for (seconds in 5 downTo 1) { nextCountdown = seconds; delay(1000) }
+                selectEpisode(nextEpisode)
+            }
         }
         BoxWithConstraints(Modifier.fillMaxSize().background(Color(0xFF060716))) {
-          val landscape = maxWidth > maxHeight || inPip
+          val landscape = maxWidth > maxHeight || inPip || playerFullscreen
           Column(Modifier.fillMaxSize()) {
             if (!inPip) Row(Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
-                PtsIconAction(PtsIcons.Back, "Back", onBack, tint = Color.White)
+                PtsIconAction(PtsIcons.Back, "Back", { leavePlayer() }, tint = Color.White)
                 Column(Modifier.weight(1f).padding(horizontal = 4.dp)) {
                     Text(title.title, style = MaterialTheme.typography.titleSmall, color = Color.White, maxLines = 1, overflow = TextOverflow.Ellipsis)
                     if (ep != null) Text("S${ep.season}E${ep.episode} · ${ep.title.ifBlank { "Episode ${ep.episode}" }}",
@@ -661,11 +817,14 @@ class MainActivity : ComponentActivity() {
                     try { enterPictureInPictureMode(PictureInPictureParams.Builder().setAspectRatio(Rational(16, 9)).build()) } catch (_: Exception) { }
                 }, tint = Color.White)
                 PtsIconAction(PtsIcons.Subtitles, "Audio and subtitles", { showTracks = true; controls = true }, tint = Color.White)
+                if (ep != null) PtsIconAction(PtsIcons.Series, "Choose episode", { showEpisodes = true; touchControls() }, tint = Color.White)
+                PtsIconAction(PtsIcons.Fit, if (playerFullscreen) "Exit fullscreen" else "Fullscreen", { fullscreen(!playerFullscreen); touchControls() }, tint = Color.White)
             }
             Box((if (landscape) Modifier.weight(1f).fillMaxWidth() else Modifier.fillMaxWidth().aspectRatio(16f / 9f)).background(Color.Black)) {
                 AndroidView(factory = { ctx -> PlayerView(ctx).apply {
                     player = exo
                     useController = false
+                    keepScreenOn = true
                     layoutParams = FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
                 } }, update = { it.player = exo; it.resizeMode = if (fill) AspectRatioFrameLayout.RESIZE_MODE_ZOOM else AspectRatioFrameLayout.RESIZE_MODE_FIT },
                     modifier = Modifier.fillMaxSize())
@@ -685,7 +844,7 @@ class MainActivity : ComponentActivity() {
                         when {
                             abs(dx) > 55f && abs(dx) > abs(dy) -> {
                                 exo.seekTo((exo.currentPosition + (dx / size.width * 120000).roundToLong()).coerceIn(0, total))
-                                controls = true
+                                touchControls()
                             }
                             abs(dy) > 110f && abs(dy) > abs(dx) -> {
                                 if (down.position.x > size.width / 2f) {
@@ -698,13 +857,13 @@ class MainActivity : ComponentActivity() {
                                     attributes.screenBrightness = (current - dy / size.height).coerceIn(.05f, 1f)
                                     window.attributes = attributes
                                 }
-                                controls = true
+                                touchControls()
                             }
                             else -> {
                                 val now = System.currentTimeMillis()
                                 if (now - lastTap < 320) {
                                     val step = if (down.position.x < size.width / 2f) -10_000L else 10_000L
-                                    exo.seekTo((exo.currentPosition + step).coerceIn(0, total)); lastTap = 0; controls = true
+                                    exo.seekTo((exo.currentPosition + step).coerceIn(0, total)); lastTap = 0; touchControls()
                                 } else { lastTap = now; controls = !controls }
                             }
                         }
@@ -712,12 +871,20 @@ class MainActivity : ComponentActivity() {
                 })
                 androidx.compose.animation.AnimatedVisibility(visible = controls && !inPip, enter = fadeIn(), exit = fadeOut(), modifier = Modifier.fillMaxSize()) {
                     Box(Modifier.fillMaxSize().background(Brush.verticalGradient(listOf(Color(0xCC040514), Color(0x11040514), Color(0xE6040514))))) {
+                        Row(Modifier.align(Alignment.Center).offset(y = (-16).dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(26.dp)) {
+                            PlayerSeekButton(false) { exo.seekTo((exo.currentPosition - 10000).coerceAtLeast(0)); touchControls() }
+                            Box(Modifier.size(60.dp).background(Color(0xFFFAFAFF), androidx.compose.foundation.shape.CircleShape)
+                                .clickable { if (exo.isPlaying) exo.pause() else { if (ended) exo.seekTo(0); exo.play() }; touchControls() }, contentAlignment = Alignment.Center) {
+                                Icon(if (playingNow) PtsIcons.Pause else PtsIcons.Play, if (playingNow) "Pause playback" else "Play playback", Modifier.size(30.dp), tint = Pts.onAccent)
+                            }
+                            PlayerSeekButton(true) { exo.seekTo((exo.currentPosition + 10000).coerceAtMost(duration.coerceAtLeast(0))); touchControls() }
+                        }
                         Column(Modifier.align(Alignment.BottomCenter).fillMaxWidth().padding(horizontal = 13.dp, vertical = 9.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                             val shown = seekPreview ?: position
                             Slider(
                                 value = shown.toFloat().coerceIn(0f, duration.coerceAtLeast(1).toFloat()),
-                                onValueChange = { seekPreview = it.toLong(); controls = true },
-                                onValueChangeFinished = { seekPreview?.let { exo.seekTo(it) }; seekPreview = null },
+                                onValueChange = { seekPreview = it.toLong(); touchControls() },
+                                onValueChangeFinished = { seekPreview?.let { exo.seekTo(it) }; seekPreview = null; touchControls() },
                                 valueRange = 0f..duration.coerceAtLeast(1).toFloat(),
                                 colors = SliderDefaults.colors(thumbColor = Pts.accent, activeTrackColor = Pts.accent, inactiveTrackColor = Color.White.copy(alpha = .35f)),
                                 thumb = { Box(Modifier.size(14.dp).background(Pts.accent, androidx.compose.foundation.shape.CircleShape)) },
@@ -734,35 +901,28 @@ class MainActivity : ComponentActivity() {
                                 Text(if (saved != null) "Offline" else if (fallback) "VPS fallback" else "Pi stream", style = MaterialTheme.typography.labelSmall, color = Pts.accent)
                             }
                             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) {
+                                PlayerTextControl("${if (speed % 1f == 0f) speed.toInt().toString() else speed}×", "Playback settings") { showSettings = true; touchControls() }
+                                PlayerTextControl(if (muted) "Unmute" else "Mute", "Mute audio") { muted = !muted; exo.volume = if (muted) 0f else 1f; touchControls() }
+                                PlayerTextControl("Audio / CC", "Audio tracks") { showTracks = true; touchControls() }
                                 Row(verticalAlignment = Alignment.CenterVertically) {
-                                    PtsIconAction(PtsIcons.Retry, "Back 10 seconds", { exo.seekTo((exo.currentPosition - 10000).coerceAtLeast(0)) }, tint = Color.White, size = 40.dp)
-                                    Box(Modifier.size(50.dp).background(Color(0xFFFAFAFF), androidx.compose.foundation.shape.CircleShape)
-                                        .clickable { if (exo.isPlaying) exo.pause() else exo.play(); controls = true }, contentAlignment = Alignment.Center) {
-                                        Icon(if (playingNow) PtsIcons.Pause else PtsIcons.Play, if (playingNow) "Pause playback" else "Play playback", Modifier.size(26.dp), tint = Pts.onAccent)
-                                    }
-                                     PtsIconAction(PtsIcons.Refresh, "Forward 10 seconds", { exo.seekTo((exo.currentPosition + 10000).coerceAtMost(duration.coerceAtLeast(0))) }, tint = Color.White, size = 40.dp)
-                                }
-                                Row(verticalAlignment = Alignment.CenterVertically) {
-                                    Box(Modifier.clickable { speed = if (speed >= 2f) 0.5f else (speed + 0.25f); exo.setPlaybackSpeed(speed) }
-                                        .background(Color.White.copy(alpha = .12f), androidx.compose.foundation.shape.RoundedCornerShape(99.dp))
-                                        .padding(horizontal = 9.dp, vertical = 6.dp)) {
-                                        Text("${if (speed % 1f == 0f) speed.toInt().toString() else speed}×", style = MaterialTheme.typography.labelSmall, color = Color.White)
-                                    }
                                     PtsIconAction(PtsIcons.Fit, if (fill) "Fit video" else "Fill video", { fill = !fill }, tint = Color.White, size = 40.dp)
                                 }
                             }
                         }
                     }
                 }
+                if (buffering && error.isBlank()) CircularProgressIndicator(Modifier.align(Alignment.Center).size(32.dp), color = Pts.accent)
+                if (error.isNotBlank() && !inPip) Column(Modifier.align(Alignment.Center).fillMaxWidth().background(Color.Black.copy(alpha = .9f)).padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text("Playback interrupted", style = MaterialTheme.typography.titleMedium, color = Color.White)
+                    Text(error, style = MaterialTheme.typography.bodySmall, color = Pts.muted)
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        PtsPrimaryButton("Retry", Modifier.weight(1f)) { error = ""; exo.prepare(); exo.play(); touchControls() }
+                        PtsSecondaryButton("Audio / CC", Modifier.weight(1f)) { showTracks = true }
+                    }
+                }
             }
             if (!landscape) {
              if (!hevcAvailable) PtsErrorBanner("This device may not support HEVC playback", modifier = Modifier.padding(12.dp))
-             if (error.isNotBlank()) {
-                 PtsErrorBanner(error, modifier = Modifier.padding(12.dp))
-                 PtsSecondaryButton("Retry playback", Modifier.padding(horizontal = 12.dp).fillMaxWidth(), icon = PtsIcons.Refresh) {
-                     error = ""; exo.prepare(); exo.play(); controls = true
-                 }
-             }
              Column(Modifier.weight(1f).verticalScroll(rememberScrollState()).padding(16.dp), verticalArrangement = Arrangement.spacedBy(9.dp)) {
                 Text(title.title, style = MaterialTheme.typography.titleLarge, color = Color.White)
                 Text(
@@ -773,14 +933,47 @@ class MainActivity : ComponentActivity() {
                     ).joinToString(" · "),
                     style = MaterialTheme.typography.bodySmall, color = Color(0xFFD3D6ED)
                 )
-                if (title.synopsis.isNotBlank()) Text(title.synopsis, style = MaterialTheme.typography.bodySmall, color = Color(0xFFB9BEE0), maxLines = 5, overflow = TextOverflow.Ellipsis)
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    PtsSecondaryButton("Audio / CC", Modifier.weight(1f), icon = PtsIcons.Subtitles) { showTracks = true }
-                    PtsSecondaryButton(if (fill) "Fit screen" else "Fill screen", Modifier.weight(1f), icon = PtsIcons.Fit) { fill = !fill }
+                ShortSynopsis(title.synopsis)
+                if (ended && nextEpisode != null) PtsCard(Modifier.fillMaxWidth()) {
+                    Text("Up next · S${nextEpisode.season}E${nextEpisode.episode}", color = Pts.accent, style = MaterialTheme.typography.titleMedium)
+                    if (autoplay && !cancelNext) Text("Playing in $nextCountdown seconds", color = Pts.muted)
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        PtsPrimaryButton("Play next", Modifier.weight(1f)) { selectEpisode(nextEpisode) }
+                        PtsSecondaryButton("Cancel", Modifier.weight(1f)) { cancelNext = true }
+                    }
                 }
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    PtsSecondaryButton("Mark as played", Modifier.weight(1f), icon = PtsIcons.Check) { markPlayed(title) }
+                    PtsSecondaryButton("Save offline", Modifier.weight(1f), icon = PtsIcons.Download, enabled = downloading.isBlank() && saved == null) { startDownload(title, ep) }
+                }
+                if (title.kind == "series") SeasonEpisodes(title, ep, library?.progress?.get(title.id), savedVideos.map { it.key }.toSet(), downloading,
+                    onPlay = { selectEpisode(it) }, onDownload = { startDownload(title, it) })
+                val related = library?.titles.orEmpty().filter { it.id != title.id && it.genres.any { g -> g in title.genres } }.take(8)
+                if (related.isNotEmpty()) PtsPosterShelf("Related", related, library?.progress.orEmpty(), library?.watch.orEmpty(),
+                    { play(it, if (it.kind == "series") it.episodes.firstOrNull() else null) }, { toggleWatch(it) })
              }
             }
           }
+        }
+        if (showEpisodes) androidx.compose.ui.window.Dialog(onDismissRequest = { showEpisodes = false }) {
+            PtsCard(Modifier.fillMaxWidth().heightIn(max = 620.dp).verticalScroll(rememberScrollState()), padding = 16.dp) {
+                SeasonEpisodes(title, ep, library?.progress?.get(title.id), savedVideos.map { it.key }.toSet(), downloading,
+                    onPlay = { selectEpisode(it) }, onDownload = { startDownload(title, it) })
+                PtsSecondaryButton("Close", Modifier.fillMaxWidth()) { showEpisodes = false }
+            }
+        }
+        if (showSettings) androidx.compose.ui.window.Dialog(onDismissRequest = { showSettings = false }) {
+            PtsCard(Modifier.fillMaxWidth().heightIn(max = 560.dp).verticalScroll(rememberScrollState())) {
+                Text("Playback settings", style = MaterialTheme.typography.titleLarge, color = Pts.text)
+                PtsSecondaryButton(if (autoplay) "Autoplay next: On" else "Autoplay next: Off", Modifier.fillMaxWidth()) {
+                    autoplay = !autoplay; playerPreference("autoplay", autoplay)
+                }
+                listOf(.5f, .75f, 1f, 1.25f, 1.5f, 1.75f, 2f).forEach { rate ->
+                    PtsSecondaryButton("${rate}×", Modifier.fillMaxWidth(), icon = if (rate == speed) PtsIcons.Check else null) {
+                        speed = rate; exo.setPlaybackSpeed(rate); playerPreference("speed", rate); showSettings = false; touchControls()
+                    }
+                }
+            }
         }
         if (showTracks) {
             val audioGroups = exo.currentTracks.groups.filter { it.type == androidx.media3.common.C.TRACK_TYPE_AUDIO }
@@ -793,10 +986,12 @@ class MainActivity : ComponentActivity() {
                     if (audioGroups.isEmpty()) Text("No alternate audio tracks", style = MaterialTheme.typography.bodySmall, color = Pts.muted)
                     audioGroups.forEach { group ->
                         (0 until group.length).forEach { index ->
-                            val label = group.getTrackFormat(index).language ?: "Track ${index + 1}"
+                            val format = group.getTrackFormat(index)
+                            val label = format.label?.takeIf { it.isNotBlank() } ?: format.language?.let { Locale.forLanguageTag(it).displayLanguage } ?: "Track ${index + 1}"
                             PtsSecondaryButton(label.replaceFirstChar { it.uppercase() }, Modifier.fillMaxWidth()) {
                                 exo.trackSelectionParameters = exo.trackSelectionParameters.buildUpon()
                                     .setOverrideForType(androidx.media3.common.TrackSelectionOverride(group.mediaTrackGroup, index)).build()
+                                format.language?.let { playerPreference("audio_lang", it) }
                                 showTracks = false
                             }
                         }
@@ -805,15 +1000,18 @@ class MainActivity : ComponentActivity() {
                     PtsSecondaryButton("Off", Modifier.fillMaxWidth()) {
                         exo.trackSelectionParameters = exo.trackSelectionParameters.buildUpon()
                             .setTrackTypeDisabled(androidx.media3.common.C.TRACK_TYPE_TEXT, true).build()
+                        playerPreference("subtitle_lang", "")
                         showTracks = false
                     }
                     textGroups.forEach { group ->
                         (0 until group.length).forEach { index ->
-                            val label = group.getTrackFormat(index).language ?: "Subtitle ${index + 1}"
+                            val format = group.getTrackFormat(index)
+                            val label = format.label?.takeIf { it.isNotBlank() } ?: format.language?.let { Locale.forLanguageTag(it).displayLanguage } ?: "Subtitle ${index + 1}"
                             PtsSecondaryButton(label.replaceFirstChar { it.uppercase() }, Modifier.fillMaxWidth()) {
                                 exo.trackSelectionParameters = exo.trackSelectionParameters.buildUpon()
                                     .setTrackTypeDisabled(androidx.media3.common.C.TRACK_TYPE_TEXT, false)
                                     .setOverrideForType(androidx.media3.common.TrackSelectionOverride(group.mediaTrackGroup, index)).build()
+                                format.language?.let { playerPreference("subtitle_lang", it) }
                                 showTracks = false
                             }
                         }
