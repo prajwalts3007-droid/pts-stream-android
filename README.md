@@ -1,6 +1,6 @@
 # PTS Library Android
 
-Native Kotlin/Compose client for `https://ptsmovies.online`. Android 8+, HEVC-capable device required for playback. Uses Media3 for video and native local storage for approved offline MP4s. No media or PTS credentials are stored in this repository. The installed app is named **PTS Library**; the package identifier and signing key are retained for Android updates.
+Native Kotlin/Compose client for `https://ptsmovies.online`. Android 8+, HEVC-capable device required for playback. Uses Media3 for video and native local storage for approved offline MP4s. No production media or PTS credentials are stored in this repository; the only video fixture is a generated test pattern packaged in the test APK. The installed app is named **PTS Library**; the package identifier and signing key are retained for Android updates.
 
 ## Build
 

@@ -5,6 +5,6 @@ set +e
 gradle --no-daemon :app:connectedDebugAndroidTest
 result=$?
 mkdir -p audit-screens
-adb pull /sdcard/Android/data/online.ptsmovies.stream/files/audit-screens/. audit-screens/
+adb pull /sdcard/Download/pts-native-audit/. audit-screens/
 adb logcat -d -t 3000 > audit-logcat.txt
 exit "$result"

@@ -32,11 +32,7 @@ class ScreenAuditTest {
 
     private fun capture(name: String) {
         ui.waitForIdle()
-        val context = InstrumentationRegistry.getInstrumentation().targetContext
-        val output = File(context.getExternalFilesDir(null), "audit-screens").apply { mkdirs() }
-        File(output, "$name.png").outputStream().use {
-            ui.onRoot().captureToImage().asAndroidBitmap().compress(Bitmap.CompressFormat.PNG, 100, it)
-        }
+        saveAuditCapture(name, ui.onRoot().captureToImage().asAndroidBitmap())
     }
 
     @Test fun renderEveryScreen() {

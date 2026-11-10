@@ -32,6 +32,7 @@ class AppFlowTest {
     private var scenario: ActivityScenario<MainActivity>? = null
     private val signedIn = AtomicBoolean(false)
     private val adminCalls = AtomicInteger(0)
+    private val failDirectStream = AtomicBoolean(false)
     @Volatile private var role = "user"
     private lateinit var media: ByteArray
 
@@ -61,6 +62,8 @@ class AppFlowTest {
                     "/admin/github" -> json("""{"configured":true}""")
                     "/admin/files" -> json("""{"entries":[{"name":"Samples","is_dir":true,"size":0}]}""")
                     "/stream/file/movie/90001" -> {
+                        if (failDirectStream.get() && request.requestUrl?.queryParameter("via") != "vps")
+                            return MockResponse().setResponseCode(503)
                         val start = request.getHeader("Range")?.substringAfter("bytes=")?.substringBefore('-')?.toIntOrNull() ?: 0
                         val response = MockResponse().setHeader("Content-Type", "video/mp4").setHeader("Accept-Ranges", "bytes")
                         if (start > 0) response.setResponseCode(206).setHeader("Content-Range", "bytes $start-${media.lastIndex}/${media.size}")
@@ -97,7 +100,7 @@ class AppFlowTest {
     }
 
     private fun openMovie() {
-        ui.onNodeWithText("Movies").performClick()
+        ui.onNodeWithContentDescription("Movies").performClick()
         ui.onNodeWithText("Synthetic HEVC").performClick()
         waitForText("Details")
     }
@@ -109,11 +112,7 @@ class AppFlowTest {
 
     private fun capture(name: String) {
         ui.waitForIdle()
-        val context = InstrumentationRegistry.getInstrumentation().targetContext
-        val folder = File(context.getExternalFilesDir(null), "audit-screens").apply { mkdirs() }
-        File(folder, "$name.png").outputStream().use {
-            ui.onRoot().captureToImage().asAndroidBitmap().compress(Bitmap.CompressFormat.PNG, 100, it)
-        }
+        saveAuditCapture(name, ui.onRoot().captureToImage().asAndroidBitmap())
     }
 
     @Test fun viewerLoginNavigationAndRecreation() {
@@ -177,5 +176,15 @@ class AppFlowTest {
         ui.onNodeWithContentDescription("Delete").performClick()
         ui.onNodeWithText("Delete").performClick()
         waitForText("No offline videos")
+    }
+
+    @Test fun syntheticHevcUsesVpsFallbackWhenDirectFails() {
+        failDirectStream.set(true)
+        launchLoggedIn()
+        openMovie()
+        ui.onNodeWithText("Play").performClick()
+        ui.waitUntil(20000) { ui.onAllNodesWithText(" / 0:08", substring = true).fetchSemanticsNodes().isNotEmpty() }
+        ui.onNodeWithText("VPS fallback").assertExists()
+        capture("app-hevc-vps-fallback")
     }
 }
