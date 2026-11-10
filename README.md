@@ -1,6 +1,6 @@
-# PTS Stream Android
+# PTS Library Android
 
-Native Kotlin/Compose client for `https://ptsmovies.online`. Android 8+, HEVC-capable device required for playback. Uses Media3 for video and native local storage for approved offline MP4s. No media or PTS credentials are stored in this repository.
+Native Kotlin/Compose client for `https://ptsmovies.online`. Android 8+, HEVC-capable device required for playback. Uses Media3 for video and native local storage for approved offline MP4s. No media or PTS credentials are stored in this repository. The installed app is named **PTS Library**; the package identifier and signing key are retained for Android updates.
 
 ## Build
 
@@ -15,5 +15,5 @@ Release-candidate tags (`v1-rc1`) produce a **prerelease** APK for manual testin
 - Offline downloads currently need the app to remain open, restart rather than resume after interruption, and require a live session to display. Background/resumable downloads need a foreground transfer service and integration testing; do not advertise them as complete.
 - Android media support varies by device. Check HEVC hardware decoding and audio/subtitle tracks on the intended phones. Offline files remain on the device and are deleted on uninstall. A device backup is disabled.
 - Existing web push subscriptions are browser-only; native remote pushes require an authenticated FCM registration/delivery backend. Android notification permission currently covers local download notifications, not unimplemented remote pushes.
-- The admin console opens the existing server-rendered UI in an authenticated WebView. The video player, browsing and downloads are native; a fully native rewrite of every admin form is not yet implemented.
+- Hub, Files and Streaming are native Compose sections with their own bottom navigation. Administrators can change sections using the top controls or swiping the dock; users see Streaming only. No WebView is embedded. The available source predates the deployed backend, so sensitive actions remain unavailable until their APIs and access rules are verified; metadata search does not submit jobs, and several settings/file operations still need native forms. Do not advertise full feature parity yet.
 - Test login/role boundaries, transfers, Pi offline/fallback, rotation, downloads, update install, and low-storage scenarios on real devices before calling this production-ready.

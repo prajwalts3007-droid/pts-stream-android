@@ -2,31 +2,23 @@ package online.ptsmovies.stream
 
 import android.Manifest
 import android.app.PictureInPictureParams
-import android.content.Intent
 import android.content.pm.PackageManager
 import android.media.AudioManager
 import android.media.MediaCodecList
 import android.os.Build
 import android.os.Bundle
 import android.view.ViewGroup
-import android.webkit.WebView
-import android.webkit.WebViewClient
-import android.webkit.CookieManager
-import android.webkit.ValueCallback
-import android.webkit.WebChromeClient
-import android.net.Uri
-import android.os.Environment
 import android.widget.FrameLayout
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.animation.animateContentSize
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -39,6 +31,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
@@ -55,17 +48,13 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
-import okhttp3.Request
-import java.io.IOException
 import org.json.JSONObject
 import coil.compose.AsyncImage
-import java.io.File
 import kotlin.math.roundToLong
 
-private val ink = Color(0xFF0C111D)
-private val accent = Color(0xFF7BB8FF)
-private val white = Color(0xFFF5F7FF)
+private val ink = Color.Black
+private val accent = Color.White
+private val white = Color.White
 
 class MainActivity : ComponentActivity() {
     private val api = PtsApi()
@@ -75,7 +64,13 @@ class MainActivity : ComponentActivity() {
     private var library by mutableStateOf<Library?>(null)
     private var loading by mutableStateOf(true)
     private var message by mutableStateOf("")
+    private var mode by mutableStateOf("Stream")
     private var tab by mutableStateOf("Home")
+    private var hubTab by mutableStateOf("Dashboard")
+    private var filesTab by mutableStateOf("Browse")
+    private var streamTab by mutableStateOf("Home")
+    private var showProfile by mutableStateOf(false)
+    private var showDownloads by mutableStateOf(false)
     private var selected by mutableStateOf<Title?>(null)
     private var episode by mutableStateOf<Episode?>(null)
     private var playing by mutableStateOf(false)
@@ -84,10 +79,23 @@ class MainActivity : ComponentActivity() {
     private var downloading by mutableStateOf("")
     private var downloadPercent by mutableIntStateOf(0)
     private val askNotifications = registerForActivityResult(ActivityResultContracts.RequestPermission()) { }
-    private var fileCallback: ValueCallback<Array<Uri>>? = null
-    private val chooseFile = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
-        fileCallback?.onReceiveValue(WebChromeClient.FileChooserParams.parseResult(result.resultCode, result.data))
-        fileCallback = null
+    private fun openMode(next: String) {
+        if (account?.optString("role") != "admin" && next != "Stream") return
+        mode = next
+        tab = when (next) { "Hub" -> hubTab; "Files" -> filesTab; else -> streamTab }
+        showProfile = false; showDownloads = false; selected = null
+    }
+
+    private fun changeTab(next: String) {
+        tab = next
+        when (mode) { "Hub" -> hubTab = next; "Files" -> filesTab = next; else -> streamTab = next }
+        selected = null
+    }
+
+    private fun switchBySwipe(dx: Float) {
+        if (account?.optString("role") != "admin") return
+        openMode(if (dx > 0) when (mode) { "Hub" -> "Files"; "Files" -> "Stream"; else -> "Hub" }
+            else when (mode) { "Hub" -> "Stream"; "Stream" -> "Files"; else -> "Hub" })
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -96,13 +104,18 @@ class MainActivity : ComponentActivity() {
             askNotifications.launch(Manifest.permission.POST_NOTIFICATIONS)
         }
         scope.launch {
-            try { account = api.me(); offline = OfflineStore(this@MainActivity, api, account!!.optLong("id")); refresh() }
+            try {
+                account = api.me()
+                offline = OfflineStore(this@MainActivity, api, account!!.optLong("id"))
+                openMode(if (account?.optString("role") == "admin") "Hub" else "Stream")
+                refresh()
+            }
             catch (_: Exception) { loading = false }
         }
-        window.statusBarColor = android.graphics.Color.rgb(12, 17, 29)
-        window.navigationBarColor = android.graphics.Color.rgb(12, 17, 29)
+        window.statusBarColor = android.graphics.Color.BLACK
+        window.navigationBarColor = android.graphics.Color.BLACK
         setContent {
-            MaterialTheme(colorScheme = darkColorScheme(primary = accent, background = ink, surface = Color(0xFF172235))) {
+            MaterialTheme(colorScheme = darkColorScheme(primary = accent, onPrimary = Color.Black, background = ink, surface = Color(0xFF0A0A0A))) {
                 Surface(Modifier.fillMaxSize(), color = ink) {
                     when {
                         loading -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { CircularProgressIndicator() }
@@ -112,6 +125,7 @@ class MainActivity : ComponentActivity() {
                                 try {
                                     account = api.login(user, pass)
                                     offline = OfflineStore(this@MainActivity, api, account!!.optLong("id"))
+                                    openMode(if (account?.optString("role") == "admin") "Hub" else "Stream")
                                     message = ""; refresh()
                                 }
                                 catch (e: Exception) { message = e.message.orEmpty(); loading = false }
@@ -141,74 +155,33 @@ class MainActivity : ComponentActivity() {
     @Composable private fun AppScreen() {
         var query by remember { mutableStateOf("") }
         var revision by remember { mutableIntStateOf(0) }
-        BackHandler(selected != null || tab == "Admin") {
-            if (selected != null) selected = null else tab = "Home"
+        BackHandler(selected != null || showProfile || showDownloads || mode != (if (account?.optString("role") == "admin") "Hub" else "Stream")) {
+            when {
+                showDownloads -> showDownloads = false
+                showProfile -> showProfile = false
+                selected != null -> selected = null
+                else -> openMode(if (account?.optString("role") == "admin") "Hub" else "Stream")
+            }
         }
         Column(Modifier.fillMaxSize()) {
-            Row(Modifier.fillMaxWidth().padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
-                Text("PTS Stream", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
-                TextButton(onClick = { scope.launch { loading = true; refresh() } }) { Text("Refresh") }
+            Row(Modifier.fillMaxWidth().background(Color(0xFF0A0A0A)).padding(horizontal = 18.dp, vertical = 9.dp), verticalAlignment = Alignment.CenterVertically) {
+                Box(Modifier.size(32.dp).background(white, RoundedCornerShape(8.dp)), contentAlignment = Alignment.Center) {
+                    Text("PTS", color = ink, style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Black, fontFamily = FontFamily.Serif)
+                }
+                Text(when(mode) { "Files" -> "PTSFiles"; "Stream" -> "PTSStream"; else -> "PTS Library" },
+                    modifier = Modifier.weight(1f).padding(start = 10.dp), fontWeight = FontWeight.Bold, fontFamily = FontFamily.Serif)
+                TextButton(onClick = { showProfile = true; showDownloads = false }) { Text(account?.optString("username")?.take(1)?.uppercase() ?: "?") }
             }
-            if (message.isNotBlank()) Text(message, color = Color(0xFFFFA7A7), modifier = Modifier.padding(horizontal = 16.dp))
+            if (account?.optString("role") == "admin" && !showProfile && !showDownloads) {
+                Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp), horizontalArrangement = Arrangement.SpaceEvenly) {
+                    listOf("Hub", "Files", "Stream").forEach { next ->
+                        FilterChip(selected = mode == next, onClick = { openMode(next) }, label = { Text(next) })
+                    }
+                }
+            }
+            if (message.isNotBlank()) Text(message, color = Color(0xFFFFB9B9), modifier = Modifier.padding(horizontal = 16.dp))
             Box(Modifier.weight(1f)) {
-                if (tab == "Admin" && account?.optString("role") == "admin") {
-                    // All existing administrative forms retain the server's role/CSRF enforcement.
-                    AndroidView(factory = { ctx -> WebView(ctx).apply {
-                        settings.javaScriptEnabled = true
-                        settings.domStorageEnabled = true
-                        settings.allowFileAccess = false
-                        settings.allowContentAccess = false
-                        webChromeClient = object : WebChromeClient() {
-                            override fun onShowFileChooser(webView: WebView, callback: ValueCallback<Array<Uri>>,
-                                params: FileChooserParams): Boolean {
-                                fileCallback?.onReceiveValue(null)
-                                fileCallback = callback
-                                return try { chooseFile.launch(params.createIntent()); true }
-                                catch (_: Exception) { fileCallback = null; callback.onReceiveValue(null); false }
-                            }
-                        }
-                        webViewClient = object : WebViewClient() {
-                            override fun shouldOverrideUrlLoading(view: WebView, request: android.webkit.WebResourceRequest): Boolean {
-                                val uri = request.url
-                                if (uri.scheme != "https") return true
-                                if (uri.host == "ptsmovies.online") return false
-                                startActivity(Intent(Intent.ACTION_VIEW, uri))
-                                return true
-                            }
-                        }
-                        setDownloadListener { url, _, disposition, mime, _ ->
-                            if (Uri.parse(url).scheme != "https" || Uri.parse(url).host != "ptsmovies.online") {
-                                message = "Downloads are limited to the PTS site"; return@setDownloadListener
-                            }
-                            val filename = android.webkit.URLUtil.guessFileName(url, disposition, mime)
-                                .replace(Regex("[^A-Za-z0-9._ -]"), "_").take(100).ifBlank { "pts-file" }
-                            // OkHttp's host-scoped cookie jar does not forward session credentials to redirect targets.
-                            scope.launch {
-                                try {
-                                    withContext(Dispatchers.IO) {
-                                        val directory = File(getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS), "admin").apply { mkdirs() }
-                                        val target = File(directory, filename)
-                                        val partial = File(directory, "$filename.part")
-                                        api.http.newCall(Request.Builder().url(url).build()).execute().use { response ->
-                                            if (!response.isSuccessful) throw IOException("HTTP ${response.code}")
-                                            val length = response.body?.contentLength() ?: -1L
-                                            val bytes = response.body?.byteStream()?.use { input ->
-                                                partial.outputStream().use { output -> input.copyTo(output) }
-                                            } ?: throw IOException("Empty response")
-                                            if (bytes <= 0 || (length >= 0 && bytes != length)) {
-                                                partial.delete(); throw IOException("Incomplete file")
-                                            }
-                                            if (target.exists() && !target.delete()) throw IOException("Cannot replace old file")
-                                            if (!partial.renameTo(target)) throw IOException("Cannot save file")
-                                        }
-                                    }
-                                    message = "$filename saved to this app's Downloads folder"
-                                } catch (e: Exception) { message = "File download failed: ${e.message}" }
-                            }
-                        }
-                        loadUrl(BASE)
-                    } }, modifier = Modifier.fillMaxSize())
-                } else if (tab == "Downloads") {
+                if (showDownloads) {
                     key(revision) { DownloadsScreen(offline.list(), { item ->
                         val title = library?.titles?.firstOrNull { it.id == item.titleId }
                         if (title != null) {
@@ -219,19 +192,21 @@ class MainActivity : ComponentActivity() {
                     }, { item ->
                         try { offline.remove(item); revision++ } catch (e: Exception) { message = e.message.orEmpty() }
                     }) }
-                } else if (tab == "Profile") {
+                } else if (showProfile) {
                     Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                         Text("Profile", style = MaterialTheme.typography.headlineMedium)
                         Text(account?.optString("username").orEmpty())
                         Text("Offline videos: ${offline.list().size} · stored only on this device")
-                        Button(onClick = { tab = "Downloads" }) { Text("My Downloads") }
+                        Button(onClick = { showProfile = false; showDownloads = true }) { Text("My Downloads") }
                         Button(onClick = { checkForUpdate(this@MainActivity, scope) { message = it } }) { Text("Check for updates") }
                         OutlinedButton(onClick = {
                             downloadJob?.cancel()
                             scope.launch { try { api.logout() } finally { account = null; library = null; selected = null } }
                         }) { Text("Sign out") }
                     }
-                } else {
+                } else if (mode == "Hub" && account?.optString("role") == "admin") HubPanel(tab, api) { message = it }
+                else if (mode == "Files" && account?.optString("role") == "admin") FilesPanel(tab, api, this@MainActivity) { message = it }
+                else {
                     val lib = library
                     if (lib == null) Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { Text("Unable to load library") }
                     else {
@@ -286,11 +261,24 @@ class MainActivity : ComponentActivity() {
                 LinearProgressIndicator(progress = { downloadPercent / 100f }, modifier = Modifier.fillMaxWidth())
                 TextButton(onClick = { downloadJob?.cancel(); downloading = "" }) { Text("Cancel") }
             }
-            NavigationBar(containerColor = Color(0xFF172235)) {
-                (listOf("Home", "Movies", "Series", "Watchlist", "Downloads", "Profile") +
-                    if (account?.optString("role") == "admin") listOf("Admin") else emptyList()).forEach { name ->
-                    NavigationBarItem(selected = tab == name, onClick = { selected = null; tab = name; revision++ },
-                        icon = { Text(name.take(1)) }, label = { Text(name, maxLines = 1) })
+            if (!showProfile && !showDownloads) {
+                var swipe by remember { mutableFloatStateOf(0f) }
+                NavigationBar(containerColor = Color(0xFF0A0A0A), modifier = Modifier.pointerInput(mode) {
+                    detectHorizontalDragGestures(onDragStart = { swipe = 0f }, onDragEnd = {
+                        if (kotlin.math.abs(swipe) >= size.width * 0.45f) switchBySwipe(swipe)
+                        swipe = 0f
+                    }) { change, amount -> change.consume(); swipe += amount }
+                }) {
+                    val pages = when (mode) {
+                        "Hub" -> listOf("Dashboard", "Download", "Queue", "Settings")
+                        "Files" -> listOf("Browse", "Transfers")
+                        else -> listOf("Home", "Movies", "Series", "Watchlist")
+                    }
+                    pages.forEach { name ->
+                        NavigationBarItem(selected = tab == name, onClick = { changeTab(name); revision++ },
+                            icon = { Text(when(name) { "Dashboard", "Home" -> "⌂"; "Queue" -> "☷"; "Download" -> "↓"; "Settings" -> "⚙"; "Browse" -> "▣"; "Transfers" -> "⇄"; "Movies" -> "▤"; "Series" -> "▥"; else -> "♡" }) },
+                            label = { Text(if (name == "Series") "TV Shows" else name, maxLines = 1) })
+                    }
                 }
             }
         }

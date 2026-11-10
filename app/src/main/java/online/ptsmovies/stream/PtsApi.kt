@@ -38,14 +38,15 @@ class PtsApi {
         .followRedirects(true).connectTimeout(15, TimeUnit.SECONDS)
         .readTimeout(45, TimeUnit.SECONDS).build()
 
-    private fun request(path: String, body: JSONObject? = null): JSONObject {
+    private fun request(path: String, body: JSONObject? = null, method: String = if (body == null) "GET" else "POST"): JSONObject {
         val url = BASE + "/api/v1" + path
         val builder = Request.Builder().url(url).header("Accept", "application/json")
-        if (body != null) {
+        if (method != "GET") {
             // A new CSRF token is issued for the current browser-like cookie session.
             val token = get("/auth/csrf").optString("csrf_token")
             builder.header("X-CSRF-Token", token)
-                .post(body.toString().toRequestBody("application/json".toMediaType()))
+            if (method == "DELETE") builder.delete()
+            else builder.method(method, (body ?: JSONObject()).toString().toRequestBody("application/json".toMediaType()))
         }
         http.newCall(builder.build()).execute().use { response ->
             val text = response.body?.string().orEmpty()
@@ -55,6 +56,8 @@ class PtsApi {
     }
 
     private fun get(path: String) = request(path)
+    suspend fun json(path: String, method: String = "GET", body: JSONObject? = null): JSONObject =
+        withContext(Dispatchers.IO) { request(path, body, method) }
     suspend fun me(): JSONObject = withContext(Dispatchers.IO) { get("/auth/me").getJSONObject("user") }
     suspend fun login(user: String, password: String): JSONObject = withContext(Dispatchers.IO) {
         request("/auth/login", JSONObject().put("username", user).put("password", password).put("remember", true)).getJSONObject("user")
