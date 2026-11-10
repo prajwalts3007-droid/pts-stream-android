@@ -1,5 +1,3 @@
-import java.util.Base64
-
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
@@ -26,6 +24,7 @@ android {
             val path = System.getenv("PTS_KEYSTORE_FILE")
             if (!path.isNullOrBlank()) {
                 storeFile = file(path)
+                storeType = "pkcs12"
                 storePassword = System.getenv("PTS_KEYSTORE_PASSWORD")
                 keyAlias = System.getenv("PTS_KEY_ALIAS")
                 keyPassword = System.getenv("PTS_KEY_PASSWORD")

@@ -6,6 +6,8 @@ import android.content.Context
 import android.os.Build
 import androidx.core.app.NotificationCompat
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withContext
 import okhttp3.Request
 import org.json.JSONArray
@@ -57,7 +59,7 @@ class OfflineStore(private val context: Context, private val api: PtsApi, ownerI
         val id = key(title, episode)
         val partial = File(root, "$id.part")
         val dest = File(root, "$id.mp4")
-        fun transfer(allowFallback: Boolean) {
+        suspend fun transfer(allowFallback: Boolean) {
             val req = Request.Builder().url(api.streamUrl(title, episode, allowFallback))
                 .build()
             api.http.newCall(req).execute().use { response ->
@@ -72,6 +74,7 @@ class OfflineStore(private val context: Context, private val api: PtsApi, ownerI
                     body.byteStream().use { input ->
                         val buffer = ByteArray(256 * 1024)
                         while (true) {
+                            currentCoroutineContext().ensureActive()
                             val n = input.read(buffer)
                             if (n < 0) break
                             out.write(buffer, 0, n)
@@ -93,7 +96,8 @@ class OfflineStore(private val context: Context, private val api: PtsApi, ownerI
                 transfer(fallback)
                 succeeded = true
                 break
-            } catch (e: Exception) { last = e }
+            } catch (e: kotlinx.coroutines.CancellationException) { partial.delete(); throw e }
+            catch (e: Exception) { partial.delete(); last = e }
         }
         if (!succeeded) throw IOException("Offline download failed: ${last?.message ?: "source unavailable"}")
         val item = SavedVideo(id, title.id, title.title, episode?.season ?: 0, episode?.episode ?: 0,

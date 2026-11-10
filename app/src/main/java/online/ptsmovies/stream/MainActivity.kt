@@ -2,7 +2,6 @@ package online.ptsmovies.stream
 
 import android.Manifest
 import android.app.PictureInPictureParams
-import android.content.Intent
 import android.content.pm.PackageManager
 import android.media.AudioManager
 import android.media.MediaCodecList
@@ -11,7 +10,6 @@ import android.os.Bundle
 import android.view.ViewGroup
 import android.webkit.WebView
 import android.webkit.WebViewClient
-import android.net.Uri
 import android.widget.FrameLayout
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
@@ -189,14 +187,14 @@ class MainActivity : ComponentActivity() {
                             item { Text(if (selected == null) "$tab · ${titles.size} titles" else selected!!.title,
                                 style = MaterialTheme.typography.titleLarge, modifier = Modifier.padding(vertical = 8.dp)) }
                             if (selected == null) {
-                                items(titles, key = { it.id }) { t -> TitleCard(t, lib.progress[t.id], { selected = t }) }
+                                items(titles, key = { it.id }) { t -> TitleCard(t, lib.progress[t.id]?.seconds, { selected = t }) }
                             } else {
                                 val t = selected!!
                                 item {
                                     Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                                         Text(t.synopsis.ifBlank { t.genres.joinToString() })
                                         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                            Button(onClick = { episode = if (t.kind == "movie") null else t.episodes.firstOrNull(); playing = true },
+                                            Button(onClick = { episode = if (t.kind == "movie") null else t.episodes.firstOrNull { it.id == lib.progress[t.id]?.episodeId } ?: t.episodes.firstOrNull(); playing = true },
                                                 enabled = t.kind == "movie" || t.episodes.isNotEmpty()) { Text(if (t.kind == "movie") "Play" else "Play series") }
                                             OutlinedButton(onClick = { scope.launch {
                                                 try { api.watch(t.id, t.id !in lib.watch); refresh() }
@@ -258,6 +256,11 @@ class MainActivity : ComponentActivity() {
         val fallback = remember(title.id, ep?.id) { mutableStateOf(false) }
         var error by remember { mutableStateOf("") }
         var showTracks by remember { mutableStateOf(false) }
+        var speed by remember { mutableFloatStateOf(1f) }
+        var fill by remember { mutableStateOf(false) }
+        var resumePosition by remember(title.id, ep?.id) {
+            mutableLongStateOf(library?.progress?.get(title.id)?.takeIf { it.episodeId == (ep?.id ?: 0L) }?.seconds?.times(1000) ?: 0L)
+        }
         val hevcAvailable = remember { MediaCodecList(MediaCodecList.REGULAR_CODECS).codecInfos.any { info ->
             !info.isEncoder && info.supportedTypes.any { it.equals("video/hevc", true) }
         } }
@@ -269,6 +272,8 @@ class MainActivity : ComponentActivity() {
                     OkHttpDataSource.Factory(api.http).setUserAgent("PTS-Stream-Android")
                 )).build().apply {
                 setMediaItem(MediaItem.fromUri(source))
+                if (resumePosition > 0) seekTo(resumePosition)
+                setPlaybackSpeed(speed)
                 prepare(); playWhenReady = true
             }
         }
@@ -276,8 +281,15 @@ class MainActivity : ComponentActivity() {
             player = exo
             val listener = object : Player.Listener {
                 override fun onPlayerError(exception: PlaybackException) {
-                    if (saved == null && !fallback.value) fallback.value = true
+                    if (saved == null && !fallback.value) { resumePosition = exo.currentPosition.coerceAtLeast(0); fallback.value = true }
                     else error = "Playback failed: ${exception.errorCodeName}"
+                }
+                override fun onPlaybackStateChanged(state: Int) {
+                    if (state == Player.STATE_ENDED && ep != null) {
+                        val next = title.episodes.firstOrNull { it.season == ep.season && it.episode == ep.episode + 1 }
+                            ?: title.episodes.firstOrNull { it.season > ep.season }
+                        if (next != null) { episode = next; resumePosition = 0; fallback.value = false }
+                    }
                 }
             }
             exo.addListener(listener)
@@ -307,7 +319,7 @@ class MainActivity : ComponentActivity() {
                     player = exo
                     useController = true
                     layoutParams = FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
-                } }, update = { it.player = exo }, modifier = Modifier.fillMaxSize())
+                } }, update = { it.player = exo; it.resizeMode = if (fill) androidx.media3.ui.AspectRatioFrameLayout.RESIZE_MODE_ZOOM else androidx.media3.ui.AspectRatioFrameLayout.RESIZE_MODE_FIT }, modifier = Modifier.fillMaxSize())
                 var dragX by remember { mutableFloatStateOf(0f) }
                 var dragY by remember { mutableFloatStateOf(0f) }
                 Box(Modifier.fillMaxSize()
@@ -334,6 +346,12 @@ class MainActivity : ComponentActivity() {
             if (error.isNotBlank()) Text(error, color = Color.Red, modifier = Modifier.padding(12.dp))
             Text(if (saved != null) "Offline · ${saved.bytes / 1048576} MiB" else if (fallback.value) "VPS fallback" else "Direct Pi stream",
                 modifier = Modifier.padding(16.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(horizontal = 12.dp)) {
+                TextButton(onClick = { speed = if (speed >= 2f) 0.75f else speed + 0.25f; exo.setPlaybackSpeed(speed) }) { Text("${speed}×") }
+                TextButton(onClick = { fill = !fill }) { Text(if (fill) "Fit" else "Fill") }
+                TextButton(onClick = { exo.seekTo((exo.currentPosition - 10000).coerceAtLeast(0)) }) { Text("−10s") }
+                TextButton(onClick = { exo.seekTo((exo.currentPosition + 10000).coerceAtMost(exo.duration.coerceAtLeast(0))) }) { Text("+10s") }
+            }
             if (showTracks) AlertDialog(onDismissRequest = { showTracks = false }, title = { Text("Player tracks") }, text = {
                 Column {
                     Text("Audio")

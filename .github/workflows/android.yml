@@ -26,6 +26,19 @@ jobs:
         with:
           name: pts-stream-debug
           path: app/build/outputs/apk/debug/*.apk
+      - name: Validate signed APK without publishing
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          PTS_KEYSTORE_B64: ${{ secrets.PTS_KEYSTORE_B64 }}
+          PTS_KEYSTORE_FILE: ${{ runner.temp }}/pts-release.jks
+          PTS_KEYSTORE_PASSWORD: ${{ secrets.PTS_KEYSTORE_PASSWORD }}
+          PTS_KEY_ALIAS: ${{ secrets.PTS_KEY_ALIAS }}
+          PTS_KEY_PASSWORD: ${{ secrets.PTS_KEY_PASSWORD }}
+        run: |
+          test -n "$PTS_KEYSTORE_B64" && test -n "$PTS_KEYSTORE_PASSWORD" || { echo 'Signing secrets missing'; exit 1; }
+          printf %s "$PTS_KEYSTORE_B64" | base64 -d > "$PTS_KEYSTORE_FILE"
+          gradle --no-daemon :app:assembleRelease
+          "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify --print-certs app/build/outputs/apk/release/app-release.apk | grep -E '^Verifies|^Verified using' 
   release:
     if: startsWith(github.ref, 'refs/tags/v')
     needs: build

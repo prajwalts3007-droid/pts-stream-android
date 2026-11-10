@@ -21,7 +21,8 @@ data class Title(
     val id: Long, val kind: String, val title: String, val year: Int, val poster: String,
     val synopsis: String, val genres: List<String>, val episodes: List<Episode>, val codec: String, val container: String
 )
-data class Library(val titles: List<Title>, val watch: Set<Long>, val progress: Map<Long, Long>)
+data class Resume(val episodeId: Long, val seconds: Long)
+data class Library(val titles: List<Title>, val watch: Set<Long>, val progress: Map<Long, Resume>)
 
 class PtsApi {
     private val cookies = CookieManager.getInstance().apply { setAcceptCookie(true) }
@@ -80,11 +81,11 @@ class PtsApi {
                     Episode(e.getLong("id"), e.optInt("season"), e.optInt("episode"), e.optString("title"), e.optDouble("duration"), e.optString("container"))
                 }, t.optString("video_codec"), t.optString("container"))
         }
-        val progress = mutableMapOf<Long, Long>()
+        val progress = mutableMapOf<Long, Resume>()
         val values = result.optJSONArray("progress") ?: JSONArray()
         for (i in 0 until values.length()) {
             val p = values.optJSONObject(i) ?: continue
-            progress[p.optLong("title_id")] = p.optLong("position")
+            progress[p.optLong("title_id")] = Resume(p.optLong("episode_id"), p.optLong("position"))
         }
         Library(titles, result.optJSONArray("watch").longs(), progress)
     }
