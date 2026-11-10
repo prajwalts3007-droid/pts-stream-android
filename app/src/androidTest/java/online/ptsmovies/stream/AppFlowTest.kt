@@ -48,6 +48,7 @@ class AppFlowTest {
     private val playedEpisodes = ConcurrentLinkedQueue<String>()
     private val deletedJobs = ConcurrentLinkedQueue<String>()
     private val fileCommands = ConcurrentLinkedQueue<Pair<String, JSONObject>>()
+    private val adminWrites = ConcurrentLinkedQueue<Pair<String, JSONObject>>()
     @Volatile private var role = "user"
     @Volatile private var profileName = "Test Viewer"
     private lateinit var media: ByteArray
@@ -78,6 +79,10 @@ class AppFlowTest {
                     if (role != "admin") return json("""{"error":"Forbidden"}""").setResponseCode(403)
                 }
                 if (path.startsWith("/queue/") && request.method == "DELETE") { deletedJobs.add(path.substringAfterLast('/')); return json("{}") }
+                if (path.startsWith("/admin/") && !path.startsWith("/admin/files") && request.method in listOf("POST", "PUT", "PATCH", "DELETE")) {
+                    adminWrites.add(path to JSONObject(request.body.readUtf8().ifBlank { "{}" }))
+                    return json("{}")
+                }
                 if (path == "/stream/progress/clear") { clearedProgress.set(true); return json("{}") }
                 if (path == "/stream/progress" && clearedProgress.get()) progressAfterClear.incrementAndGet()
                 if (path.startsWith("/admin/files/") && request.method in listOf("POST", "PUT")) {
@@ -104,6 +109,7 @@ class AppFlowTest {
                     "/system/metrics" -> json("{}")
                     "/admin/users" -> json("""{"users":[]}""")
                     "/admin/github" -> json("""{"configured":true}""")
+                    "/admin/pipeline-settings" -> json("""{"pi_bwlimit_kbps":12345,"max_runners":4,"max_pi_transfers":1,"min_free_gib":10,"max_staging_gib":0,"reserve_per_job_gib":6}""")
                     "/admin/files" -> json("""{"entries":[{"name":"Samples","is_dir":true,"size":0},{"name":"sample.zip","is_dir":false,"size":100},{"name":"notes.txt","is_dir":false,"size":20}]}""")
                     "/admin/files/content" -> json("""{"content":"synthetic notes","size":15}""")
                     "/admin/files/ops" -> json("""{"ops":[{"id":"running","kind":"copy","detail":"Active copy","state":"running","pct":42}${if (clearedTransfers.get()) "" else "," + """{"id":"done","kind":"zip","detail":"Finished zip","state":"done","pct":100}"""}]}""")
@@ -317,6 +323,7 @@ class AppFlowTest {
         launchLoggedIn()
         ui.onNodeWithContentDescription("TV Shows").performClick()
         ui.onNodeWithText("Synthetic series").performClick()
+        ui.onNodeWithTag("title-details").performScrollToNode(hasTestTag("season-selector"))
         ui.onNodeWithTag("season-selector").performScrollTo().performClick()
         ui.onNodeWithText("Season 2").performClick()
         ui.onNodeWithText("E1 · Second season episode").performScrollTo().performClick()
@@ -566,5 +573,22 @@ class AppFlowTest {
         ui.onNodeWithTag("player-gesture-zone").assertDoesNotExist()
         ui.onNodeWithContentDescription("Unlock player").performClick()
         ui.onNodeWithTag("player-gesture-zone").assertExists()
+    }
+
+    @Test fun nativePipelineSettingsLoadAndRequireTypedSaveConfirmation() {
+        role = "admin"; launchLoggedIn()
+        ui.onNodeWithContentDescription("Settings").performClick()
+        ui.onNodeWithText("Pipeline settings").performClick()
+        waitForText("Concurrent runners")
+        ui.onAllNodes(hasSetTextAction())[1].performTextReplacement("3")
+        ui.onNodeWithText("Save").performScrollTo().performClick()
+        ui.onNodeWithText("Confirm").assertIsNotEnabled()
+        assertTrue(adminWrites.isEmpty())
+        ui.onNode(hasSetTextAction() and hasAnyAncestor(isDialog())).performTextInput("CONFIRM")
+        ui.onNodeWithText("Confirm").performClick()
+        ui.waitUntil(10000) { adminWrites.any { it.first == "/admin/pipeline-settings" } }
+        val body = adminWrites.first { it.first == "/admin/pipeline-settings" }.second
+        assertEquals(3, body.getInt("max_runners")); assertEquals(12345, body.getInt("pi_bwlimit_kbps"))
+        capture("native-pipeline-settings")
     }
 }

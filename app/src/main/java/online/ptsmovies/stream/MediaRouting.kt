@@ -7,6 +7,7 @@ import java.net.InetAddress
 import java.security.KeyStore
 import java.security.cert.CertificateFactory
 import java.util.concurrent.TimeUnit
+import okio.buffer
 import javax.net.ssl.SSLContext
 import javax.net.ssl.TrustManagerFactory
 import javax.net.ssl.X509TrustManager
@@ -17,7 +18,8 @@ class PtsApplication : Application() {
 }
 
 /** Route signed media only. Account cookies/passwords never go to LAN. */
-class MediaRouting : Interceptor {
+internal data class LanEndpoint(val client: OkHttpClient, val base: HttpUrl)
+class MediaRouting internal constructor(private val endpointOverride: (() -> LanEndpoint?)? = null) : Interceptor {
     @Volatile private var cachedAddress = ""
     @Volatile private var local: OkHttpClient? = null
     @Volatile private var checkedAt = 0L
@@ -37,30 +39,58 @@ class MediaRouting : Interceptor {
                 .connectTimeout(750, TimeUnit.MILLISECONDS).readTimeout(45, TimeUnit.SECONDS).build().also { local = it; cachedAddress = address; checkedAt = 0; healthy = false }
         }
     }
-    private fun tryLocal(request: Request): Response? {
+    private fun endpoint(): LanEndpoint? {
+        endpointOverride?.let { return it() }
         val context = PtsApplication.environment ?: return null
         val prefs = NativePreferences(context)
         if (!prefs.lanEnabled() || !onWifi(context) || !isPrivateV4(prefs.lanAddress())) return null
+        val base = Request.Builder().url("https://media.ptsmovies.online:4443/").build().url
+        return LanEndpoint(lanClient(context, prefs.lanAddress()), base)
+    }
+    private fun linkedCall(client: OkHttpClient, request: Request, parent: Call): Response {
+        val child = client.newCall(request)
+        val watcher = cancellation.scheduleAtFixedRate({ if (parent.isCanceled()) child.cancel() }, 0, 100, TimeUnit.MILLISECONDS)
+        try {
+            val response = child.execute()
+            val body = response.body
+            if (body == null) { watcher.cancel(false); return response }
+            val source = object : okio.ForwardingSource(body.source()) {
+                override fun close() { try { super.close() } finally { watcher.cancel(false) } }
+            }
+            val buffered = source.buffer()
+            return response.newBuilder().body(object : ResponseBody() {
+                override fun contentType() = body.contentType()
+                override fun contentLength() = body.contentLength()
+                override fun source() = buffered
+            }).build()
+        } catch (e: Exception) { watcher.cancel(false); throw e }
+    }
+    private fun tryLocal(request: Request, parent: Call): Response? {
         if (request.method !in listOf("GET", "HEAD") || request.url.scheme != "https" || request.url.host != "media.ptsmovies.online" || request.url.encodedPath != "/media" || request.url.queryParameter("sig").isNullOrBlank()) return null
         return try {
-            val client = lanClient(context, prefs.lanAddress())
+            val endpoint = endpoint() ?: return null
+            val client = endpoint.client
             val now = android.os.SystemClock.elapsedRealtime()
             if (now - checkedAt > 15000 || checkedAt == 0L) {
-                healthy = client.newBuilder().readTimeout(750, TimeUnit.MILLISECONDS).build().newCall(Request.Builder().url("https://media.ptsmovies.online:4443/lan-health").build()).execute().use { it.isSuccessful && it.body?.string() == "pts-pi-lan-v1" }
+                healthy = linkedCall(client.newBuilder().readTimeout(750, TimeUnit.MILLISECONDS).build(), Request.Builder().url(endpoint.base.newBuilder().encodedPath("/lan-health").build()).build(), parent).use { it.isSuccessful && it.body?.string() == "pts-pi-lan-v1" }
                 checkedAt = now
             }
             if (!healthy) return null
             val headers = Headers.Builder()
             listOf("Range", "If-Range", "Accept", "User-Agent").forEach { name -> request.header(name)?.let { headers.add(name, it) } }
-            val response = client.newCall(Request.Builder().url(request.url.newBuilder().port(4443).build()).headers(headers.build()).method(request.method, null).build()).execute()
+            val url = endpoint.base.newBuilder().encodedPath(request.url.encodedPath).encodedQuery(request.url.encodedQuery).build()
+            val response = linkedCall(client, Request.Builder().url(url).headers(headers.build()).method(request.method, null).build(), parent)
             if (!response.isSuccessful && response.code !in listOf(304, 416)) { response.close(); healthy = false; checkedAt = now; null }
             else response.newBuilder().request(request).build()
-        } catch (_: Exception) { healthy = false; checkedAt = android.os.SystemClock.elapsedRealtime(); null }
+        } catch (e: Exception) {
+            if (parent.isCanceled()) throw java.io.IOException("Media request cancelled", e)
+            healthy = false; checkedAt = android.os.SystemClock.elapsedRealtime(); null
+        }
     }
     override fun intercept(chain: Interceptor.Chain): Response {
         var request = chain.request()
         repeat(10) {
-            val response = tryLocal(request) ?: chain.proceed(request)
+            val response = tryLocal(request, chain.call()) ?: chain.proceed(request)
             if (response.code !in listOf(301, 302, 303, 307, 308)) return response
             val target = response.header("Location")?.let { request.url.resolve(it) } ?: return response
             if (request.url.isHttps && !target.isHttps) { response.close(); throw java.io.IOException("Insecure media redirect refused") }
@@ -71,5 +101,10 @@ class MediaRouting : Interceptor {
             response.close(); request = next.build()
         }
         throw java.io.IOException("Too many redirects")
+    }
+    companion object {
+        private val cancellation = java.util.concurrent.ScheduledThreadPoolExecutor(1) { task ->
+            Thread(task, "pts-lan-cancellation").apply { isDaemon = true }
+        }.apply { removeOnCancelPolicy = true }
     }
 }

@@ -321,6 +321,7 @@ fun TitleScreen(
 ) {
     val episodes = remember(title) { title.episodes.sortedWith(compareBy({ it.season }, { it.episode })) }
     LazyColumn(
+        modifier = Modifier.testTag("title-details"),
         contentPadding = PaddingValues(start = 16.dp, end = 16.dp, bottom = 24.dp),
         verticalArrangement = Arrangement.spacedBy(10.dp)
     ) {
@@ -394,7 +395,7 @@ fun TitleScreen(
             }
         }
         if (resume != null) item {
-            PtsSecondaryButton("Mark as played", Modifier.fillMaxWidth(), icon = PtsIcons.Check, onClick = onMarkPlayed)
+            PtsSecondaryButton("Mark completed", Modifier.fillMaxWidth(), icon = PtsIcons.Check, onClick = onMarkPlayed)
         }
     }
 }
