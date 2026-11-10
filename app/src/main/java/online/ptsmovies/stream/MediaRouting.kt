@@ -31,7 +31,8 @@ class MediaRouting : Interceptor {
             val trust = TrustManagerFactory.getInstance(TrustManagerFactory.getDefaultAlgorithm()).apply { init(store) }.trustManagers.filterIsInstance<X509TrustManager>().single()
             val ssl = SSLContext.getInstance("TLS").apply { init(null, arrayOf(trust), null) }
             return OkHttpClient.Builder().sslSocketFactory(ssl.socketFactory, trust)
-                .dns { host -> if (host == "media.ptsmovies.online") listOf(InetAddress.getByName(address)) else Dns.SYSTEM.lookup(host) }
+                .dns(object : Dns { override fun lookup(hostname: String): List<InetAddress> =
+                    if (hostname == "media.ptsmovies.online") listOf(InetAddress.getByName(address)) else Dns.SYSTEM.lookup(hostname) })
                 .cookieJar(CookieJar.NO_COOKIES).followRedirects(false)
                 .connectTimeout(750, TimeUnit.MILLISECONDS).readTimeout(45, TimeUnit.SECONDS).build().also { local = it; cachedAddress = address; checkedAt = 0; healthy = false }
         }

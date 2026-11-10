@@ -970,6 +970,7 @@ class MainActivity : ComponentActivity() {
         }
         BoxWithConstraints(Modifier.fillMaxSize().background(Pts.bg)) {
           val landscape = maxWidth > maxHeight || inPip || playerFullscreen
+          val portraitHeight = (maxWidth * .58f).coerceIn(290.dp, 560.dp).coerceAtMost(maxHeight * .65f)
           DisposableEffect(landscape) {
               val bars = WindowCompat.getInsetsController(window, window.decorView)
               if (landscape && !inPip) {
@@ -979,7 +980,7 @@ class MainActivity : ComponentActivity() {
               onDispose { bars.show(androidx.core.view.WindowInsetsCompat.Type.systemBars()) }
           }
           Column(Modifier.fillMaxSize()) {
-             val frame = if (landscape) Modifier.weight(1f).fillMaxWidth() else Modifier.fillMaxWidth().height((maxWidth * .58f).coerceIn(290.dp, 560.dp).coerceAtMost(maxHeight * .65f))
+              val frame = if (landscape) Modifier.weight(1f).fillMaxWidth() else Modifier.fillMaxWidth().height(portraitHeight)
              PtsTheme("dark") { Box(frame.testTag("player-surface").clipToBounds().background(Color.Black)) {
                  key(exo) { AndroidView(factory = { ctx -> (android.view.LayoutInflater.from(ctx).inflate(R.layout.native_player, FrameLayout(ctx), false) as PlayerView).apply {
                      useController = false
@@ -1050,13 +1051,13 @@ class MainActivity : ComponentActivity() {
                                   PtsIconAction(PtsIcons.Subtitles, "Audio and subtitles", { showTracks = true; touchControls() }, tint = Color.White)
                                  PtsIconAction(PtsIcons.Fit, if (playerFullscreen) "Exit fullscreen" else "Fullscreen", { fullscreen(!playerFullscreen); touchControls() }, tint = Color.White)
                  }
-                 if (locked && !inPip) Box(Modifier.align(Alignment.TopEnd).padding(12.dp).background(Color.Black.copy(alpha = .7f), androidx.compose.foundation.shape.CircleShape)) {
-                     PtsIconAction(PtsIcons.Lock, "Unlock player", { locked = false; touchControls() }, tint = Color.White, size = 48.dp)
-                 }
                          }
                      }
                  }
-                 if (gestureFeedback.isNotBlank() && !inPip) Text(gestureFeedback,
+                  if (locked && !inPip) Box(Modifier.align(Alignment.TopEnd).padding(12.dp).background(Color.Black.copy(alpha = .7f), androidx.compose.foundation.shape.CircleShape)) {
+                      PtsIconAction(PtsIcons.Lock, "Unlock player", { locked = false; touchControls() }, tint = Color.White, size = 48.dp)
+                  }
+                  if (gestureFeedback.isNotBlank() && !inPip) Text(gestureFeedback,
                      Modifier.align(Alignment.Center).background(Color.Black.copy(alpha = .9f), RowShape).padding(horizontal = 16.dp, vertical = 10.dp).testTag("gesture-feedback"),
                      style = MaterialTheme.typography.labelLarge, color = Color.White)
                 if ((buffering || !firstFrame) && error.isBlank()) CircularProgressIndicator(Modifier.align(Alignment.Center).size(32.dp), color = Pts.accent)
