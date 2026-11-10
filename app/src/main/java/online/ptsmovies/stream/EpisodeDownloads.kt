@@ -15,8 +15,8 @@ import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 
 @Composable
-fun EpisodeDownloadDialog(title: Title, savedKeys: Set<String>, watched: Set<String>, onStart: (List<Episode>) -> Unit, onClose: () -> Unit) {
-    val episodes = remember(title) { title.episodes.sortedWith(compareBy({ it.season }, { it.episode })).filter { it.container != "hls" } }
+fun EpisodeDownloadDialog(title: Title, savedKeys: Set<String>, watched: Set<String>, onStart: (List<Episode>) -> Unit, onClose: () -> Unit, allowHls: Boolean = false) {
+    val episodes = remember(title, allowHls) { title.episodes.sortedWith(compareBy({ it.season }, { it.episode })).filter { allowHls || it.container != "hls" } }
     val seasons = remember(episodes) { episodes.map { it.season }.distinct() }
     var season by remember(title.id) { mutableIntStateOf(seasons.firstOrNull() ?: 1) }
     var selected by remember(title.id) { mutableStateOf(emptySet<Long>()) }

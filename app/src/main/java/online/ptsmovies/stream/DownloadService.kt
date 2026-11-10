@@ -48,7 +48,7 @@ class DownloadRepository internal constructor(private val context: Context, priv
         val tasks = (0 until array.length()).mapNotNull { i -> runCatching {
             val o = array.getJSONObject(i)
             DownloadTask(parseTitle(o.getJSONObject("title")), o.optJSONObject("episode")?.let { parseEpisode(it) },
-                if (o.optString("status") in listOf("queued", "downloading", "waiting_wifi", "cancelling")) "paused" else o.optString("status"),
+                if (o.optString("status") in listOf("queued", "preparing", "downloading", "waiting_wifi", "cancelling")) "paused" else o.optString("status"),
                 o.optLong("bytes"), o.optLong("total"), error = o.optString("error"))
         }.getOrNull() }.filter { it.status != "complete" || saved.any { s -> s.key == it.key } }
         mutable.value = DownloadSnapshot(tasks, saved)
@@ -69,9 +69,12 @@ class DownloadRepository internal constructor(private val context: Context, priv
     }
     private fun task(key: String, checkpoint: Boolean = true, transform: (DownloadTask) -> DownloadTask) { update(checkpoint) { s -> s.copy(tasks = s.tasks.map { if (it.key == key) transform(it) else it }) } }
     fun enqueue(title: Title, episode: Episode?) {
-        require(episode?.container != "hls" && (episode != null || title.container != "hls")) { "This HLS title is not available as an authorized offline MP4" }
+        if (episode?.container == "hls" || (episode == null && title.container == "hls")) {
+            val user = DeviceState(context).account()
+            require(user?.optLong("id") == owner && user.optString("role") == "admin") { "Pi MP4 preparation is currently verified only for administrator accounts" }
+        }
         val t = DownloadTask(title, episode)
-        if (mutable.value.saved.any { it.key == t.key } || mutable.value.tasks.any { it.key == t.key && it.status in listOf("queued", "downloading", "waiting_wifi", "cancelling") }) return
+        if (mutable.value.saved.any { it.key == t.key } || mutable.value.tasks.any { it.key == t.key && it.status in listOf("queued", "preparing", "downloading", "waiting_wifi", "cancelling") }) return
         update { s -> s.copy(tasks = s.tasks.filterNot { it.key == t.key } + t) }
         startService()
     }
@@ -86,7 +89,7 @@ class DownloadRepository internal constructor(private val context: Context, priv
     }
     fun pause(key: String): Unit = synchronized(lock) {
         val status = mutable.value.tasks.firstOrNull { it.key == key }?.status
-        if (status !in listOf("queued", "downloading", "waiting_wifi")) return@synchronized
+        if (status !in listOf("queued", "preparing", "downloading", "waiting_wifi")) return@synchronized
         task(key) { it.copy(status = "paused", speed = 0) }
         jobs[key]?.cancel(); calls[key]?.cancel()
         if (jobs.isEmpty()) reconcile()
@@ -103,7 +106,7 @@ class DownloadRepository internal constructor(private val context: Context, priv
         }
     }
     fun pauseAll(): Unit = synchronized(lock) {
-        update { s -> s.copy(tasks = s.tasks.map { if (it.status in listOf("queued", "downloading", "waiting_wifi")) it.copy(status = "paused", speed = 0) else it }) }
+        update { s -> s.copy(tasks = s.tasks.map { if (it.status in listOf("queued", "preparing", "downloading", "waiting_wifi")) it.copy(status = "paused", speed = 0) else it }) }
         jobs.values.forEach { it.cancel() }; calls.values.forEach { it.cancel() }
         reconcile()
     }
@@ -116,7 +119,7 @@ class DownloadRepository internal constructor(private val context: Context, priv
         val callback = statusCallback ?: return@synchronized
         val options = NativePreferences(context).downloads()
         if (options.wifiOnly && !wifi()) {
-            update { s -> s.copy(tasks = s.tasks.map { if (it.status in listOf("queued", "downloading")) it.copy(status = "waiting_wifi", speed = 0) else it }) }
+            update { s -> s.copy(tasks = s.tasks.map { if (it.status in listOf("queued", "preparing", "downloading")) it.copy(status = "waiting_wifi", speed = 0) else it }) }
             jobs.values.forEach { it.cancel() }; calls.values.forEach { it.cancel() }
         } else {
             update { s -> s.copy(tasks = s.tasks.map { if (it.status == "waiting_wifi") it.copy(status = "queued") else it }) }
@@ -125,6 +128,15 @@ class DownloadRepository internal constructor(private val context: Context, priv
                 task(next.key) { it.copy(status = "downloading", error = "", route = "") }
                 val worker = scope.launch(start = CoroutineStart.LAZY) {
                     try {
+                        val prepared = if (next.episode?.container == "hls" || (next.episode == null && next.title.container == "hls")) {
+                            val user = DeviceState(context).account()
+                            require(user?.optLong("id") == owner && user.optString("role") == "admin") { "Administrator authorization is required for Pi MP4 preparation" }
+                            task(next.key) { it.copy(status = "preparing") }
+                            statusCallback?.invoke(mutable.value.tasks.firstOrNull { it.key == next.key })
+                            prepareOfflineMp4(api, next.title, next.episode)
+                        } else null
+                        currentCoroutineContext().ensureActive()
+                        task(next.key) { if (it.status == "preparing") it.copy(status = "downloading") else it }
                         store.save(next.title, next.episode, resume = true, onCall = { call -> synchronized(lock) {
                             if (call != null) calls[next.key] = call else calls.remove(next.key)
                         } }, admit = { total, offset -> synchronized(lock) {
@@ -139,13 +151,13 @@ class DownloadRepository internal constructor(private val context: Context, priv
                             synchronized(lock) { reservations[next.key] = (p.total - p.bytes).coerceAtLeast(0) }
                             task(next.key, checkpoint = false) { it.copy(bytes = p.bytes, total = p.total, speed = if (it.status == "downloading") p.speed else 0) }
                             statusCallback?.invoke(mutable.value.tasks.firstOrNull { it.key == next.key })
-                        }, onRoute = { route -> task(next.key, checkpoint = false) { it.copy(route = route.label) } }) { }
+                        }, onRoute = { route -> task(next.key, checkpoint = false) { it.copy(route = route.label) } }, preparedUrl = prepared) { }
                         val finished = store.find(next.title, next.episode) ?: error("Downloaded file is missing")
                         task(next.key) { it.copy(status = "complete", bytes = finished.bytes, total = finished.bytes, speed = 0) }; refresh()
                     } catch (e: CancellationException) {
-                        task(next.key) { if (it.status == "downloading") it.copy(status = "paused", speed = 0) else it }
+                        task(next.key) { if (it.status in listOf("downloading", "preparing")) it.copy(status = "paused", speed = 0) else it }
                     } catch (e: Exception) {
-                        task(next.key) { if (it.status == "downloading") it.copy(status = "failed", speed = 0, error = e.message ?: "Download failed") else it }
+                        task(next.key) { if (it.status in listOf("downloading", "preparing")) it.copy(status = "failed", speed = 0, error = e.message ?: "Download failed") else it }
                     } finally {
                         synchronized(lock) { calls.remove(next.key); jobs.remove(next.key); reservations.remove(next.key) }
                         reconcile()
@@ -154,7 +166,7 @@ class DownloadRepository internal constructor(private val context: Context, priv
                 jobs[next.key] = worker; worker.start()
             }
         }
-        callback(mutable.value.tasks.firstOrNull { it.status == "downloading" } ?: mutable.value.tasks.firstOrNull { it.status == "waiting_wifi" })
+        callback(mutable.value.tasks.firstOrNull { it.status in listOf("downloading", "preparing") } ?: mutable.value.tasks.firstOrNull { it.status == "waiting_wifi" })
     }
 }
 
@@ -197,7 +209,7 @@ class DownloadService : Service() {
         val open = PendingIntent.getActivity(this, 3100, intent, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
         return NotificationCompat.Builder(this, "native-transfers").setSmallIcon(android.R.drawable.stat_sys_download)
             .setContentTitle(task?.label ?: "PTS Library downloads")
-            .setContentText(task?.let { if (it.status == "waiting_wifi") "Waiting for Wi-Fi" else "${it.progress.percent}% · ${formatBytes(it.speed)}/s" } ?: "Preparing device transfer")
+            .setContentText(task?.let { when (it.status) { "waiting_wifi" -> "Waiting for Wi-Fi"; "preparing" -> "Preparing MP4 on Pi"; else -> "${it.progress.percent}% · ${formatBytes(it.speed)}/s" } } ?: "Preparing device transfer")
             .setProgress(100, task?.progress?.percent ?: 0, task == null).setOngoing(true).setContentIntent(open).build()
     }
     override fun onTimeout(startId: Int, fgsType: Int) { repository?.pauseAll(); stopSelf() }

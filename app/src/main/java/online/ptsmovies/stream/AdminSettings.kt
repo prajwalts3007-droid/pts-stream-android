@@ -89,6 +89,7 @@ fun NativeAdminSettings(user: JSONObject, api: PtsApi, onUpdate: () -> Unit, onS
     }
     LaunchedEffect(category) {
         error = ""; notice = ""
+        if (category != "devices") cleanupToken = ""
         if (category == "pipeline") refreshPipeline()
         if (category == "users") refreshUsers()
         if (category != "pipeline") { password = ""; token = ""; unlocked = false; provider = "" }

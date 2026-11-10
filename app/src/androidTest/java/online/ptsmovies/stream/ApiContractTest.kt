@@ -43,6 +43,48 @@ class ApiContractTest {
         assertFalse(JSONObject(login.body.readUtf8()).getBoolean("remember"))
     }
 
+    @Test fun googleCredentialUsesTheSameWebCsrfAndRememberContractWithoutUrlTokens() = runBlocking {
+        server.enqueue(json("""{"csrf_token":"synthetic-token"}"""))
+        server.enqueue(json("""{"user":{"id":1,"role":"user"}}"""))
+        assertEquals("user", api.googleLogin("synthetic-id-token", false).getString("role"))
+        request(); val login = request()
+        assertEquals("/api/v1/auth/google", login.path); assertEquals("POST", login.method)
+        assertEquals("synthetic-token", login.getHeader("X-CSRF-Token"))
+        val body = JSONObject(login.body.readUtf8())
+        assertEquals("synthetic-id-token", body.getString("credential")); assertFalse(body.getBoolean("remember"))
+    }
+
+    @Test fun preparedHlsDownloadPollsOwnedJobAndSavesValidatedMp4() = runBlocking {
+        server.enqueue(json("""{"csrf_token":"fixture"}"""))
+        server.enqueue(json("""{"id":"generated","state":"queued","message":"Waiting on Pi"}"""))
+        server.enqueue(json("""{"id":"generated","state":"ready","url":"/api/v1/stream/download/generated/file"}"""))
+        val hls = movie.copy(id = 90092, container = "hls")
+        val url = prepareOfflineMp4(api, hls, null)
+        request(); val preparation = request(); val status = request()
+        assertEquals("POST", preparation.method); assertEquals("/api/v1/stream/download/prepare/movie/90092", preparation.path)
+        assertEquals("fixture", preparation.getHeader("X-CSRF-Token")); assertEquals("/api/v1/stream/download/generated", status.path)
+        val data = InstrumentationRegistry.getInstrumentation().context.assets.open("synthetic-hevc.mp4").use { it.readBytes() }
+        server.enqueue(MockResponse().setHeader("Content-Type", "video/mp4").setHeader("ETag", "\"prepared\"").setBody(Buffer().write(data)))
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        val store = OfflineStore(context, api, 90092)
+        store.list().forEach { store.remove(it) }
+        try {
+            val saved = store.save(hls, null, preparedUrl = url) { }
+            assertArrayEquals(data, saved.file.readBytes())
+            assertEquals("/api/v1/stream/download/generated/file", request().path)
+        } finally { store.list().forEach { store.remove(it) } }
+    }
+
+    @Test fun preparationNeverFollowsAnUntrustedReadyUrlOrBypassesRoleFailure() = runBlocking {
+        server.enqueue(json("""{"csrf_token":"fixture"}"""))
+        server.enqueue(json("""{"state":"ready","url":"https://example.invalid/steal"}"""))
+        try { prepareOfflineMp4(api, movie, null); fail("Untrusted preparation URL accepted") } catch (_: IllegalArgumentException) { }
+        request(); request()
+        server.enqueue(json("""{"csrf_token":"fixture"}""")); server.enqueue(json("{}" ).setResponseCode(403))
+        try { prepareOfflineMp4(api, movie, null); fail("403 ignored") } catch (e: ApiException) { assertEquals(403, e.status) }
+        request(); request(); assertEquals(4, server.requestCount)
+    }
+
     @Test fun libraryPreservesResumeDuration() = runBlocking {
         server.enqueue(json("""{"titles":[{"id":1,"kind":"series","title":"Fixture","episodes":[{"id":2,"season":1,"episode":1,"duration":2400}]}],"watch":[1],"progress":[{"title_id":1,"episode_id":2,"position":900,"duration":2400}]}"""))
         val library = api.library()

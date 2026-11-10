@@ -131,7 +131,7 @@ private fun TransferRow(task: DownloadTask, onPause: (String) -> Unit, onResume:
         if (task.status == "downloading" && task.route.isNotEmpty()) Text(task.route, style = MaterialTheme.typography.labelSmall, color = Pts.accent)
         if (task.error.isNotBlank()) Text(task.error, color = Pts.danger, style = MaterialTheme.typography.bodySmall)
         Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-            TextButton({ if (task.status in listOf("downloading", "queued", "waiting_wifi")) onPause(task.key) else onResume(task.key) }) { Text(if (task.status in listOf("downloading", "queued", "waiting_wifi")) "Pause" else "Resume") }
+            TextButton({ if (task.status in listOf("downloading", "preparing", "queued", "waiting_wifi")) onPause(task.key) else onResume(task.key) }) { Text(if (task.status in listOf("downloading", "preparing", "queued", "waiting_wifi")) "Pause" else "Resume") }
             TextButton({ onCancel(task.key) }) { Text("Cancel", color = Pts.danger) }
         }
     }

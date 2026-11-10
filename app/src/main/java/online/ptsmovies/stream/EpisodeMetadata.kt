@@ -123,7 +123,7 @@ class EpisodeMetadata(context: Context, private val fetchOverride: ((String) -> 
             val imdb = runCatching {
                 val suggestions = JSONObject(get("https://v3.sg.media-imdb.com/suggestion/x/${encodeMetadata(title.title)}.json")).optJSONArray("d") ?: JSONArray()
                 (0 until suggestions.length()).map { suggestions.getJSONObject(it) }.filter {
-                    normalizedName(it.optString("l")) == normalizedName(title.title) && it.optInt("y") == title.year && it.optString("qid") in listOf("tvSeries", "tvMiniSeries")
+                    normalizedName(it.optString("l")) == normalizedName(title.title) && (title.year <= 0 || it.optInt("y") == title.year) && it.optString("qid") in listOf("tvSeries", "tvMiniSeries")
                 }.singleOrNull()?.optString("id").orEmpty()
             }.getOrDefault("")
             // Automatic matching is strict: same show name and debut year, not first search result.

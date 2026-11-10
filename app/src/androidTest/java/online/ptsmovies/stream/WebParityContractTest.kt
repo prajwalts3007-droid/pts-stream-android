@@ -76,4 +76,18 @@ class WebParityContractTest {
         assertEquals("Plain summary", chosen.episodes.first().description)
         assertEquals(manual.url, offline.cached(title)!!.source.url)
     }
+
+    @Test fun missingLibraryYearCanUseUniqueImdbIdentityAndScrapedTablesWhenTvmazeIsAbsent() = runBlocking {
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        val title = Title(91003, "series", "Generated Regional Show", 0, "", "", emptyList(), listOf(Episode(1, 2, 1, "Generated Regional Show", 8.0, "mp4")), "", "mp4")
+        val metadata = EpisodeMetadata(context) { url -> when {
+            url.contains("search/shows") -> "[]"
+            url.contains("api.php") -> """{"query":{"search":[{"title":"Generated (TV series)"}]}}"""
+            url.contains("suggestion") -> """{"d":[{"id":"tt1234567","l":"Generated Regional Show","y":2020,"qid":"tvSeries"}]}"""
+            url.contains("/wiki/") -> """<a href="https://www.imdb.com/title/tt1234567/">IMDb</a><h3>Season 2</h3><table class="wikiepisodetable"><tr class="vevent"><th>1</th><td class="summary">"Scraped original title"</td></tr></table>"""
+            else -> error("Unexpected metadata request")
+        } }
+        assertEquals("Scraped original title", metadata.resolve(title).episodes.single().title)
+        assertEquals("Wikipedia", metadata.cached(title)!!.source.provider)
+    }
 }

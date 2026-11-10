@@ -320,7 +320,8 @@ class ScreenAuditTest {
     @Test fun queueAllNineActionsFitWithoutScrollingAtCompactWidthsAndLargerFonts() {
         var width by mutableIntStateOf(320); var font by mutableFloatStateOf(1f)
         var selected by mutableStateOf("queued")
-        val tabs = stageOrder.map { WebTab(it, stageLabel(it), PtsIcons.Queue, 999) } + WebTab("retry", "Retry failed jobs", PtsIcons.Retry, 999)
+        val stages = listOf("queued" to "Queued", "dispatched" to "Starting", "downloading" to "Downloading", "compressing" to "Compressing", "uploading" to "Uploading", "to_pi" to "To Pi", "failed" to "Failed", "done" to "Completed")
+        val tabs = stages.map { WebTab(it.first, it.second, PtsIcons.Queue, 999) } + WebTab("retry", "Retry failed jobs", PtsIcons.Retry, 999)
         ui.setContent { PtsTheme { val density = LocalDensity.current
             CompositionLocalProvider(LocalDensity provides Density(density.density.coerceAtMost(2f), font)) {
                 Box(Modifier.width(width.dp)) { WebIconTabs(tabs, selected, { selected = it }, "fit-queue", fit = true) }

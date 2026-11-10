@@ -227,8 +227,8 @@ class MainActivity : ComponentActivity() {
                 PtsBackground(if (playing) Modifier else Modifier.windowInsetsPadding(WindowInsets.safeDrawing)) {
                     episodeDownloadTitle?.let { title ->
                         EpisodeDownloadDialog(title, savedVideos.map { it.key }.toSet(), journal()?.completed().orEmpty(),
-                            onStart = { episodes -> episodeDownloadTitle = null; downloads?.enqueueSeason(title, episodes); toast("Downloads queued", true) },
-                            onClose = { episodeDownloadTitle = null })
+                            onStart = { episodes -> episodeDownloadTitle = null; try { downloads?.enqueueSeason(title, episodes); toast("Downloads queued", true) } catch (e: Exception) { toast(e.message ?: "Cannot queue downloads") } },
+                            onClose = { episodeDownloadTitle = null }, allowHls = admin())
                     }
                     when {
                         loading -> PtsLoading()
