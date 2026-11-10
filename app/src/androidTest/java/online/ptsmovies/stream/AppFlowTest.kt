@@ -74,8 +74,10 @@ class AppFlowTest {
         server.start()
         ApiProvider.override = { PtsApi(server.url("/").toString(), CookieJar.NO_COOKIES) }
         val context = InstrumentationRegistry.getInstrumentation().targetContext
-        val store = OfflineStore(context, ApiProvider.create(), 90011)
-        store.list().forEach { store.remove(it) }
+        InstrumentationRegistry.getInstrumentation().runOnMainSync {
+            val store = OfflineStore(context, ApiProvider.create(), 90011)
+            store.list().forEach { store.remove(it) }
+        }
     }
 
     @After fun close() {

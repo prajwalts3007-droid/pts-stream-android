@@ -1,3 +1,5 @@
+@file:OptIn(androidx.compose.ui.text.ExperimentalTextApi::class)
+
 package online.ptsmovies.stream
 
 import androidx.compose.material3.MaterialTheme
