@@ -723,6 +723,7 @@ class MainActivity : ComponentActivity() {
         var interaction by remember { mutableIntStateOf(0) }
         var muted by remember { mutableStateOf(false) }
         var buffering by remember { mutableStateOf(true) }
+        var firstFrame by remember { mutableStateOf(false) }
         var ended by remember { mutableStateOf(false) }
         var cancelNext by remember { mutableStateOf(false) }
         var nextCountdown by remember { mutableIntStateOf(5) }
@@ -754,7 +755,6 @@ class MainActivity : ComponentActivity() {
                     .setPreferredTextLanguage(playbackPrefs.optString("subtitle_lang").ifBlank { null }).build()
                 if (resumeAt > 0) seekTo(resumeAt)
                 setPlaybackSpeed(speed)
-                prepare(); playWhenReady = true
             }
         }
         BackHandler { leavePlayer() }
@@ -762,6 +762,7 @@ class MainActivity : ComponentActivity() {
             player = exo
             val originalBrightness = window.attributes.screenBrightness
             val listener = object : Player.Listener {
+                override fun onRenderedFirstFrame() { firstFrame = true }
                 override fun onPlayerError(exception: PlaybackException) {
                     if (saved == null && !fallback) {
                         resumeAt = exo.currentPosition.coerceAtLeast(0)
@@ -782,6 +783,11 @@ class MainActivity : ComponentActivity() {
                 override fun onIsPlayingChanged(isPlaying: Boolean) { playingNow = isPlaying }
             }
             exo.addListener(listener)
+            // Start after the native view is composed and the listener is installed,
+            // rather than racing the first decode against TextureView attachment.
+            firstFrame = false
+            exo.prepare()
+            exo.playWhenReady = true
             onDispose {
                 val p = exo.currentPosition / 1000
                 val d = exo.duration.coerceAtLeast(0) / 1000
@@ -926,7 +932,7 @@ class MainActivity : ComponentActivity() {
                         }
                     }
                 }
-                if (buffering && error.isBlank()) CircularProgressIndicator(Modifier.align(Alignment.Center).size(32.dp), color = Pts.accent)
+                if ((buffering || !firstFrame) && error.isBlank()) CircularProgressIndicator(Modifier.align(Alignment.Center).size(32.dp), color = Pts.accent)
                 if (error.isNotBlank() && !inPip) Column(Modifier.align(Alignment.Center).fillMaxWidth().background(Color.Black.copy(alpha = .9f)).padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Text("Playback interrupted", style = MaterialTheme.typography.titleMedium, color = Color.White)
                     Text(error, style = MaterialTheme.typography.bodySmall, color = Pts.muted)
@@ -969,6 +975,10 @@ class MainActivity : ComponentActivity() {
                     { play(it, if (it.kind == "series") it.episodes.firstOrNull() else null) }, { toggleWatch(it) })
              }
             }
+          }
+          if (message.isNotBlank() && !inPip) Box(Modifier.align(Alignment.BottomCenter).padding(16.dp)) {
+              if (messageOk) PtsOkToast(message) { message = "" }
+              else PtsErrorToast(message) { message = "" }
           }
         }
         if (showEpisodes) androidx.compose.ui.window.Dialog(onDismissRequest = { showEpisodes = false }) {

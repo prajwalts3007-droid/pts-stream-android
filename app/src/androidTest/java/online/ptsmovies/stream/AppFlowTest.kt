@@ -168,6 +168,12 @@ class AppFlowTest {
     }
 
     private fun assertDecodedTestPattern() {
+        // TextureView composition and screenshot capture are asynchronous. Keep the
+        // rendered-pixel requirement, but allow the frame to reach the compositor.
+        ui.waitUntil(5000) { decodedHueBins().size >= 3 }
+    }
+
+    private fun decodedHueBins(): Set<Int> {
         ui.waitForIdle()
         val bounds = ui.onNodeWithTag("player-surface").fetchSemanticsNode().boundsInRoot
         val image = checkNotNull(InstrumentationRegistry.getInstrumentation().uiAutomation.takeScreenshot())
@@ -180,7 +186,7 @@ class AppFlowTest {
             if (hsv[1] > .5f && hsv[2] > .25f) hues.add((hsv[0] / 30).toInt())
         }
         image.recycle()
-        assertTrue("Video must render the generated color pattern, not just an advancing clock/black surface; hue bins=$hues", hues.size >= 3)
+        return hues
     }
 
     @Test fun viewerLoginNavigationAndRecreation() {
