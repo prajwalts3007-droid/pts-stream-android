@@ -126,6 +126,7 @@ class MainActivity : ComponentActivity() {
     private var filesEntries by mutableStateOf(emptyList<JSONObject>())
     private var filesLoading by mutableStateOf(false)
     private var ops by mutableStateOf(emptyList<JSONObject>())
+    private var relayJobs by mutableStateOf(emptyList<JSONObject>())
     private var restoredNavigation: Bundle? = null
     private var fileClipboard by mutableStateOf<FileClipboard?>(null)
     private var fileEditor by mutableStateOf<FileEditor?>(null)
@@ -133,6 +134,12 @@ class MainActivity : ComponentActivity() {
     private var fileStatus by mutableStateOf("")
     private var fileOperation: Job? = null
     private var uploadDestination: Pair<String, String>? = null
+    private var pendingFileDownload: Pair<String, String>? = null
+    private val saveDocument = registerForActivityResult(ActivityResultContracts.CreateDocument("application/octet-stream")) { uri ->
+        val source = pendingFileDownload
+        pendingFileDownload = null
+        if (uri != null && source != null && admin()) saveFileDownload(source.first, source.second, uri)
+    }
     private val clearedProgress = mutableSetOf<Long>()
     private var playerFullscreen by mutableStateOf(false)
     private var playbackPrefs by mutableStateOf(JSONObject())
@@ -251,6 +258,7 @@ class MainActivity : ComponentActivity() {
                 queueJobs = emptyList(); queueDone = emptyList(); metrics = null; users = emptyList()
                 savedVideos = emptyList(); message = ""; startupError = ""
                 fileClipboard = null; fileEditor = null; fileStatus = ""; clearedProgress.clear()
+                relayJobs = emptyList()
                 loading = false
             }
         }
@@ -370,8 +378,17 @@ class MainActivity : ComponentActivity() {
 
     private fun loadOps() {
         scope.launch {
-            try { ops = api.json("/admin/files/ops").optJSONArray("ops").objects() } catch (_: Exception) { }
+            try {
+                val next = api.json("/admin/files/ops").optJSONArray("ops").objects()
+                val finished = next.any { op -> op.optString("state") != "running" && ops.none { it.optString("id") == op.optString("id") && it.optString("state") == op.optString("state") } }
+                ops = next
+                if (finished && mode == "Files" && filesTab == "Browse") loadFiles()
+            } catch (_: Exception) { }
         }
+    }
+
+    private fun loadRelay() {
+        scope.launch { try { relayJobs = api.json("/relay").optJSONArray("jobs").objects() } catch (_: Exception) { } }
     }
 
     private fun loadPlaybackPrefs() {
@@ -470,48 +487,32 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    private fun mkdir(name: String) {
-        scope.launch {
-            try {
-                api.json("/admin/files/mkdir", "POST", JSONObject().put("device", filesDevice).put("path", filesPath).put("name", name))
-                loadFiles()
-                toast("Folder created", ok = true)
-            } catch (e: Exception) { toast(e.message ?: "Could not create folder") }
-        }
-    }
-
-    private fun deleteFile(entry: JSONObject) {
-        val target = if (filesPath.isBlank()) entry.optString("name") else "${filesPath}/${entry.optString("name")}"
-        scope.launch {
-            try {
-                api.json("/admin/files/delete", "POST", JSONObject().put("device", filesDevice).put("paths", org.json.JSONArray().put(target)))
-                loadFiles()
-                toast("Deleted ${entry.optString("name")}", ok = true)
-            } catch (e: Exception) { toast(e.message ?: "Could not delete file") }
-        }
-    }
-
     private fun downloadFile(name: String) {
-        val target = if (filesPath.isBlank()) name else "${filesPath}/$name"
-        scope.launch {
+        if (!admin() || fileBusy) return
+        pendingFileDownload = filesDevice to filePath(filesPath, name)
+        saveDocument.launch(name)
+    }
+
+    private fun saveFileDownload(device: String, path: String, destination: android.net.Uri) {
+        fileBusy = true
+        fileOperation = scope.launch {
             try {
-                val folder = java.io.File(getExternalFilesDir(null), "admin-files").apply { mkdirs() }
-                val safe = name.replace(Regex("[^A-Za-z0-9._ -]"), "_").take(100).ifBlank { "pts-file" }
-                val temp = java.io.File(folder, "$safe.part")
-                val ok = kotlinx.coroutines.withContext(Dispatchers.IO) {
-                    val url = "$BASE/api/v1/admin/files/download?path=${java.net.URLEncoder.encode(target, "UTF-8")}&device=$filesDevice"
-                    api.http.newCall(okhttp3.Request.Builder().url(url).build()).execute().use { response ->
+                fileStatus = "Saving ${path.substringAfterLast('/')}"
+                kotlinx.coroutines.withContext(Dispatchers.IO) {
+                    api.http.newCall(okhttp3.Request.Builder().url(api.fileDownloadUrl(device, path)).build()).execute().use { response ->
                         if (!response.isSuccessful) throw java.io.IOException("Download HTTP ${response.code}")
                         val body = response.body ?: throw java.io.IOException("Empty response")
                         val expected = body.contentLength()
-                        val written = body.byteStream().use { input -> temp.outputStream().use { output -> input.copyTo(output) } }
-                        if (written <= 0 || (expected >= 0 && written != expected)) { temp.delete(); throw java.io.IOException("Incomplete file") }
-                        if (!temp.renameTo(java.io.File(folder, safe))) throw java.io.IOException("Cannot save file")
-                        true
+                        val written = body.byteStream().use { input ->
+                            (contentResolver.openOutputStream(destination, "w") ?: error("Cannot open destination")).use { output -> input.copyTo(output) }
+                        }
+                        if (expected >= 0 && written != expected) throw java.io.IOException("Incomplete file")
                     }
                 }
-                if (ok) toast("Saved to app-private files", ok = true)
-            } catch (e: Exception) { toast(e.message ?: "Download failed") }
+                toast("File saved to the selected location", true)
+            } catch (e: CancellationException) { throw e }
+            catch (e: Exception) { toast(e.message ?: "Download failed") }
+            finally { fileBusy = false; fileStatus = "" }
         }
     }
 
@@ -599,14 +600,27 @@ class MainActivity : ComponentActivity() {
                         else -> SettingsScreen(user, users, githubConfigured, { checkForUpdate(this@MainActivity, scope) { toast(it) } }, { signOut() })
                     }
                     mode == "Files" && admin() -> if (filesTab == "Transfers") {
-                        LaunchedEffect(Unit) { lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) { while (true) { loadOps(); delay(4000) } } }
+                        LaunchedEffect(Unit) { lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) { while (true) { loadOps(); loadRelay(); delay(4000) } } }
                         TransfersScreen(ops, onCancel = { id ->
                             scope.launch { try { api.json("/admin/files/ops/cancel", "POST", JSONObject().put("id", id)); loadOps() } catch (e: Exception) { toast(e.message ?: "Cancel failed") } }
                         }, onClear = {
                             scope.launch { try { api.json("/admin/files/ops/clear", "POST", JSONObject()); loadOps(); toast("Finished transfers cleared", true) } catch (e: Exception) { toast(e.message ?: "Clear failed") } }
+                        }, relay = relayJobs, onRelayAction = { job, active ->
+                            scope.launch { try {
+                                val id = java.net.URLEncoder.encode(job.optString("id"), "UTF-8")
+                                api.json("/relay/$id" + (if (active) "/cancel" else ""), if (active) "POST" else "DELETE", if (active) JSONObject() else null)
+                                loadRelay()
+                            } catch (e: Exception) { toast(e.message ?: "Could not update transfer") } }
+                        }, onLink = { link, copy ->
+                            val uri = android.net.Uri.parse(link)
+                            if (uri.scheme == "https" && !uri.host.isNullOrBlank()) {
+                                if (copy) { (getSystemService(CLIPBOARD_SERVICE) as android.content.ClipboardManager).setPrimaryClip(android.content.ClipData.newPlainText("Transfer link", link)); toast("Link copied", true) }
+                                else try { startActivity(android.content.Intent(android.content.Intent.ACTION_VIEW, uri)) } catch (_: Exception) { toast("No browser available") }
+                            }
                         })
                     } else {
                         LaunchedEffect(filesDevice, filesPath) { loadFiles() }
+                        LaunchedEffect(Unit) { lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) { while (true) { loadOps(); delay(4000) } } }
                         FilesScreen(filesDevice, filesPath, filesEntries, filesLoading,
                             onDevice = { filesDevice = it; filesPath = "" },
                             onPath = { filesPath = it },
@@ -713,13 +727,14 @@ class MainActivity : ComponentActivity() {
         var cancelNext by remember { mutableStateOf(false) }
         var nextCountdown by remember { mutableIntStateOf(5) }
         var autoplay by remember { mutableStateOf(playbackPrefs.optBoolean("autoplay", true)) }
+        val downloaded = savedVideos.any { it.key == "${title.id}_${ep?.id ?: 0L}" }
         val nextEpisode = remember(title, ep) { title.episodes.sortedWith(compareBy({ it.season }, { it.episode }))
             .firstOrNull { ep != null && (it.season > ep.season || (it.season == ep.season && it.episode > ep.episode)) } }
         fun touchControls() { controls = true; interaction++ }
         fun leavePlayer() { if (playerFullscreen) fullscreen(false) else onBack() }
         fun selectEpisode(next: Episode) { clearedProgress.remove(title.id); episode = next; showEpisodes = false }
         var resumeAt by remember(title.id, ep?.id) {
-            mutableLongStateOf(library?.progress?.get(title.id)?.takeIf { it.episodeId == (ep?.id ?: 0L) }?.seconds?.times(1000) ?: 0L)
+            mutableLongStateOf(resumePosition(library?.progress?.get(title.id), ep?.id ?: 0L, ep?.duration?.toLong() ?: 0L) * 1000)
         }
         val hevcAvailable = remember { MediaCodecList(MediaCodecList.REGULAR_CODECS).codecInfos.any { info ->
             !info.isEncoder && info.supportedTypes.any { it.equals("video/hevc", true) }
@@ -821,7 +836,7 @@ class MainActivity : ComponentActivity() {
                 PtsIconAction(PtsIcons.Fit, if (playerFullscreen) "Exit fullscreen" else "Fullscreen", { fullscreen(!playerFullscreen); touchControls() }, tint = Color.White)
             }
             Box((if (landscape) Modifier.weight(1f).fillMaxWidth() else Modifier.fillMaxWidth().aspectRatio(16f / 9f)).background(Color.Black)) {
-                AndroidView(factory = { ctx -> PlayerView(ctx).apply {
+                AndroidView(factory = { ctx -> (android.view.LayoutInflater.from(ctx).inflate(R.layout.native_player, null, false) as PlayerView).apply {
                     player = exo
                     useController = false
                     keepScreenOn = true
@@ -920,6 +935,9 @@ class MainActivity : ComponentActivity() {
                         PtsSecondaryButton("Audio / CC", Modifier.weight(1f)) { showTracks = true }
                     }
                 }
+                if (landscape && !inPip && ended && nextEpisode != null && !cancelNext) Box(Modifier.align(Alignment.TopEnd).padding(12.dp).widthIn(max = 300.dp)) {
+                    UpNextCard(nextEpisode, if (autoplay) nextCountdown else null, { selectEpisode(nextEpisode) }, { cancelNext = true })
+                }
             }
             if (!landscape) {
              if (!hevcAvailable) PtsErrorBanner("This device may not support HEVC playback", modifier = Modifier.padding(12.dp))
@@ -934,17 +952,15 @@ class MainActivity : ComponentActivity() {
                     style = MaterialTheme.typography.bodySmall, color = Color(0xFFD3D6ED)
                 )
                 ShortSynopsis(title.synopsis)
-                if (ended && nextEpisode != null) PtsCard(Modifier.fillMaxWidth()) {
-                    Text("Up next · S${nextEpisode.season}E${nextEpisode.episode}", color = Pts.accent, style = MaterialTheme.typography.titleMedium)
-                    if (autoplay && !cancelNext) Text("Playing in $nextCountdown seconds", color = Pts.muted)
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        PtsPrimaryButton("Play next", Modifier.weight(1f)) { selectEpisode(nextEpisode) }
-                        PtsSecondaryButton("Cancel", Modifier.weight(1f)) { cancelNext = true }
-                    }
-                }
+                if (ended && nextEpisode != null && !cancelNext) UpNextCard(nextEpisode, if (autoplay) nextCountdown else null, { selectEpisode(nextEpisode) }, { cancelNext = true })
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     PtsSecondaryButton("Mark as played", Modifier.weight(1f), icon = PtsIcons.Check) { markPlayed(title) }
-                    PtsSecondaryButton("Save offline", Modifier.weight(1f), icon = PtsIcons.Download, enabled = downloading.isBlank() && saved == null) { startDownload(title, ep) }
+                    PtsSecondaryButton(if (downloaded) "Downloaded" else "Save offline", Modifier.weight(1f), icon = if (downloaded) PtsIcons.Check else PtsIcons.Download, enabled = downloading.isBlank() && !downloaded) { startDownload(title, ep) }
+                }
+                if (downloading.isNotBlank()) {
+                    Text("Saving $downloading · $downloadPercent%", style = MaterialTheme.typography.bodySmall, color = Pts.accent)
+                    PtsProgressBar(downloadPercent / 100f)
+                    PtsSecondaryButton("Cancel download", Modifier.fillMaxWidth()) { downloadJob?.cancel() }
                 }
                 if (title.kind == "series") SeasonEpisodes(title, ep, library?.progress?.get(title.id), savedVideos.map { it.key }.toSet(), downloading,
                     onPlay = { selectEpisode(it) }, onDownload = { startDownload(title, it) })
@@ -973,6 +989,7 @@ class MainActivity : ComponentActivity() {
                         speed = rate; exo.setPlaybackSpeed(rate); playerPreference("speed", rate); showSettings = false; touchControls()
                     }
                 }
+                PtsSecondaryButton("Close", Modifier.fillMaxWidth()) { showSettings = false }
             }
         }
         if (showTracks) {
@@ -988,7 +1005,8 @@ class MainActivity : ComponentActivity() {
                         (0 until group.length).forEach { index ->
                             val format = group.getTrackFormat(index)
                             val label = format.label?.takeIf { it.isNotBlank() } ?: format.language?.let { Locale.forLanguageTag(it).displayLanguage } ?: "Track ${index + 1}"
-                            PtsSecondaryButton(label.replaceFirstChar { it.uppercase() }, Modifier.fillMaxWidth()) {
+                            PtsSecondaryButton(listOfNotNull(label, format.sampleMimeType?.substringAfter('/'), format.channelCount.takeIf { it > 0 }?.let { "${it}ch" }).joinToString(" · "), Modifier.fillMaxWidth(),
+                                icon = if (group.isTrackSelected(index)) PtsIcons.Check else null, enabled = group.isTrackSupported(index)) {
                                 exo.trackSelectionParameters = exo.trackSelectionParameters.buildUpon()
                                     .setOverrideForType(androidx.media3.common.TrackSelectionOverride(group.mediaTrackGroup, index)).build()
                                 format.language?.let { playerPreference("audio_lang", it) }
@@ -1007,7 +1025,7 @@ class MainActivity : ComponentActivity() {
                         (0 until group.length).forEach { index ->
                             val format = group.getTrackFormat(index)
                             val label = format.label?.takeIf { it.isNotBlank() } ?: format.language?.let { Locale.forLanguageTag(it).displayLanguage } ?: "Subtitle ${index + 1}"
-                            PtsSecondaryButton(label.replaceFirstChar { it.uppercase() }, Modifier.fillMaxWidth()) {
+                            PtsSecondaryButton(label.replaceFirstChar { it.uppercase() }, Modifier.fillMaxWidth(), icon = if (group.isTrackSelected(index)) PtsIcons.Check else null, enabled = group.isTrackSupported(index)) {
                                 exo.trackSelectionParameters = exo.trackSelectionParameters.buildUpon()
                                     .setTrackTypeDisabled(androidx.media3.common.C.TRACK_TYPE_TEXT, false)
                                     .setOverrideForType(androidx.media3.common.TrackSelectionOverride(group.mediaTrackGroup, index)).build()

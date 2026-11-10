@@ -23,16 +23,26 @@ import org.junit.Test
 import java.io.File
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.ConcurrentLinkedQueue
 
 /** Runs the real Activity against a loopback API and a generated HEVC test pattern. */
 class AppFlowTest {
     @get:Rule val ui = createEmptyComposeRule()
     @get:Rule val notifications = GrantPermissionRule.grant(Manifest.permission.POST_NOTIFICATIONS)
+    @get:Rule val testName = org.junit.rules.TestName()
     private lateinit var server: MockWebServer
     private var scenario: ActivityScenario<MainActivity>? = null
     private val signedIn = AtomicBoolean(false)
     private val adminCalls = AtomicInteger(0)
     private val failDirectStream = AtomicBoolean(false)
+    private val useSeries = AtomicBoolean(false)
+    private val useHls = AtomicBoolean(false)
+    private val clearedTransfers = AtomicBoolean(false)
+    private val clearedProgress = AtomicBoolean(false)
+    private val progressAfterClear = AtomicInteger(0)
+    private val playedEpisodes = ConcurrentLinkedQueue<String>()
+    private val deletedJobs = ConcurrentLinkedQueue<String>()
+    private val fileCommands = ConcurrentLinkedQueue<Pair<String, JSONObject>>()
     @Volatile private var role = "user"
     private lateinit var media: ByteArray
 
@@ -51,16 +61,36 @@ class AppFlowTest {
                     adminCalls.incrementAndGet()
                     if (role != "admin") return json("""{"error":"Forbidden"}""").setResponseCode(403)
                 }
+                if (path.startsWith("/queue/") && request.method == "DELETE") { deletedJobs.add(path.substringAfterLast('/')); return json("{}") }
+                if (path == "/stream/progress/clear") { clearedProgress.set(true); return json("{}") }
+                if (path == "/stream/progress" && clearedProgress.get()) progressAfterClear.incrementAndGet()
+                if (path.startsWith("/admin/files/") && request.method in listOf("POST", "PUT")) {
+                    fileCommands.add(path to JSONObject(request.body.readUtf8().ifBlank { "{}" }))
+                    if (path == "/admin/files/ops/clear") clearedTransfers.set(true)
+                    return json("{}")
+                }
+                if (path.startsWith("/stream/file/episode/")) {
+                    playedEpisodes.add(path.substringAfterLast('/'))
+                    return MockResponse().setHeader("Content-Type", "video/mp4").setBody(Buffer().write(media))
+                }
+                if (path.startsWith("/stream/hls/movie/90001/")) {
+                    val name = path.substringAfterLast('/')
+                    if (name !in setOf("master.m3u8", "init.mp4", "segment0.m4s")) return MockResponse().setResponseCode(404)
+                    val bytes = InstrumentationRegistry.getInstrumentation().context.assets.open("hls/$name").use { it.readBytes() }
+                    return MockResponse().setHeader("Content-Type", if (name.endsWith("m3u8")) "application/vnd.apple.mpegurl" else "video/mp4").setBody(Buffer().write(bytes))
+                }
                 return when (path) {
                     "/auth/me" -> json(user)
                     "/auth/logout" -> { signedIn.set(false); json("{}") }
-                    "/stream/library" -> json("""{"titles":[{"id":90001,"kind":"movie","title":"Synthetic HEVC","year":2026,"synopsis":"Generated test pattern and tone. No third-party media.","video_codec":"hevc","container":"mp4","genres":["Test"],"episodes":[]}],"watch":[],"progress":[]}""")
+                    "/stream/library" -> if (useSeries.get()) json("""{"titles":[{"id":90001,"kind":"series","title":"Synthetic series","synopsis":"${"A generated series description for the short watch-page summary. ".repeat(8)}","video_codec":"hevc","container":"mp4","episodes":[{"id":101,"season":1,"episode":1,"title":"First season episode","container":"mp4","duration":8},{"id":201,"season":2,"episode":1,"title":"Second season episode","container":"mp4","duration":8}]}],"watch":[],"progress":[]}""") else json("""{"titles":[{"id":90001,"kind":"movie","title":"Synthetic HEVC","year":2026,"synopsis":"Generated test pattern and tone. No third-party media.","video_codec":"hevc","container":"${if (useHls.get()) "hls" else "mp4"}","genres":["Test"],"episodes":[]}],"watch":[],"progress":[]}""")
                     "/stream/watch", "/stream/progress" -> json("{}")
-                    "/queue" -> json("""{"jobs":[{"job_id":"test-job","title":"Synthetic queue item","type":"movie","stage":"queued","progress":0}],"completed":[]}""")
+                    "/queue" -> json("""{"jobs":[{"job_id":"test-job","title":"Synthetic queue item","type":"movie","stage":"queued","progress":0}],"completed":${if ("done-one" in deletedJobs) "[]" else """[{"job_id":"done-one","title":"Finished job","stage":"done","progress":100}]"""}}""")
                     "/system/metrics" -> json("{}")
                     "/admin/users" -> json("""{"users":[]}""")
                     "/admin/github" -> json("""{"configured":true}""")
-                    "/admin/files" -> json("""{"entries":[{"name":"Samples","is_dir":true,"size":0}]}""")
+                    "/admin/files" -> json("""{"entries":[{"name":"Samples","is_dir":true,"size":0},{"name":"sample.zip","is_dir":false,"size":100},{"name":"notes.txt","is_dir":false,"size":20}]}""")
+                    "/admin/files/content" -> json("""{"content":"synthetic notes","size":15}""")
+                    "/admin/files/ops" -> json("""{"ops":[{"id":"running","kind":"copy","detail":"Active copy","state":"running","pct":42}${if (clearedTransfers.get()) "" else "," + """{"id":"done","kind":"zip","detail":"Finished zip","state":"done","pct":100}"""}]}""")
                     "/stream/file/movie/90001" -> {
                         if (failDirectStream.get() && request.requestUrl?.queryParameter("via") != "vps")
                             return MockResponse().setResponseCode(503)
@@ -84,6 +114,7 @@ class AppFlowTest {
     }
 
     @After fun close() {
+        if (scenario != null) try { capture("last-state-${testName.methodName}") } catch (_: Exception) { }
         scenario?.close()
         ApiProvider.override = null
         server.shutdown()
@@ -198,5 +229,90 @@ class AppFlowTest {
         ui.onNodeWithContentDescription("Pause playback").performClick()
         ui.onNodeWithText("VPS fallback").assertExists()
         capture("app-hevc-vps-fallback")
+    }
+
+    @Test fun watchSeasonSwitchingLoadsTheSelectedEpisode() {
+        useSeries.set(true)
+        launchLoggedIn()
+        ui.onNodeWithContentDescription("TV Shows").performClick()
+        ui.onNodeWithText("Synthetic series").performClick()
+        ui.onNodeWithTag("season-selector").performScrollTo().performClick()
+        ui.onNodeWithText("Season 2").performClick()
+        ui.onNodeWithText("E1 · Second season episode").performScrollTo().performClick()
+        waitForMovingPlayback()
+        ui.onNodeWithContentDescription("Pause playback").performClick()
+        ui.onNodeWithContentDescription("Choose episode").performClick()
+        ui.onAllNodesWithTag("season-selector").onLast().performClick()
+        ui.onNodeWithText("Season 1").performClick()
+        ui.onNode(hasText("E1 · First season episode") and hasAnyAncestor(isDialog())).performClick()
+        waitForMovingPlayback()
+        ui.onNodeWithContentDescription("Pause playback").performClick()
+        ui.runOnIdle { assertTrue(playedEpisodes.contains("201")); assertTrue(playedEpisodes.contains("101")) }
+        capture("watch-season-switching")
+    }
+
+    @Test fun markPlayedDoesNotRecreateHistoryOnExit() {
+        launchLoggedIn(); openMovie()
+        ui.onNodeWithText("Play").performClick(); waitForMovingPlayback()
+        ui.onNodeWithContentDescription("Pause playback").performClick()
+        ui.onNodeWithText("Mark as played").performScrollTo().performClick()
+        waitForText("Marked as played · removed from Continue watching")
+        pressBack()
+        ui.runOnIdle { assertTrue(clearedProgress.get()); assertEquals(0, progressAfterClear.get()) }
+    }
+
+    @Test fun filesArchiveEditorClipboardAndTransferClearReachApis() {
+        role = "admin"; launchLoggedIn()
+        ui.onNodeWithTag("section-dock").performTouchInput { swipeRight() }; waitForText("PTSFiles"); waitForText("sample.zip")
+        fun openMenu(name: String) { ui.onNode(hasContentDescription("More") and hasAnyAncestor(hasTestTag("file-row-$name"))).performClick() }
+        openMenu("sample.zip"); ui.onNodeWithText("Unzip").performClick()
+        ui.onNode(hasText("Unzip") and hasClickAction()).performClick()
+        ui.waitUntil(10000) { fileCommands.any { it.first.endsWith("/unzip") } }
+        openMenu("notes.txt"); ui.onNodeWithText("Edit").performClick()
+        waitForText("synthetic notes")
+        ui.onNode(hasSetTextAction()).performTextReplacement("updated synthetic notes")
+        ui.onNodeWithText("Save").performClick()
+        ui.waitUntil(10000) { fileCommands.any { it.first.endsWith("/content") && it.second.optString("content") == "updated synthetic notes" } }
+        openMenu("sample.zip"); ui.onNodeWithText("Copy").performClick()
+        ui.onNodeWithText("Samples").performClick(); waitForText("/Samples")
+        ui.onNodeWithText("Paste").performClick(); ui.onNode(hasText("Paste") and hasClickAction()).performClick()
+        ui.waitUntil(10000) { fileCommands.any { it.first.endsWith("/paste") } }
+        ui.onNodeWithContentDescription("Transfers").performClick(); waitForText("Finished zip")
+        ui.onNodeWithText("Clear").performClick(); ui.onNode(hasText("Clear") and hasClickAction()).performClick()
+        ui.waitUntil(10000) { clearedTransfers.get() }
+        waitForText("Active copy")
+        ui.onNodeWithText("Finished zip").assertDoesNotExist()
+        val paste = fileCommands.first { it.first.endsWith("/paste") }.second
+        assertEquals("copy", paste.getString("mode")); assertEquals("Samples", paste.getString("target"))
+    }
+
+    @Test fun clearCompletedUsesOnlyPerJobDeletes() {
+        role = "admin"; launchLoggedIn()
+        ui.onNodeWithContentDescription("Queue").performClick()
+        ui.onNode(hasText("Completed") and hasClickAction()).performClick()
+        waitForText("Clear completed")
+        ui.onNodeWithText("Clear completed").performClick(); ui.onNodeWithText("Clear").performClick()
+        ui.waitUntil(10000) { "done-one" in deletedJobs }
+        assertEquals(listOf("done-one"), deletedJobs.toList())
+    }
+
+    @Test fun syntheticHevcHlsPlaysThroughNativeTransport() {
+        useHls.set(true); launchLoggedIn(); openMovie()
+        ui.onNodeWithText("Play").performClick(); waitForMovingPlayback()
+        ui.onNodeWithContentDescription("Pause playback").performClick()
+        capture("watch-hevc-hls")
+    }
+
+    @Test fun fullscreenBackReturnsToWatchAndSettingsRemainUsable() {
+        launchLoggedIn(); openMovie(); ui.onNodeWithText("Play").performClick(); waitForMovingPlayback()
+        ui.onNodeWithContentDescription("Pause playback").performClick()
+        ui.onNodeWithContentDescription("Fullscreen").performClick()
+        ui.waitUntil(10000) { ui.onAllNodesWithContentDescription("Exit fullscreen").fetchSemanticsNodes().isNotEmpty() }
+        capture("watch-fullscreen")
+        pressBack()
+        ui.waitUntil(10000) { ui.onAllNodesWithContentDescription("Fullscreen").fetchSemanticsNodes().isNotEmpty() }
+        ui.onNodeWithContentDescription("Playback settings").performClick()
+        ui.onNodeWithText("1.25×").performClick()
+        ui.onNodeWithContentDescription("Playback settings").assertExists()
     }
 }

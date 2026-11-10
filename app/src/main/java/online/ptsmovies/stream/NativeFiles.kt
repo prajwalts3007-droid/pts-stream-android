@@ -19,6 +19,7 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.platform.testTag
 import org.json.JSONObject
 
 @Composable
@@ -147,7 +148,7 @@ fun NativeFilesScreen(
         items(entries, key = { it.optString("name") }) { entry ->
             val filename = entry.optString("name")
             val isDir = entry.optBoolean("is_dir")
-            PtsCard(Modifier.fillMaxWidth(), padding = 10.dp, borderColor = if (filename in selected) Pts.accent else Pts.line, onClick = {
+            PtsCard(Modifier.fillMaxWidth().testTag("file-row-$filename"), padding = 10.dp, borderColor = if (filename in selected) Pts.accent else Pts.line, onClick = {
                 if (selecting) selected = if (filename in selected) selected - filename else selected + filename
                 else if (isDir) onPath(filePath(path, filename)) else menu = entry
             }) {

@@ -20,6 +20,9 @@ Release-candidate tags (`v1-rc1`) produce a **prerelease** APK for manual testin
 
 ## Automated audit
 
+See [the web-to-native control inventory](docs/WEB-PARITY.md) for the second-pass season,
+watch-page/player, Files menu and clear-action integrations and the remaining differences.
+
 `Native screen and API audit` builds the app and instrumentation APK, runs Android lint, then runs tests on an Android 35 emulator. Tests use a loopback MockWebServer and generated HEVC test media; they never sign in to or modify production. The audit artifact contains rendered native screen PNGs, test reports and lint output. The real Activity tests cover login, viewer/admin navigation, dock swipes, recreation, network HEVC playback and saving/playing/deleting an offline copy. Separate tests cover typed stage-snapshot cancellation, API/CSRF contracts, password visibility and watchlist reactivity.
 
 These tests do not prove deployed backend authorization, real Pi/Tunnel/VPS failover, physical-device codec support, OTA installer consent or low-storage behavior. A green APK build alone is not an end-to-end pass.

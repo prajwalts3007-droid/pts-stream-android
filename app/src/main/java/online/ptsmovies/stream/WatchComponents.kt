@@ -18,6 +18,13 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 
+/** Same start/end guards as web plResumePosition; completed clips must not reopen on their final frame. */
+fun resumePosition(resume: Resume?, episodeId: Long, duration: Long = 0L): Long {
+    if (resume == null || resume.episodeId != episodeId || resume.seconds <= 5) return 0L
+    val total = duration.takeIf { it > 0 } ?: resume.duration
+    return if (total > 0 && resume.seconds >= total - 20) 0L else resume.seconds
+}
+
 @Composable
 fun PlayerTextControl(label: String, description: String, onClick: () -> Unit) {
     Box(Modifier.heightIn(min = 40.dp).semantics { contentDescription = description }.clickable(onClick = onClick).padding(horizontal = 8.dp, vertical = 8.dp), contentAlignment = Alignment.Center) {
@@ -31,6 +38,19 @@ fun PlayerSeekButton(forward: Boolean, onClick: () -> Unit) {
         .clickable(onClick = onClick), horizontalAlignment = Alignment.CenterHorizontally) {
         Icon(if (forward) PtsIcons.Refresh else PtsIcons.Retry, null, Modifier.size(28.dp), tint = Pts.text)
         Text("10s", style = MaterialTheme.typography.labelSmall, color = Pts.text)
+    }
+}
+
+@Composable
+fun UpNextCard(episode: Episode, countdown: Int?, onPlay: () -> Unit, onCancel: () -> Unit) {
+    PtsCard(Modifier.fillMaxWidth()) {
+        Text("Up next · S${episode.season}E${episode.episode}", color = Pts.accent, style = MaterialTheme.typography.titleMedium)
+        Text(episode.title, maxLines = 1, overflow = TextOverflow.Ellipsis, color = Pts.text)
+        if (countdown != null) Text("Playing in $countdown seconds", style = MaterialTheme.typography.bodySmall, color = Pts.muted)
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            PtsPrimaryButton("Play next", Modifier.weight(1f), onClick = onPlay)
+            PtsSecondaryButton("Cancel", Modifier.weight(1f), onClick = onCancel)
+        }
     }
 }
 

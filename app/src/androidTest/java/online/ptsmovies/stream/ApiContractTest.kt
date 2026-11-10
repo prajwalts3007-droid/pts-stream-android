@@ -131,4 +131,72 @@ class ApiContractTest {
         assertFalse(request().path.orEmpty().contains("via=vps"))
         assertTrue(request().path.orEmpty().endsWith("?via=vps"))
     }
+
+    @Test fun zipAndUnzipMatchWebUiBodies() = runBlocking {
+        repeat(2) { server.enqueue(json("""{"csrf_token":"fixture"}""")); server.enqueue(json("{}")) }
+        api.executeFile(FileCommand("zip", "pi", "Series/Season 1", listOf("one.mp4", "two.mp4")))
+        request()
+        val zip = request()
+        assertEquals("/api/v1/admin/files/zip", zip.path)
+        val zipBody = JSONObject(zip.body.readUtf8())
+        assertEquals("pi", zipBody.getString("device"))
+        assertEquals("Series/Season 1", zipBody.getString("dir"))
+        assertEquals("one.mp4", zipBody.getJSONArray("names").getString(0))
+        api.executeFile(FileCommand("unzip", "vps", "Downloads", listOf("sample.zip")))
+        request()
+        val unzip = request()
+        assertEquals("/api/v1/admin/files/unzip", unzip.path)
+        assertEquals("Downloads/sample.zip", JSONObject(unzip.body.readUtf8()).getString("path"))
+    }
+
+    @Test fun pasteKeepsSourceDeviceAndDestinationSnapshot() = runBlocking {
+        server.enqueue(json("""{"csrf_token":"fixture"}""")); server.enqueue(json("{}"))
+        api.executeFile(FileCommand("paste", "vps", "target"), FileClipboard("cut", "pi", listOf("source/a.txt")))
+        request()
+        val paste = request()
+        assertEquals("/api/v1/admin/files/paste", paste.path)
+        val body = JSONObject(paste.body.readUtf8())
+        assertEquals("move", body.getString("mode"))
+        assertEquals("pi", body.getString("from_device"))
+        assertEquals("vps", body.getString("to_device"))
+        assertEquals("target", body.getString("target"))
+        assertEquals("source/a.txt", body.getJSONArray("paths").getString(0))
+    }
+
+    @Test fun renameAndNewFileValidateNamesBeforeSending() = runBlocking {
+        for (bad in listOf("..", ".", "../escape", "a/b", "a\\b", "")) assertFalse(validEntryName(bad))
+        try { api.executeFile(FileCommand("rename", "pi", "dir", listOf("old"), "../escape")); fail("Unsafe name") }
+        catch (_: IllegalArgumentException) { }
+        assertEquals(0, server.requestCount)
+        server.enqueue(json("""{"csrf_token":"fixture"}""")); server.enqueue(json("{}"))
+        api.executeFile(FileCommand("rename", "pi", "dir", listOf("old"), "new.txt"))
+        request()
+        val rename = request()
+        val body = JSONObject(rename.body.readUtf8())
+        assertEquals("dir/old", body.getString("path"))
+        assertEquals("new.txt", body.getString("new_name"))
+    }
+
+    @Test fun uploadUsesWebMultipartContract() = runBlocking {
+        server.enqueue(json("""{"csrf_token":"fixture"}""")); server.enqueue(json("{}"))
+        val bytes = "synthetic text".toByteArray()
+        api.upload("pi", "Test", "test.txt", bytes.size.toLong(), { bytes.inputStream() }) {}
+        request()
+        val upload = request()
+        assertEquals("/api/v1/admin/files/upload", upload.path)
+        assertEquals("fixture", upload.getHeader("X-CSRF-Token"))
+        val body = upload.body.readUtf8()
+        assertTrue(body.contains("name=\"device\""))
+        assertTrue(body.contains("name=\"path\""))
+        assertTrue(body.contains("name=\"file\"; filename=\"test.txt\""))
+        assertTrue(body.contains("synthetic text"))
+    }
+
+    @Test fun uploadOverLimitIsRefusedWithoutRequest() = runBlocking {
+        try { api.upload("vps", "", "big.bin", 64L * 1024 * 1024 + 1, { byteArrayOf().inputStream() }) {}; fail("Over limit") }
+        catch (_: IllegalArgumentException) { }
+        assertEquals(0, server.requestCount)
+        assertTrue(api.fileDownloadUrl("pi", "dir/a b.txt").startsWith(server.url("/").toString()))
+        assertTrue(api.fileDownloadUrl("pi", "dir/a b.txt").contains("device=pi&path=dir%2Fa+b.txt"))
+    }
 }

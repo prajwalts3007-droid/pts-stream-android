@@ -2,6 +2,7 @@ package online.ptsmovies.stream
 
 import android.graphics.Bitmap
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalDensity
@@ -10,6 +11,8 @@ import androidx.compose.ui.test.*
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.Density
+import androidx.compose.ui.text.TextLayoutResult
+import androidx.compose.ui.semantics.SemanticsActions
 import androidx.test.platform.app.InstrumentationRegistry
 import org.json.JSONObject
 import org.junit.Assert.*
@@ -126,6 +129,8 @@ class ScreenAuditTest {
         ui.onNodeWithContentDescription("More").performClick()
         ui.runOnIdle { assertEquals(0, deletes) }
         ui.onNodeWithText("Delete").performClick()
+        ui.runOnIdle { assertEquals(0, deletes) }
+        ui.onNode(hasText("Delete") and hasClickAction()).performClick()
         ui.runOnIdle { assertEquals(1, deletes) }
     }
 
@@ -150,5 +155,74 @@ class ScreenAuditTest {
         ui.onNodeWithText("Play").assertIsDisplayed()
         ui.onNodeWithText("My list").assertIsDisplayed()
         capture("compact-large-text-hero")
+    }
+
+    @Test fun seasonPickerShowsOnlySelectedSeason() {
+        val two = series.copy(episodes = listOf(episode, episode.copy(id = 201, season = 2, title = "Second season opener")))
+        var played = 0L
+        ui.setContent { PtsTheme { PtsBackground { Column(Modifier.verticalScroll(androidx.compose.foundation.rememberScrollState()).padding(16.dp)) {
+            SeasonEpisodes(two, onPlay = { played = it.id }, onDownload = {})
+        } } } }
+        ui.onNodeWithText("E1 · A new beginning").assertExists()
+        ui.onNodeWithTag("season-selector").performClick()
+        ui.onNodeWithText("Season 2").performClick()
+        ui.onNodeWithText("E1 · Second season opener").assertExists()
+        ui.onNodeWithText("E1 · A new beginning").assertDoesNotExist()
+        ui.onNodeWithContentDescription("Play episode").performClick()
+        ui.runOnIdle { assertEquals(201L, played) }
+        capture("season-selector")
+    }
+
+    @Test fun synopsisIsThreeLinesUntilExpanded() {
+        ui.setContent { PtsTheme { Box(Modifier.width(280.dp)) { ShortSynopsis("A long synthetic description. ".repeat(30)) } } }
+        val collapsed = mutableListOf<TextLayoutResult>()
+        ui.onNodeWithTag("watch-synopsis").performSemanticsAction(SemanticsActions.GetTextLayoutResult) { it(collapsed) }
+        assertEquals(3, collapsed.single().lineCount)
+        ui.onNodeWithText("More").performClick()
+        val expanded = mutableListOf<TextLayoutResult>()
+        ui.onNodeWithTag("watch-synopsis").performSemanticsAction(SemanticsActions.GetTextLayoutResult) { it(expanded) }
+        assertTrue(expanded.single().lineCount > 3)
+        ui.onNodeWithText("Less").assertExists()
+    }
+
+    @Test fun archiveMenuHasZipUnzipRenameAndClipboardActions() {
+        val archive = JSONObject("""{"name":"sample.zip","is_dir":false,"size":10}""")
+        var command: FileCommand? = null
+        ui.setContent { PtsTheme { FilesScreen("pi", "Series", listOf(archive), false, {}, {}, {}, {}, {}, {}, onCommand = { command = it }) } }
+        ui.onNodeWithContentDescription("More").performClick()
+        listOf("Download", "Cut", "Copy", "Rename", "Zip", "Unzip", "Delete").forEach { ui.onNodeWithText(it).assertExists() }
+        saveAuditCapture("files-archive-menu", checkNotNull(InstrumentationRegistry.getInstrumentation().uiAutomation.takeScreenshot()))
+        ui.onNodeWithText("Unzip").performClick()
+        ui.runOnIdle { assertNull(command) }
+        ui.onNode(hasText("Unzip") and hasClickAction()).performClick()
+        ui.runOnIdle { assertEquals(FileCommand("unzip", "pi", "Series", listOf("sample.zip")), command) }
+    }
+
+    @Test fun clearCompletedKeepsSnapshotAndOtherStages() {
+        var done by mutableStateOf(listOf(JSONObject(job.toString()).put("job_id", "done-a").put("stage", "done")))
+        var deleted = emptyList<String>()
+        ui.setContent { PtsTheme { QueueScreen(listOf(job), done, "done", {}, {}, {}, { stage, ids -> assertEquals("done", stage); deleted = ids }) } }
+        ui.onNodeWithText("Clear completed").performClick()
+        ui.runOnIdle { done = done + JSONObject(job.toString()).put("job_id", "arrived-later").put("stage", "done") }
+        ui.onNodeWithText("Clear").performClick()
+        ui.runOnIdle { assertEquals(listOf("done-a"), deleted) }
+    }
+
+    @Test fun transfersClearRequiresExplicitConfirmation() {
+        var cleared = false
+        val list = listOf(JSONObject("""{"id":"done","state":"done","kind":"zip"}"""), JSONObject("""{"id":"active","state":"running","kind":"zip","pct":10}"""))
+        ui.setContent { PtsTheme { TransfersScreen(list, {}, { cleared = true }) } }
+        ui.onNodeWithText("Clear").performClick()
+        ui.runOnIdle { assertFalse(cleared) }
+        ui.onNode(hasText("Clear") and hasClickAction()).performClick()
+        ui.runOnIdle { assertTrue(cleared) }
+    }
+
+    @Test fun resumeMatchesWebStartAndEndGuards() {
+        assertEquals(0L, resumePosition(Resume(1, 5, 100), 1))
+        assertEquals(0L, resumePosition(Resume(1, 85, 100), 1))
+        assertEquals(0L, resumePosition(Resume(1, 40, 100), 2))
+        assertEquals(40L, resumePosition(Resume(1, 40, 100), 1))
+        assertEquals(0L, resumePosition(Resume(0, 7, 8), 0))
     }
 }

@@ -23,6 +23,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -133,9 +134,11 @@ fun StreamHomeScreen(
     onToggleWatch: (Title) -> Unit,
     onSeeAll: (String) -> Unit
 ) {
+    var query by rememberSaveable { mutableStateOf("") }
+    val results = remember(library.titles, query) { library.titles.filter { it.title.contains(query.trim(), true) || it.genres.any { g -> g.contains(query.trim(), true) } } }
     val featured = remember(library.titles) { library.titles.filter { it.poster.startsWith("https://") }.ifEmpty { library.titles }.take(4) }
     val continueWatching = remember(library) {
-        library.titles.filter { (library.progress[it.id]?.seconds ?: 0) > 0 }
+        library.titles.filter { val p = library.progress[it.id]; p != null && p.duration > 0 && p.seconds > 5 && p.seconds < p.duration - 15 }
     }
     val movies = library.titles.filter { it.kind == "movie" }
     val series = library.titles.filter { it.kind == "series" }
@@ -144,7 +147,18 @@ fun StreamHomeScreen(
         verticalArrangement = Arrangement.spacedBy(2.dp)
     ) {
         item { PtsPage("Stream", "Pick up where you left off") }
-        if (library.titles.isEmpty()) {
+        item { PtsSearchField(query, { query = it }, "Search movies and series") }
+        if (query.isNotBlank()) {
+            item { Text("${results.size} results", style = MaterialTheme.typography.bodySmall, color = Pts.muted) }
+            if (results.isEmpty()) item { PtsEmpty("No matching titles", actionLabel = "Clear search", icon = PtsIcons.Search) { query = "" } }
+            results.chunked(2).forEach { pair -> item {
+                Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    pair.forEach { t -> PtsPosterCard(t, library.progress[t.id], t.id in library.watch, Modifier.weight(1f), width = null,
+                        onOpen = { onOpen(t) }, onToggleWatch = { onToggleWatch(t) }) }
+                    if (pair.size == 1) Spacer(Modifier.weight(1f))
+                }
+            } }
+        } else if (library.titles.isEmpty()) {
             item { PtsEmpty("Your library is empty", "Approved titles will appear here after the pipeline finishes.", icon = PtsIcons.Film) }
         } else {
             if (featured.isNotEmpty()) {
@@ -250,6 +264,9 @@ fun BrowseScreen(
                 }
             }
         }
+        if (query.isNotBlank() || genre.isNotBlank()) item(span = { GridItemSpan(maxLineSpan) }) {
+            PtsSecondaryButton("Clear search and filters", Modifier.fillMaxWidth()) { genre = ""; onQuery("") }
+        }
         if (filtered.isEmpty()) {
             item(span = { GridItemSpan(maxLineSpan) }) {
                 PtsEmpty(
@@ -328,7 +345,7 @@ fun TitleScreen(
                     }
                 }
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
-                    val resumeAt = resume?.takeIf { it.seconds > 0 }
+                    val resumeAt = resume?.takeIf { resumePosition(it, if (title.kind == "movie") 0L else it.episodeId) > 0 }
                     PtsPrimaryButton(
                         if (resumeAt != null) "Resume" else if (title.kind == "series") "Play series" else "Play",
                         Modifier.weight(1f), icon = PtsIcons.Play,
@@ -380,7 +397,7 @@ internal fun EpisodeRow(
     onPlay: () -> Unit,
     onDownload: () -> Unit
 ) {
-    PtsCard(Modifier.fillMaxWidth(), padding = 12.dp) {
+    PtsCard(Modifier.fillMaxWidth(), padding = 12.dp, onClick = onPlay) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Box(
                 Modifier.size(52.dp).clip(RoundedCornerShape(13.dp)).background(Pts.soft)
@@ -814,89 +831,14 @@ fun SearchScreen(query: String, onQuery: (String) -> Unit, results: List<JSONObj
     }
 }
 
-// ---------- files ----------
-
 @Composable
-private fun LegacyFilesScreen(
-    device: String,
-    path: String,
-    entries: List<JSONObject>,
-    loading: Boolean,
-    onDevice: (String) -> Unit,
-    onPath: (String) -> Unit,
-    onRefresh: () -> Unit,
-    onDownload: (String) -> Unit,
-    onDelete: (JSONObject) -> Unit,
-    onMkdir: (String) -> Unit
-) {
-    var mkdir by remember { mutableStateOf(false) }
-    var folderName by remember { mutableStateOf("") }
-    var deleteEntry by remember { mutableStateOf<JSONObject?>(null) }
-    if (mkdir) {
-        PtsConfirmDialog(
-            "New folder", "Create a folder inside /${path.ifBlank { "root" }}.",
-            "Create", confirmEnabled = folderName.isNotBlank() && folderName.trim() !in setOf(".", "..") && '/' !in folderName && '\\' !in folderName,
-            onConfirm = { onMkdir(folderName.trim()); folderName = ""; mkdir = false },
-            onDismiss = { mkdir = false }
-        ) { PtsField(folderName, { folderName = it }, "Folder name", Modifier.fillMaxWidth()) }
-    }
-    deleteEntry?.let { entry ->
-        PtsConfirmDialog(
-            "Delete file?", "${entry.optString("name")} will be removed from ${device.uppercase()}. This cannot be undone.",
-            "Delete", destructive = true,
-            onConfirm = { onDelete(entry); deleteEntry = null }, onDismiss = { deleteEntry = null }
-        )
-    }
-    LazyColumn(
-        contentPadding = PaddingValues(start = 16.dp, end = 16.dp, bottom = 20.dp),
-        verticalArrangement = Arrangement.spacedBy(9.dp)
-    ) {
-        item { PtsPage("Files", "Browse storage on the VPS and Raspberry Pi") }
-        item { PtsSegmented(listOf("vps" to "VPS", "pi" to "Raspberry Pi"), device, onDevice) }
-        item {
-            PtsCard(Modifier.fillMaxWidth(), padding = 11.dp) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    PtsIconAction(PtsIcons.Up, "Up one folder", {
-                        onPath(if (path.isBlank()) "" else path.substringBeforeLast('/', ""))
-                    }, tint = if (path.isBlank()) Pts.line2 else Pts.text, size = 34.dp)
-                    Text("/${path}", style = MaterialTheme.typography.bodySmall, color = Pts.text,
-                        modifier = Modifier.weight(1f).padding(horizontal = 4.dp), maxLines = 1, overflow = TextOverflow.Ellipsis)
-                    PtsIconAction(PtsIcons.Refresh, "Refresh", onRefresh, tint = Pts.muted, size = 34.dp)
-                }
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    PtsSecondaryButton("New folder", Modifier.weight(1f), icon = PtsIcons.FolderPlus) { mkdir = true }
-                }
-            }
-        }
-        if (loading) item { PtsProgressBar(0f) }
-        if (!loading && entries.isEmpty()) item {
-            PtsEmpty("This folder is empty", "Create a folder or use the web admin to upload files.", icon = PtsIcons.Browse)
-        }
-        items(entries, key = { it.optString("name") }) { entry ->
-            val isDir = entry.optBoolean("is_dir")
-            PtsCard(Modifier.fillMaxWidth(), padding = 10.dp, onClick = if (isDir) {
-                { onPath(if (path.isBlank()) entry.optString("name") else "$path/${entry.optString("name")}") }
-            } else null) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Box(
-                        Modifier.size(40.dp).clip(RoundedCornerShape(11.dp)).background(Pts.soft).border(1.dp, Pts.line, RoundedCornerShape(11.dp)),
-                        contentAlignment = Alignment.Center
-                    ) { Icon(if (isDir) PtsIcons.Browse else PtsIcons.Film, null, Modifier.size(20.dp), tint = Pts.accent) }
-                    Column(Modifier.weight(1f).padding(horizontal = 11.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                        Text(entry.optString("name"), style = MaterialTheme.typography.titleSmall, color = Pts.text, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                        Text(if (isDir) "Folder" else formatBytes(entry.optLong("size")), style = MaterialTheme.typography.labelSmall, color = Pts.muted)
-                    }
-                    if (!isDir) PtsIconAction(PtsIcons.Download, "Download", { onDownload(entry.optString("name")) }, tint = Pts.text, size = 34.dp)
-                    PtsIconAction(PtsIcons.More, "More", { deleteEntry = entry }, tint = Pts.muted, size = 34.dp)
-                }
-            }
-        }
-    }
-}
-
-@Composable
-fun TransfersScreen(ops: List<JSONObject>, onCancel: (String) -> Unit, onClear: () -> Unit = {}) {
+fun TransfersScreen(ops: List<JSONObject>, onCancel: (String) -> Unit, onClear: () -> Unit = {},
+    relay: List<JSONObject> = emptyList(), onRelayAction: (JSONObject, Boolean) -> Unit = { _, _ -> }, onLink: (String, Boolean) -> Unit = { _, _ -> }) {
     var clear by remember { mutableStateOf(false) }
+    var relayConfirm by remember { mutableStateOf<Pair<JSONObject, Boolean>?>(null) }
+    relayConfirm?.let { (job, active) -> PtsConfirmDialog(if (active) "Cancel ZIP transfer?" else "Remove ZIP transfer?",
+        job.optString("filename"), if (active) "Cancel transfer" else "Remove", destructive = true,
+        onConfirm = { relayConfirm = null; onRelayAction(job, active) }, onDismiss = { relayConfirm = null }) }
     if (clear) PtsConfirmDialog("Clear transfers?", "Remove finished transfer records? Running operations and files are kept.", "Clear",
         onConfirm = { clear = false; onClear() }, onDismiss = { clear = false })
     LazyColumn(
@@ -924,6 +866,27 @@ fun TransfersScreen(ops: List<JSONObject>, onCancel: (String) -> Unit, onClear: 
                 }
                 if (running) PtsProgressBar((op.optDouble("pct") / 100).toFloat())
                 if (op.optString("err").isNotBlank()) Text(op.optString("err"), style = MaterialTheme.typography.labelSmall, color = Pts.danger)
+            }
+        }
+        if (relay.isNotEmpty()) {
+            item { PtsSectionHeader("Previous ZIP transfers", relay.size) }
+            items(relay) { job ->
+                val stage = job.optString("stage", "queued")
+                val active = stage in setOf("queued", "starting", "downloading", "transferring")
+                PtsCard(Modifier.fillMaxWidth(), padding = 13.dp) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(job.optString("filename").ifBlank { "ZIP transfer" }, Modifier.weight(1f), style = MaterialTheme.typography.titleSmall, color = Pts.text, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        PtsIconAction(PtsIcons.Close, if (active) "Cancel ZIP transfer" else "Remove ZIP transfer", { relayConfirm = job to active }, tint = Pts.danger)
+                    }
+                    PtsPill(stage, active = active, danger = stage == "failed")
+                    PtsProgressBar(if (stage == "done") 1f else (job.optDouble("progress", 0.0) / 100).toFloat())
+                    Text(job.optString("error").ifBlank { job.optString("message") }, style = MaterialTheme.typography.bodySmall, color = Pts.muted)
+                    val link = job.optString("manifest_url").ifBlank { job.optString("pixeldrain_id").takeIf { it.isNotBlank() }?.let { "https://pixeldrain.com/u/" + java.net.URLEncoder.encode(it, "UTF-8") }.orEmpty() }
+                    if (stage == "done" && link.startsWith("https://")) Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        PtsSecondaryButton("Open link", Modifier.weight(1f)) { onLink(link, false) }
+                        PtsSecondaryButton("Copy", Modifier.weight(1f)) { onLink(link, true) }
+                    }
+                }
             }
         }
     }

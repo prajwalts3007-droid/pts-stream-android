@@ -141,6 +141,8 @@ class PtsApi(private val baseUrl: String = BASE, cookieJar: CookieJar? = null) {
         "${baseUrl.trimEnd('/')}/api/v1/stream/${if (episode?.container == "hls" || (episode == null && title.container == "hls")) "hls" else "file"}/${if (episode == null) "movie" else "episode"}/${episode?.id ?: title.id}" +
             (if (episode?.container == "hls" || (episode == null && title.container == "hls")) "/master.m3u8" else "") +
             if (fallback) "?via=vps" else ""
+    fun fileDownloadUrl(device: String, path: String): String =
+        baseUrl.trimEnd('/') + "/api/v1/admin/files/download?device=$device&path=" + java.net.URLEncoder.encode(path, "UTF-8")
 }
 
 class ApiException(val status: Int, message: String) : IOException(message)
