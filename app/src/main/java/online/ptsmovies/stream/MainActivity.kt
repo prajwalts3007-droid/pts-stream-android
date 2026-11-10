@@ -50,6 +50,7 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
 import androidx.core.view.WindowCompat
+import androidx.core.view.doOnLayout
 import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.repeatOnLifecycle
@@ -858,6 +859,7 @@ class MainActivity : ComponentActivity() {
                 setPlaybackSpeed(speed)
             }
         }
+        val nativeView = remember(exo) { arrayOfNulls<PlayerView>(1) }
         BackHandler { leavePlayer() }
         DisposableEffect(exo) {
             player = exo
@@ -884,11 +886,7 @@ class MainActivity : ComponentActivity() {
                 override fun onIsPlayingChanged(isPlaying: Boolean) { playingNow = isPlaying }
             }
             exo.addListener(listener)
-            // Start after the native view is composed and the listener is installed,
-            // rather than racing the first decode against TextureView attachment.
             firstFrame = false
-            exo.prepare()
-            exo.playWhenReady = startPlaying
             onDispose {
                 val p = exo.currentPosition / 1000
                 val d = exo.duration.coerceAtLeast(0) / 1000
@@ -896,6 +894,8 @@ class MainActivity : ComponentActivity() {
                     library = library?.let { it.copy(progress = it.progress + (title.id to Resume(ep?.id ?: 0L, p, d))) }
                     scope.launch { try { api.progress(title.id, ep?.id, p, d) } catch (_: Exception) { } }
                 }
+                nativeView[0]?.player = null
+                nativeView[0] = null
                 exo.removeListener(listener); exo.release()
                 window.attributes = window.attributes.apply { screenBrightness = originalBrightness }
                 if (player === exo) player = null
@@ -937,13 +937,24 @@ class MainActivity : ComponentActivity() {
           }
           Column(Modifier.fillMaxSize()) {
             Box((if (landscape) Modifier.weight(1f).fillMaxWidth() else Modifier.fillMaxWidth().aspectRatio(16f / 9f)).testTag("player-surface").background(Color.Black)) {
-                AndroidView(factory = { ctx -> (android.view.LayoutInflater.from(ctx).inflate(R.layout.native_player, null, false) as PlayerView).apply {
-                    player = exo
-                    useController = false
-                    keepScreenOn = true
-                    layoutParams = FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
-                } }, update = { it.player = exo; it.keepScreenOn = playingNow || buffering; it.resizeMode = if (fill) AspectRatioFrameLayout.RESIZE_MODE_ZOOM else AspectRatioFrameLayout.RESIZE_MODE_FIT },
-                    modifier = Modifier.fillMaxSize())
+                 key(exo) { AndroidView(factory = { ctx -> (android.view.LayoutInflater.from(ctx).inflate(R.layout.native_player, FrameLayout(ctx), false) as PlayerView).apply {
+                     useController = false
+                     keepScreenOn = true
+                     setEnableComposeSurfaceSyncWorkaround(true)
+                     setShutterBackgroundColor(android.graphics.Color.TRANSPARENT)
+                     layoutParams = FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
+                 } }, onRelease = { view -> view.player = null }, update = { view ->
+                     nativeView[0] = view
+                     if (view.player !== exo) view.player = exo
+                     view.keepScreenOn = playingNow || buffering
+                     view.resizeMode = if (fill) AspectRatioFrameLayout.RESIZE_MODE_ZOOM else AspectRatioFrameLayout.RESIZE_MODE_FIT
+                     if (view.tag !== exo) {
+                         view.tag = exo
+                         // Decode only after the native surface has dimensions. A new source
+                         // gets its own view; the old surface is explicitly detached on release.
+                         view.doOnLayout { if (view.player === exo) { exo.prepare(); exo.playWhenReady = startPlaying } }
+                     }
+                 }, modifier = Modifier.fillMaxSize()) }
                  if (!inPip) PlayerGestures(this@MainActivity, exo.currentPosition, duration,
                      onTap = { controls = !controls; interaction++ },
                      onSeekPreview = { seekPreview = it; touchControls() },

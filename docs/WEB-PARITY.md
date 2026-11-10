@@ -16,7 +16,7 @@ device Downloads, avatar/profile, theme, grid/list and native OTA rework.
 | `st-play`, `st-seek`, `st-speed`, `st-mute` | Central playback/10-second seek controls, draggable timeline, speed menu, mute toggle. |
 | `st-audio-btn`, subtitles | Human-readable language/codec/channel labels, selected/unsupported track indication, subtitle Off and preference saving. |
 | `st-fs`, `st-pip` | Explicit fullscreen/exit, Back exits fullscreen first, PiP, fit/fill. |
-| `st-spin`, `st-player-msg`, retry | Buffering state and visible retry/error UI in portrait and fullscreen. TextureView avoids Compose/SurfaceView overlay/rotation synchronization problems. |
+| `st-spin`, `st-player-msg`, retry | Buffering state and visible retry/error UI in portrait and fullscreen. Native SurfaceView uses Media3's Compose synchronization workaround, per-source view ownership and explicit detach on release. |
 | `plResumePosition` | Ignore the first five seconds and restart when saved within 20 seconds of the end. |
 | `st-upnext` | Five-second next-episode countdown, Play next and Cancel; respects saved autoplay preference. |
 | `st-played`, Continue watching removal | Mark as played and the shelf's remove button → `POST /stream/progress/clear`; later player disposal/polling must not recreate the cleared record. |

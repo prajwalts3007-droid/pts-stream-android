@@ -516,4 +516,16 @@ class AppFlowTest {
         waitForText("Updated on web")
         assertEquals(0, adminCalls.get())
     }
+
+    @Test fun offlineVideoSurfaceSurvivesRepeatedOpenAndClose() {
+        launchLoggedIn(); openMovie(); ui.onNodeWithText("Save offline").performScrollTo().performClick()
+        waitForText("My Downloads")
+        repeat(3) {
+            ui.waitUntil(15000) { ui.onAllNodesWithContentDescription("Play").fetchSemanticsNodes().isNotEmpty() }
+            ui.onNodeWithContentDescription("Play").performClick()
+            waitForMovingPlayback(); pauseIfPlaying(); assertDecodedTestPattern()
+            pressBack(); ui.onNodeWithContentDescription("Downloads").performClick()
+        }
+        assertEquals(0, adminCalls.get())
+    }
 }
