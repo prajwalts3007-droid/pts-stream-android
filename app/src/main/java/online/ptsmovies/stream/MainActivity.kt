@@ -840,6 +840,7 @@ class MainActivity : ComponentActivity() {
     @androidx.annotation.OptIn(markerClass = [androidx.media3.common.util.UnstableApi::class])
     @OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
     private fun PlayerScreen(title: Title, ep: Episode?, initialSaved: SavedVideo?, onBack: () -> Unit) {
+        val playbackOwner = remember { account?.optLong("id") }
         val saved = remember(title.id, ep?.id) { initialSaved }
         val context = LocalContext.current
         var fallback by remember(title.id, ep?.id) { mutableStateOf(false) }
@@ -924,7 +925,7 @@ class MainActivity : ComponentActivity() {
                     ended = state == Player.STATE_ENDED
                     if (state == Player.STATE_ENDED) {
                         controls = true
-                        journal()?.markCompleted("${title.id}_${ep?.id ?: 0}")
+                        if (playbackOwner == account?.optLong("id")) journal()?.markCompleted("${title.id}_${ep?.id ?: 0}")
                         completedOffline[0] = true
                         if (sleepAtEnd) { exo.pause(); cancelNext = true; sleepAtEnd = false }
                     }
@@ -936,14 +937,14 @@ class MainActivity : ComponentActivity() {
             onDispose {
                 val p = exo.currentPosition / 1000
                 val d = exo.duration.coerceAtLeast(0) / 1000
-                if (title.id !in clearedProgress && d > 0) {
+                if (playbackOwner == account?.optLong("id") && title.id !in clearedProgress && d > 0) {
                     library = library?.let { it.copy(progress = it.progress + (title.id to Resume(ep?.id ?: 0L, p, d))) }
                     recordProgress(title.id, ep?.id, p, d)
                 }
                 nativeView[0]?.player = null
                 nativeView[0] = null
                 exo.removeListener(listener); exo.release()
-                if (completedOffline[0] && saved != null && NativePreferences(context).downloads().removeWatched)
+                if (playbackOwner == account?.optLong("id") && completedOffline[0] && saved != null && NativePreferences(context).downloads().removeWatched)
                     runCatching { downloads?.remove(saved) }
                 window.attributes = window.attributes.apply { screenBrightness = originalBrightness }
                 if (player === exo) player = null

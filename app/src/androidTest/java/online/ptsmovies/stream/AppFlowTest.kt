@@ -345,6 +345,13 @@ class AppFlowTest {
         pauseIfPlaying()
         ui.onNodeWithText("Mark completed").performScrollTo().performClick()
         waitForText("Marked as completed")
+        ui.waitUntil(10000) { clearedProgress.get() }
+        scenario!!.recreate()
+        ui.waitUntil(15000) {
+            var ready = false
+            scenario!!.onActivity { activity -> ready = nativePlayer(activity.window.decorView)?.playbackState == androidx.media3.common.Player.STATE_READY }
+            ready
+        }
         pressBack()
         ui.runOnIdle { assertTrue(clearedProgress.get()); assertEquals(0, progressAfterClear.get()) }
     }
