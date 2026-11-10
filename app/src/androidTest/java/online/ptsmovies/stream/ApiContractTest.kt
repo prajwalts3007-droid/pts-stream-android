@@ -309,4 +309,82 @@ class ApiContractTest {
         assertEquals("available", controller.state.value.status); assertEquals(4, controller.state.value.candidate?.code)
         assertEquals("/releases?per_page=20", request().path)
     }
+
+    @Test fun offlineProgressSurvivesReopenAndFlushesLatestEditOnly() = runBlocking {
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        context.getSharedPreferences("progress_journal_90030", 0).edit().clear().commit()
+        val journal = ProgressJournal(context, 90030)
+        journal.put(1, 7, 40, 300); journal.put(1, 7, 60, 300)
+        assertEquals(1, journal.pending().size)
+        assertEquals(60L, ProgressJournal(context, 90030).overlay(Library(emptyList(), emptySet(), emptyMap())).progress[1]?.seconds)
+        server.enqueue(json("""{"csrf_token":"fixture"}""")); server.enqueue(json("{}"))
+        journal.flush(api); request()
+        assertEquals(60, JSONObject(request().body.readUtf8()).getInt("position"))
+        assertTrue(journal.pending().isEmpty())
+    }
+
+    @Test fun offlineClearOverridesProgressAndIsOwnerScoped() = runBlocking {
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        context.getSharedPreferences("progress_journal_90031", 0).edit().clear().commit()
+        val journal = ProgressJournal(context, 90031)
+        journal.put(1, 7, 40, 300); journal.put(1, 7, 0, 0, clear = true)
+        journal.markCompleted("1_7")
+        assertEquals(setOf("1_7"), ProgressJournal(context, 90031).completed())
+        assertTrue(journal.overlay(Library(emptyList(), emptySet(), mapOf(1L to Resume(7, 40, 300)))).progress.isEmpty())
+        assertTrue(ProgressJournal(context, 90032).pending().isEmpty())
+        server.enqueue(json("""{"csrf_token":"fixture"}""")); server.enqueue(json("{}"))
+        journal.flush(api); request()
+        assertEquals("/api/v1/stream/progress/clear", request().path)
+    }
+
+    @Test fun failedProgressFlushKeepsJournalForNextConnection() = runBlocking {
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        context.getSharedPreferences("progress_journal_90033", 0).edit().clear().commit()
+        val journal = ProgressJournal(context, 90033); journal.put(1, 0, 20, 300)
+        server.enqueue(json("""{"csrf_token":"fixture"}""")); server.enqueue(MockResponse().setResponseCode(503))
+        try { journal.flush(api); fail("Unavailable server") } catch (_: ApiException) { }
+        assertEquals(1, journal.pending().size)
+    }
+
+    @Test fun pipelineConversionPreservesOriginalAndRejectsInvalidLimits() {
+        val original = JSONObject().put("pi_bwlimit_kbps", 12345L)
+        val fields = mapOf("pi_bwlimit_kbps" to "101.13", "max_runners" to "60", "max_pi_transfers" to "2", "min_free_gib" to "10", "max_staging_gib" to "0", "reserve_per_job_gib" to "6")
+        assertEquals(12345L, pipelineBody(fields, original).getLong("pi_bwlimit_kbps"))
+        assertEquals(0L, pipelineBody(fields + ("pi_bwlimit_kbps" to "0"), original).getLong("pi_bwlimit_kbps"))
+        for ((key, value) in listOf("max_runners" to "61", "max_pi_transfers" to "0", "pi_bwlimit_kbps" to "NaN", "min_free_gib" to "1.5")) {
+            try { pipelineBody(fields + (key to value), original); fail("Invalid $key") } catch (_: IllegalArgumentException) { }
+        }
+    }
+
+    @Test fun privateLanAddressesAndOptInDeletionAreConstrained() {
+        listOf("192.168.29.75", "10.0.0.2", "172.31.255.1").forEach { assertTrue(isPrivateV4(it)) }
+        listOf("127.0.0.1", "169.254.169.254", "8.8.8.8", "192.168.1.999", "media.invalid", "http://192.168.1.2").forEach { assertFalse(isPrivateV4(it)) }
+        assertFalse(DownloadOptions().removeWatched)
+    }
+
+    @Test fun storageLimitRefusalNeverFallsBackOrProducesMedia() = runBlocking {
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        val store = OfflineStore(context, api, 90034)
+        server.enqueue(MockResponse().setBody("fixture-too-large"))
+        try { store.save(movie, null, maxBytes = 3) {}; fail("Quota must reject") } catch (_: DeviceStorageException) { }
+        assertEquals(1, server.requestCount); assertTrue(store.list().isEmpty())
+    }
+
+    @Test fun offlinePosterAndFullEpisodeMetadataSurviveStoreRecreation() = runBlocking {
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        val store = OfflineStore(context, api, 90035)
+        store.list().forEach { store.remove(it) }
+        val bitmap = android.graphics.Bitmap.createBitmap(8, 8, android.graphics.Bitmap.Config.ARGB_8888)
+        bitmap.eraseColor(android.graphics.Color.CYAN)
+        val png = java.io.ByteArrayOutputStream(); bitmap.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, png); bitmap.recycle()
+        val ep = Episode(101, 2, 3, "Synthetic third episode", 2400.0, "mp4", size = 4096)
+        val title = movie.copy(kind = "series", poster = server.url("/poster.png").toString(), episodes = listOf(ep))
+        server.enqueue(MockResponse().setBody("media-fixture"))
+        server.enqueue(MockResponse().setHeader("Content-Type", "image/png").setBody(Buffer().write(png.toByteArray())))
+        store.save(title, ep) {}
+        val restored = OfflineStore(context, api, 90035).list().single()
+        assertEquals(title, restored.titleMetadata()); assertTrue(restored.poster?.isFile == true)
+        assertEquals(4096L, restored.titleMetadata().episodes.single().size)
+        store.remove(restored); assertFalse(restored.poster!!.exists())
+    }
 }

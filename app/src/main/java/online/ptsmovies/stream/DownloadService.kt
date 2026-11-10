@@ -47,7 +47,7 @@ class DownloadRepository internal constructor(private val context: Context, priv
         val tasks = (0 until array.length()).mapNotNull { i -> runCatching {
             val o = array.getJSONObject(i)
             DownloadTask(parseTitle(o.getJSONObject("title")), o.optJSONObject("episode")?.let { parseEpisode(it) },
-                if (o.optString("status") in listOf("queued", "downloading")) "paused" else o.optString("status"),
+                if (o.optString("status") in listOf("queued", "downloading", "waiting_wifi", "cancelling")) "paused" else o.optString("status"),
                 o.optLong("bytes"), o.optLong("total"), error = o.optString("error"))
         }.getOrNull() }.filter { it.status != "complete" || saved.any { s -> s.key == it.key } }
         mutable.value = DownloadSnapshot(tasks, saved)
@@ -60,7 +60,7 @@ class DownloadRepository internal constructor(private val context: Context, priv
     fun enqueue(title: Title, episode: Episode?) {
         require(episode?.container != "hls" && (episode != null || title.container != "hls")) { "This HLS title is not available as an authorized offline MP4" }
         val t = DownloadTask(title, episode)
-        if (mutable.value.saved.any { it.key == t.key } || mutable.value.tasks.any { it.key == t.key && it.status in listOf("queued", "downloading", "cancelling") }) return
+        if (mutable.value.saved.any { it.key == t.key } || mutable.value.tasks.any { it.key == t.key && it.status in listOf("queued", "downloading", "waiting_wifi", "cancelling") }) return
         update { s -> s.copy(tasks = s.tasks.filterNot { it.key == t.key } + t) }
         startService()
     }
@@ -112,6 +112,8 @@ class DownloadRepository internal constructor(private val context: Context, priv
                         } }, admit = { total, offset -> synchronized(lock) {
                             val limit = NativePreferences(context).downloads().limitGiB.toLong() * 1024 * 1024 * 1024
                             val needed = total - offset
+                            if (needed + reservations.filterKeys { it != next.key }.values.sum() > store.freeBytes())
+                                throw DeviceStorageException("Insufficient device storage for concurrent downloads")
                             if (limit > 0 && store.usedBytes() + reservations.filterKeys { it != next.key }.values.sum() + needed > limit)
                                 throw DeviceStorageException("Storage limit reached. Remove a download or increase the limit.")
                             reservations[next.key] = needed
@@ -125,7 +127,7 @@ class DownloadRepository internal constructor(private val context: Context, priv
                     } catch (e: CancellationException) {
                         task(next.key) { if (it.status == "downloading") it.copy(status = "paused", speed = 0) else it }
                     } catch (e: Exception) {
-                        task(next.key) { it.copy(status = "failed", speed = 0, error = e.message ?: "Download failed") }
+                        task(next.key) { if (it.status == "downloading") it.copy(status = "failed", speed = 0, error = e.message ?: "Download failed") else it }
                     } finally {
                         synchronized(lock) { calls.remove(next.key); jobs.remove(next.key); reservations.remove(next.key) }
                         reconcile()

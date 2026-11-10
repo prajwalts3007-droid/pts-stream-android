@@ -26,7 +26,7 @@ fun CompactDownloads(saved: List<SavedVideo>, tasks: List<DownloadTask>, onPlay:
     var folder by rememberSaveable { mutableStateOf<Long?>(null) }
     var season by rememberSaveable { mutableStateOf<Int?>(null) }
     var confirm by remember { mutableStateOf<List<SavedVideo>>(emptyList()) }
-    val metadata = remember(titles, tasks, saved) { (titles + tasks.map { it.title } + saved.map { it.titleMetadata() }).associateBy { it.id } }
+    val metadata = remember(titles, tasks, saved) { (saved.map { it.titleMetadata() } + tasks.map { it.title } + titles).associateBy { it.id } }
     val ids = (saved.map { it.titleId } + tasks.filter { it.status != "complete" }.map { it.title.id }).distinct()
     fun back() { if (season != null) season = null else if (folder != null) folder = null else onBack() }
     BackHandler(folder != null || season != null) { back() }

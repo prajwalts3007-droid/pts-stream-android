@@ -220,7 +220,7 @@ class MainActivity : ComponentActivity() {
                 PtsBackground(Modifier.windowInsetsPadding(WindowInsets.safeDrawing)) {
                     episodeDownloadTitle?.let { title ->
                         EpisodeDownloadDialog(title, savedVideos.map { it.key }.toSet(), journal()?.completed().orEmpty(),
-                            onStart = { episodes -> episodeDownloadTitle = null; downloads?.enqueueSeason(title, episodes); openDeviceDownloads() },
+                            onStart = { episodes -> episodeDownloadTitle = null; downloads?.enqueueSeason(title, episodes); toast("Downloads queued", true) },
                             onClose = { episodeDownloadTitle = null })
                     }
                     when {
@@ -311,6 +311,8 @@ class MainActivity : ComponentActivity() {
             val current = selected?.id?.takeIf { playing }
             library = if (current != null && library?.progress?.containsKey(current) == true) result.copy(progress = result.progress + (current to library!!.progress.getValue(current))) else result
             account?.let { device.library(it.optLong("id"), library!!) }
+            val repository = downloads
+            scope.launch { if (repository?.owner == owner) { repository.store.hydrate(result.titles); repository.refresh() } }
             selected?.let { old -> library?.titles?.firstOrNull { it.id == old.id }?.let { selected = it } }
         } catch (e: CancellationException) { throw e }
         catch (e: Exception) {
@@ -338,6 +340,7 @@ class MainActivity : ComponentActivity() {
                 savedVideos = emptyList(); downloadTasks = emptyList(); downloading = ""; message = ""; startupError = ""
                 fileClipboard = null; fileEditor = null; fileStatus = ""; clearedProgress.clear()
                 relayJobs = emptyList()
+                playbackPrefs = JSONObject(); nativeSettings = ""; episodeDownloadTitle = null; sleepDeadline = 0; sleepAtEnd = false
                 loading = false
             }
         }
@@ -386,7 +389,7 @@ class MainActivity : ComponentActivity() {
         try {
             if (title.kind == "series" && ep == null) { episodeDownloadTitle = title; return }
             downloads?.enqueue(title, ep) ?: error("Sign in before downloading")
-            openDeviceDownloads()
+            toast("Download queued", true)
         } catch (e: Exception) { toast(e.message ?: "Cannot start download") }
     }
 
@@ -401,8 +404,8 @@ class MainActivity : ComponentActivity() {
         val repo = DeviceDownloads.forOwner(this, api, user.optLong("id"))
         offline = repo.store
         val cached = getSharedPreferences("playback_${user.optLong("id")}", MODE_PRIVATE).getString("value", "{}")
-        if (playbackPrefs.length() == 0) playbackPrefs = runCatching { JSONObject(cached!!) }.getOrDefault(JSONObject())
         if (downloads === repo && downloadWatch?.isActive == true) return
+        playbackPrefs = runCatching { JSONObject(cached!!) }.getOrDefault(JSONObject())
         downloads = repo; downloadWatch?.cancel(); repo.refresh()
         savedVideos = repo.state.value.saved; downloadTasks = repo.state.value.tasks
         downloadWatch = scope.launch {
@@ -651,7 +654,7 @@ class MainActivity : ComponentActivity() {
             nativeSettings.isNotBlank() -> { nativeSettings = ""; profileOpen = true }
             updatesOpen -> updatesOpen = false
             profileOpen -> profileOpen = false
-            downloadsOpen -> { downloadsOpen = false; streamTab = "Home" }
+            downloadsOpen -> { downloadsOpen = false; profileOpen = true; streamTab = "Home" }
             selected != null -> selected = null
             mode == "Files" && filesTab == "Browse" && filesPath.isNotBlank() -> filesPath = filesPath.substringBeforeLast('/', "")
             admin() && mode != "Hub" -> enterMode("Hub")
@@ -844,6 +847,7 @@ class MainActivity : ComponentActivity() {
         var fill by remember { mutableStateOf(getSharedPreferences("playback_local", MODE_PRIVATE).getString("fit_mode", "fit") == "fill") }
         var zoom by remember { mutableFloatStateOf(if (playbackPrefs.optString("zoom_mode") == "remember") playbackPrefs.optDouble("zoom", 1.0).toFloat().coerceIn(.5f, 3f) else 1f) }
         var locked by remember { mutableStateOf(false) }
+        val completedOffline = remember(title.id, ep?.id) { booleanArrayOf(false) }
         var showSleep by remember { mutableStateOf(false) }
         var controls by remember { mutableStateOf(true) }
         var position by remember { mutableLongStateOf(0L) }
@@ -917,6 +921,7 @@ class MainActivity : ComponentActivity() {
                     if (state == Player.STATE_ENDED) {
                         controls = true
                         journal()?.markCompleted("${title.id}_${ep?.id ?: 0}")
+                        completedOffline[0] = true
                         if (sleepAtEnd) { exo.pause(); cancelNext = true; sleepAtEnd = false }
                     }
                 }
@@ -934,6 +939,8 @@ class MainActivity : ComponentActivity() {
                 nativeView[0]?.player = null
                 nativeView[0] = null
                 exo.removeListener(listener); exo.release()
+                if (completedOffline[0] && saved != null && NativePreferences(context).downloads().removeWatched)
+                    runCatching { downloads?.remove(saved) }
                 window.attributes = window.attributes.apply { screenBrightness = originalBrightness }
                 if (player === exo) player = null
             }
@@ -1215,12 +1222,13 @@ class MainActivity : ComponentActivity() {
         if (nav.optLong("owner") == account?.optLong("id")) {
             mode = if (admin()) nav.optString("mode", "Hub") else "Stream"
             hubTab = nav.optString("hub", "Dashboard"); filesTab = nav.optString("files", "Browse")
-            streamTab = nav.optString("stream", "Home")
+            streamTab = nav.optString("stream", "Home").takeUnless { it == "Downloads" } ?: "Home"
             filesPath = nav.optString("path"); filesDevice = nav.optString("device", "vps")
             selected = library?.titles?.firstOrNull { it.id == nav.optLong("title") }
                 ?: nav.optJSONObject("selected")?.let { runCatching { parseTitle(it) }.getOrNull() }
             episode = selected?.episodes?.firstOrNull { it.id == nav.optLong("episode") }
-            downloadsOpen = nav.optBoolean("downloads") || intent?.getBooleanExtra("open_downloads", false) == true
+            downloadsOpen = nav.optBoolean("downloads")
+            if (intent?.getBooleanExtra("open_downloads", false) == true) { downloadsOpen = false; profileOpen = true }
             profileOpen = nav.optBoolean("profile"); updatesOpen = nav.optBoolean("updates")
             playing = !downloadsOpen && !updatesOpen && !profileOpen && nav.optBoolean("playing") && selected != null
             restoredPosition = nav.optLong("position", -1L); restoredAutoplay = nav.optBoolean("autoplay", true)
@@ -1249,7 +1257,7 @@ class MainActivity : ComponentActivity() {
 
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent); setIntent(intent)
-        if (intent.getBooleanExtra("open_downloads", false)) { playing = false; mode = "Stream"; downloadsOpen = true; profileOpen = false; updatesOpen = false; streamTab = "Downloads" }
+        if (intent.getBooleanExtra("open_downloads", false)) { playing = false; mode = "Stream"; downloadsOpen = false; profileOpen = true; updatesOpen = false; streamTab = "Home" }
     }
 
     override fun onStart() {

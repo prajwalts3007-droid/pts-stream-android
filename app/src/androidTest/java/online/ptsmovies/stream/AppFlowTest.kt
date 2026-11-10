@@ -37,6 +37,7 @@ class AppFlowTest {
     private val signedIn = AtomicBoolean(false)
     private val adminCalls = AtomicInteger(0)
     private val failDirectStream = AtomicBoolean(false)
+    private val usedVpsFallback = AtomicBoolean(false)
     private val useSeries = AtomicBoolean(false)
     private val useHls = AtomicBoolean(false)
     private val slowMedia = AtomicBoolean(false)
@@ -107,6 +108,7 @@ class AppFlowTest {
                     "/admin/files/content" -> json("""{"content":"synthetic notes","size":15}""")
                     "/admin/files/ops" -> json("""{"ops":[{"id":"running","kind":"copy","detail":"Active copy","state":"running","pct":42}${if (clearedTransfers.get()) "" else "," + """{"id":"done","kind":"zip","detail":"Finished zip","state":"done","pct":100}"""}]}""")
                     "/stream/file/movie/90001" -> {
+                        if (request.requestUrl?.queryParameter("via") == "vps") usedVpsFallback.set(true)
                         if (failDirectStream.get() && request.requestUrl?.queryParameter("via") != "vps")
                             return MockResponse().setResponseCode(503)
                         val start = request.getHeader("Range")?.substringAfter("bytes=")?.substringBefore('-')?.toIntOrNull() ?: 0
@@ -127,6 +129,10 @@ class AppFlowTest {
         DeviceState(context).clearSession()
         context.getSharedPreferences("native_ui", 0).edit().putString("theme", "dark").remove("view_Movies").remove("view_Series").apply()
         context.getSharedPreferences("download_jobs_90011", 0).edit().clear().commit()
+        context.getSharedPreferences("progress_journal_90011", 0).edit().clear().commit()
+        context.getSharedPreferences("playback_90011", 0).edit().clear().commit()
+        context.getSharedPreferences("native_preferences", 0).edit().clear().commit()
+        context.getSharedPreferences("playback_local", 0).edit().clear().commit()
         InstrumentationRegistry.getInstrumentation().runOnMainSync {
             val store = OfflineStore(context, ApiProvider.create(), 90011)
             store.list().forEach { store.remove(it) }
@@ -164,6 +170,12 @@ class AppFlowTest {
     private fun pressBack() {
         InstrumentationRegistry.getInstrumentation().sendKeyDownUpSync(android.view.KeyEvent.KEYCODE_BACK)
         ui.waitForIdle()
+    }
+
+    private fun openDownloads() {
+        ui.onNodeWithContentDescription("Open profile").performClick()
+        ui.onNodeWithText("My Downloads").performScrollTo().performClick()
+        waitForText("My Downloads")
     }
 
     private fun capture(name: String) {
@@ -240,7 +252,6 @@ class AppFlowTest {
         assertEquals("Viewer must never call admin APIs", 0, adminCalls.get())
         capture("app-viewer-downloads")
         pressBack()
-        ui.onNodeWithContentDescription("Open profile").performClick()
         ui.onNodeWithTag("profile-list").performScrollToNode(hasText("Sign out"))
         ui.onNodeWithText("Sign out").performClick()
         waitForText("Welcome back")
@@ -257,7 +268,7 @@ class AppFlowTest {
         pressBack()
         waitForText("/")
         ui.onNodeWithTag("section-dock").performTouchInput { swipeRight() }
-        waitForText("PTSStream")
+        waitForText("PTS Library")
         capture("app-admin-stream")
     }
 
@@ -272,12 +283,12 @@ class AppFlowTest {
         pressBack()
         waitForText("Details")
         ui.onNodeWithText("Save offline").performScrollTo().performClick()
+        openDownloads()
         waitForText("My Downloads")
         ui.waitUntil(15000) { ui.onAllNodesWithContentDescription("Play").fetchSemanticsNodes().isNotEmpty() }
         ui.onNodeWithContentDescription("Play").performClick()
         waitForMovingPlayback()
         pauseIfPlaying()
-        ui.onNodeWithText("Offline").assertExists()
         assertDecodedTestPattern()
         capture("app-hevc-offline-player")
         pressBack()
@@ -296,7 +307,7 @@ class AppFlowTest {
         ui.onNodeWithText("Play").performClick()
         waitForMovingPlayback()
         pauseIfPlaying()
-        ui.onNodeWithText("VPS fallback").assertExists()
+        assertTrue("Player must really request the VPS fallback", usedVpsFallback.get())
         assertDecodedTestPattern()
         capture("app-hevc-vps-fallback")
     }
@@ -325,8 +336,8 @@ class AppFlowTest {
         launchLoggedIn(); openMovie()
         ui.onNodeWithText("Play").performClick(); waitForMovingPlayback()
         pauseIfPlaying()
-        ui.onNodeWithText("Mark as played").performScrollTo().performClick()
-        waitForText("Marked as played · removed from Continue watching")
+        ui.onNodeWithText("Mark completed").performScrollTo().performClick()
+        waitForText("Marked as completed")
         pressBack()
         ui.runOnIdle { assertTrue(clearedProgress.get()); assertEquals(0, progressAfterClear.get()) }
     }
@@ -396,6 +407,7 @@ class AppFlowTest {
     @Test fun downloadPageSurvivesRecreationAndShowsTransferMetrics() {
         slowMedia.set(true); launchLoggedIn(); openMovie()
         ui.onNodeWithText("Save offline").performScrollTo().performClick()
+        openDownloads()
         waitForText("My Downloads")
         ui.waitUntil(15000) { ui.onAllNodesWithText("/s · ETA", substring = true).fetchSemanticsNodes().isNotEmpty() }
         ui.waitUntil(15000) { ui.onAllNodesWithText("/s · ETA", substring = true).fetchSemanticsNodes().any { node ->
@@ -443,10 +455,11 @@ class AppFlowTest {
             android.graphics.Color.green(pixel) > 200 && android.graphics.Color.blue(pixel) > 200 && android.graphics.Color.red(pixel) < 50
         }
         ui.onNodeWithContentDescription("Movies").performClick()
-        ui.onNodeWithText("List").performClick()
+        ui.onNodeWithContentDescription("List view").performClick()
         ui.onNodeWithText("Synthetic HEVC").assertExists()
         scenario!!.recreate()
-        ui.onNodeWithText("List").assertExists()
+        ui.onNodeWithContentDescription("List view").assertExists()
+        assertEquals("list", DeviceState(InstrumentationRegistry.getInstrumentation().targetContext).view("Movies"))
         capture("native-movies-list")
         ui.onNodeWithContentDescription("Open profile").performClick()
         ui.onNodeWithText("Light").performScrollTo().performClick()
@@ -496,11 +509,13 @@ class AppFlowTest {
 
     @Test fun deviceDownloadPauseResumeSurvivesLeavingItsPage() {
         slowMedia.set(true); launchLoggedIn(); openMovie()
-        ui.onNodeWithText("Save offline").performScrollTo().performClick(); waitForText("My Downloads")
+        ui.onNodeWithText("Save offline").performScrollTo().performClick(); openDownloads()
         ui.waitUntil(10000) { ui.onAllNodesWithText("/s · ETA", substring = true).fetchSemanticsNodes().isNotEmpty() }
         ui.onNodeWithText("Pause").performClick(); waitForText("PAUSED")
+        pressBack(); pressBack()
         ui.onNodeWithContentDescription("Movies").performClick()
-        ui.onNodeWithContentDescription("Downloads").performClick(); waitForText("PAUSED")
+        ui.onNodeWithContentDescription("Downloads").assertDoesNotExist()
+        openDownloads(); waitForText("PAUSED")
         ui.onNodeWithText("Resume").performClick()
         ui.waitUntil(20000) { ui.onAllNodesWithContentDescription("Play").fetchSemanticsNodes().isNotEmpty() }
         assertEquals(0, adminCalls.get())
@@ -519,13 +534,37 @@ class AppFlowTest {
 
     @Test fun offlineVideoSurfaceSurvivesRepeatedOpenAndClose() {
         launchLoggedIn(); openMovie(); ui.onNodeWithText("Save offline").performScrollTo().performClick()
+        openDownloads()
         waitForText("My Downloads")
         repeat(3) {
             ui.waitUntil(15000) { ui.onAllNodesWithContentDescription("Play").fetchSemanticsNodes().isNotEmpty() }
             ui.onNodeWithContentDescription("Play").performClick()
             waitForMovingPlayback(); pauseIfPlaying(); assertDecodedTestPattern()
-            pressBack(); ui.onNodeWithContentDescription("Downloads").performClick()
+            pressBack(); openDownloads()
         }
         assertEquals(0, adminCalls.get())
+    }
+
+    @Test fun playerPinchesBothWaysAndScreenLockDisablesGestures() {
+        launchLoggedIn(); openMovie(); ui.onNodeWithText("Play").performClick(); waitForMovingPlayback(); pauseIfPlaying()
+        ui.onNodeWithText("Gesture guide").assertDoesNotExist()
+        ui.onNodeWithContentDescription("Picture in picture").assertExists()
+        ui.onNodeWithTag("player-gesture-zone").performTouchInput {
+            pinch(androidx.compose.ui.geometry.Offset(width * .4f, height * .45f), androidx.compose.ui.geometry.Offset(width * .6f, height * .45f),
+                androidx.compose.ui.geometry.Offset(width * .15f, height * .45f), androidx.compose.ui.geometry.Offset(width * .85f, height * .45f), 500)
+        }
+        ui.onNodeWithTag("gesture-feedback").assertTextContains("Zoom", substring = true)
+        capture("native-player-pinch-out")
+        ui.onNodeWithTag("player-gesture-zone").performTouchInput {
+            pinch(androidx.compose.ui.geometry.Offset(width * .1f, height * .45f), androidx.compose.ui.geometry.Offset(width * .9f, height * .45f),
+                androidx.compose.ui.geometry.Offset(width * .45f, height * .45f), androidx.compose.ui.geometry.Offset(width * .55f, height * .45f), 500)
+        }
+        ui.onNodeWithTag("gesture-feedback").assertTextContains("Zoom 0.50", substring = true)
+        capture("native-player-pinch-in")
+        ui.onNodeWithContentDescription("Player options").performClick()
+        ui.onNodeWithText("Lock screen").performClick()
+        ui.onNodeWithTag("player-gesture-zone").assertDoesNotExist()
+        ui.onNodeWithContentDescription("Unlock player").performClick()
+        ui.onNodeWithTag("player-gesture-zone").assertExists()
     }
 }

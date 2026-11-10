@@ -152,7 +152,7 @@ class OfflineStore(private val context: Context, private val api: PtsApi, ownerI
                 succeeded = true
                 break
             } catch (e: kotlinx.coroutines.CancellationException) { if (!resume) discardPartial(id); throw e }
-            catch (e: DeviceStorageException) { partial.delete(); throw e }
+            catch (e: DeviceStorageException) { if (!resume) discardPartial(id); throw e }
             catch (e: Exception) { currentCoroutineContext().ensureActive(); partial.delete(); sourceInfo.delete(); last = e }
         }
         if (!succeeded) throw IOException("Offline download failed: ${last?.message ?: "source unavailable"}")
@@ -200,4 +200,12 @@ class OfflineStore(private val context: Context, private val api: PtsApi, ownerI
     }
 
     fun usedBytes(): Long = root.listFiles()?.sumOf { if (it.isFile) it.length() else 0L } ?: 0L
+    fun freeBytes(): Long = (root.usableSpace - 64L * 1024 * 1024).coerceAtLeast(0)
+    suspend fun hydrate(titles: List<Title>) = withContext(Dispatchers.IO) {
+        val savedIds = list().map { it.titleId }.toSet()
+        titles.filter { it.id in savedIds }.forEach { title ->
+            prefs.edit().putString("title_${title.id}", title.toJson().toString()).commit()
+            cachePoster(title)
+        }
+    }
 }

@@ -57,7 +57,7 @@ class ScreenAuditTest {
                                 7 -> TitleScreen(series, library.progress[1], true, emptySet(), "", {}, {}, {}, {})
                                 8 -> DownloadsScreen(emptyList(), {}, {})
                                 9 -> ProfileScreen(admin, 0, {}, {}, {}, {})
-                                10 -> SettingsScreen(admin, listOf(admin), true, {}, {})
+                                10 -> NativeAdminSettings(admin, ApiProvider.create(), {}, {})
                                 11 -> SearchScreen("Open Road", {}, listOf(JSONObject("""{"title":"The Open Road","year":2025,"type":"series"}""")), false)
                             }
                         }
@@ -234,5 +234,58 @@ class ScreenAuditTest {
         } } } }
         ui.onNodeWithContentDescription("Remove from Continue watching").performClick()
         ui.runOnIdle { assertEquals(series.id, cleared); assertFalse(opened) }
+    }
+
+    @Test fun downloadsUseSeriesSeasonEpisodeFoldersAndAlignedConfirmation() {
+        val two = series.copy(episodes = listOf(episode, episode.copy(id = 201, season = 2, title = "Season two opener")))
+        val videos = two.episodes.map { ep -> SavedVideo("1_${ep.id}", 1, two.title, ep.season, ep.episode, ep.title, 1024, File("fixture-${ep.id}.mp4"), metadata = two) }
+        var deleted = emptyList<SavedVideo>()
+        var played: SavedVideo? = null
+        ui.setContent { PtsTheme { Box(Modifier.width(320.dp).height(640.dp)) {
+            DownloadsScreen(videos, { played = it }, { deleted = deleted + it })
+        } } }
+        ui.onNodeWithText("The Open Road").performClick()
+        ui.onNodeWithText("Season 2").performClick()
+        ui.onNodeWithText("E1 · Season two opener").assertExists()
+        ui.onNodeWithText("E1 · A new beginning").assertDoesNotExist()
+        ui.onNodeWithContentDescription("Play").performClick()
+        ui.runOnIdle { assertEquals("1_201", played?.key) }
+        ui.onNodeWithContentDescription("Delete").performClick()
+        ui.runOnIdle { assertTrue(deleted.isEmpty()) }
+        val cancel = ui.onNodeWithText("Cancel").fetchSemanticsNode().boundsInRoot
+        val delete = ui.onNodeWithText("Delete").fetchSemanticsNode().boundsInRoot
+        assertEquals(cancel.center.y, delete.center.y, 2f)
+        capture("compact-offline-delete-dialog")
+        ui.onNodeWithText("Delete").performClick()
+        ui.runOnIdle { assertEquals(listOf(videos[1]), deleted) }
+    }
+
+    @Test fun seasonDownloadSelectionSkipsSavedAndWatchedEpisodes() {
+        val two = series.copy(episodes = listOf(episode, episode.copy(id = 102, episode = 2), episode.copy(id = 103, episode = 3)))
+        var selection = emptyList<Episode>()
+        ui.setContent { PtsTheme { EpisodeDownloadDialog(two, setOf("1_101"), setOf("1_102"), { selection = it }, {}) } }
+        ui.onNodeWithText("Unwatched").performClick()
+        ui.onNodeWithText("1 selected", substring = true).assertExists()
+        ui.onNodeWithText("Download").performClick()
+        ui.runOnIdle { assertEquals(listOf(103L), selection.map { it.id }) }
+    }
+
+    @Test fun browseHasSearchAdjacentIconsWithoutTitleTotals() {
+        var selected = "grid"
+        ui.setContent { PtsTheme { BrowseScreen("Movies", listOf(movie), emptyMap(), emptySet(), "", {}, {}, {}, onViewChange = { selected = it }) } }
+        ui.onNodeWithText("1 title").assertDoesNotExist()
+        ui.onNodeWithText("Grid").assertDoesNotExist()
+        ui.onNodeWithContentDescription("List view").performClick()
+        ui.runOnIdle { assertEquals("list", selected) }
+        capture("compact-browse-search-icons")
+    }
+
+    @Test fun playerActionLabelsRemainAlignedOnCompactPhone() {
+        ui.setContent { PtsTheme { Box(Modifier.width(320.dp)) { WatchActionBar(false, false, true, {}, {}, {}) } } }
+        val labels = listOf("Mark completed", "Save offline", "Download episodes").map { ui.onNodeWithText(it).fetchSemanticsNode().boundsInRoot }
+        assertEquals(labels[0].top, labels[1].top, 2f)
+        assertEquals(labels[1].top, labels[2].top, 2f)
+        labels.forEach { assertTrue(it.right <= 320 * InstrumentationRegistry.getInstrumentation().targetContext.resources.displayMetrics.density + 1) }
+        capture("compact-watch-actions")
     }
 }

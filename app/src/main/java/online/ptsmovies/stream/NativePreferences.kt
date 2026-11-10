@@ -11,11 +11,11 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 
-data class DownloadOptions(val wifiOnly: Boolean = true, val concurrent: Int = 1, val limitGiB: Int = 0)
+data class DownloadOptions(val wifiOnly: Boolean = true, val concurrent: Int = 1, val limitGiB: Int = 0, val removeWatched: Boolean = false)
 class NativePreferences(context: Context) {
     private val prefs = context.getSharedPreferences("native_preferences", Context.MODE_PRIVATE)
-    fun downloads() = DownloadOptions(prefs.getBoolean("wifi_only", true), prefs.getInt("concurrent", 1).coerceIn(1, 3), prefs.getInt("storage_gib", 0).coerceAtLeast(0))
-    fun downloads(value: DownloadOptions) { require(value.concurrent in 1..3 && value.limitGiB in 0..10000); prefs.edit().putBoolean("wifi_only", value.wifiOnly).putInt("concurrent", value.concurrent).putInt("storage_gib", value.limitGiB).apply() }
+    fun downloads() = DownloadOptions(prefs.getBoolean("wifi_only", true), prefs.getInt("concurrent", 1).coerceIn(1, 3), prefs.getInt("storage_gib", 0).coerceAtLeast(0), prefs.getBoolean("remove_watched", false))
+    fun downloads(value: DownloadOptions) { require(value.concurrent in 1..3 && value.limitGiB in 0..10000); prefs.edit().putBoolean("wifi_only", value.wifiOnly).putInt("concurrent", value.concurrent).putInt("storage_gib", value.limitGiB).putBoolean("remove_watched", value.removeWatched).apply() }
     fun lanAddress() = prefs.getString("lan_address", "192.168.29.75") ?: "192.168.29.75"
     fun lanAddress(value: String) { require(isPrivateV4(value)); prefs.edit().putString("lan_address", value).apply() }
     fun lanEnabled() = prefs.getBoolean("lan_enabled", true)
@@ -42,6 +42,7 @@ fun DownloadSettingsScreen(preferences: NativePreferences, onBack: () -> Unit, o
         PtsSecondaryButton("Back", onClick = onBack)
         PtsPage("Downloads & network")
         PreferenceSwitch("Wi-Fi downloads only", options.wifiOnly) { options = options.copy(wifiOnly = it) }
+        PreferenceSwitch("Remove completed downloads after playback closes", options.removeWatched) { options = options.copy(removeWatched = it) }
         Text("Concurrent downloads", style = MaterialTheme.typography.titleSmall, color = Pts.text)
         PtsSegmented((1..3).map { it.toString() to it.toString() }, options.concurrent.toString(), { options = options.copy(concurrent = it.toInt()) })
         PtsField(limit, { limit = it.filter(Char::isDigit) }, "Storage limit (GiB, 0 = available space)", Modifier.fillMaxWidth())
