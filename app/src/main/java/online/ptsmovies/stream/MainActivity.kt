@@ -654,7 +654,7 @@ class MainActivity : ComponentActivity() {
                                 val next = if (title.kind == "series") title.episodes.firstOrNull { it.id == resume?.episodeId }
                                     ?: title.episodes.minWithOrNull(compareBy({ it.season }, { it.episode })) else null
                                 play(title, next)
-                            }, { toggleWatch(it) }) { streamTab = it }
+                            }, { toggleWatch(it) }, onSeeAll = { streamTab = it }, onMarkPlayed = { markPlayed(it) })
                             "Movies" -> BrowseScreen("Movies", lib.titles.filter { it.kind == "movie" }, lib.progress, lib.watch,
                                 browseQueries["Movies"].orEmpty(), { browseQueries["Movies"] = it }, { selected = it }, { toggleWatch(it) })
                             "Series" -> BrowseScreen("Series", lib.titles.filter { it.kind == "series" }, lib.progress, lib.watch,
@@ -835,13 +835,13 @@ class MainActivity : ComponentActivity() {
                 if (ep != null) PtsIconAction(PtsIcons.Series, "Choose episode", { showEpisodes = true; touchControls() }, tint = Color.White)
                 PtsIconAction(PtsIcons.Fit, if (playerFullscreen) "Exit fullscreen" else "Fullscreen", { fullscreen(!playerFullscreen); touchControls() }, tint = Color.White)
             }
-            Box((if (landscape) Modifier.weight(1f).fillMaxWidth() else Modifier.fillMaxWidth().aspectRatio(16f / 9f)).background(Color.Black)) {
+            Box((if (landscape) Modifier.weight(1f).fillMaxWidth() else Modifier.fillMaxWidth().aspectRatio(16f / 9f)).testTag("player-surface").background(Color.Black)) {
                 AndroidView(factory = { ctx -> (android.view.LayoutInflater.from(ctx).inflate(R.layout.native_player, null, false) as PlayerView).apply {
                     player = exo
                     useController = false
                     keepScreenOn = true
                     layoutParams = FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
-                } }, update = { it.player = exo; it.resizeMode = if (fill) AspectRatioFrameLayout.RESIZE_MODE_ZOOM else AspectRatioFrameLayout.RESIZE_MODE_FIT },
+                } }, update = { it.player = exo; it.keepScreenOn = playingNow || buffering; it.resizeMode = if (fill) AspectRatioFrameLayout.RESIZE_MODE_ZOOM else AspectRatioFrameLayout.RESIZE_MODE_FIT },
                     modifier = Modifier.fillMaxSize())
                 Box(Modifier.fillMaxSize().pointerInput(exo) {
                     var lastTap = 0L

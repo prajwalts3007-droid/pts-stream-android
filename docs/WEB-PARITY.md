@@ -16,7 +16,7 @@ an explicit user action and confirmation; authenticated API authorization remain
 | `st-spin`, `st-player-msg`, retry | Buffering state and visible retry/error UI in portrait and fullscreen. TextureView avoids Compose/SurfaceView overlay/rotation synchronization problems. |
 | `plResumePosition` | Ignore the first five seconds and restart when saved within 20 seconds of the end. |
 | `st-upnext` | Five-second next-episode countdown, Play next and Cancel; respects saved autoplay preference. |
-| `st-played` | Mark as played → `POST /stream/progress/clear`; later player disposal/polling must not recreate the cleared record. |
+| `st-played`, Continue watching removal | Mark as played and the shelf's remove button → `POST /stream/progress/clear`; later player disposal/polling must not recreate the cleared record. |
 | `st-download` | Private MP4 offline transfer with progress/cancel and saved-state indication. HLS preparation is still gated, below. |
 | Related / Home search / clear filters | Related shelves, Home search, clear search/filter actions. |
 | `fx-menu` | Open/Download, text Edit, Cut, Copy, Rename, Zip, Unzip for ZIP files, Delete. No longer a Delete-only popup. |

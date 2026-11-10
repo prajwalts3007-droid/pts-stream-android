@@ -5,6 +5,8 @@ import android.graphics.Bitmap
 import androidx.compose.ui.graphics.asAndroidBitmap
 import androidx.compose.ui.test.*
 import androidx.compose.ui.test.junit4.createEmptyComposeRule
+import androidx.compose.ui.semantics.SemanticsProperties
+import androidx.compose.ui.semantics.getOrNull
 import androidx.test.core.app.ActivityScenario
 import androidx.test.platform.app.InstrumentationRegistry
 import androidx.test.rule.GrantPermissionRule
@@ -148,8 +150,37 @@ class AppFlowTest {
 
     private fun waitForMovingPlayback() {
         ui.waitUntil(20000) {
-            (1..7).any { ui.onAllNodesWithText("0:0$it / 0:08").fetchSemanticsNodes().isNotEmpty() }
+            // One semantics snapshot: seven separate fetches can chase a moving clock
+            // past the entire short clip on a busy emulator.
+            ui.onAllNodesWithText(" / 0:08", substring = true).fetchSemanticsNodes().any { node ->
+                node.config.getOrNull(SemanticsProperties.Text).orEmpty().any {
+                    val clock = it.text.substringBefore(" / ")
+                    clock.startsWith("0:") && (clock.substringAfter(':').toIntOrNull() ?: 0) > 0
+                }
+            }
         }
+    }
+
+    private fun pauseIfPlaying() {
+        if (ui.onAllNodesWithContentDescription("Pause playback").fetchSemanticsNodes().isNotEmpty()) {
+            ui.onNodeWithContentDescription("Pause playback").performClick()
+        }
+    }
+
+    private fun assertDecodedTestPattern() {
+        ui.waitForIdle()
+        val bounds = ui.onNodeWithTag("player-surface").fetchSemanticsNode().boundsInRoot
+        val image = checkNotNull(InstrumentationRegistry.getInstrumentation().uiAutomation.takeScreenshot())
+        val hues = mutableSetOf<Int>()
+        val hsv = FloatArray(3)
+        for (x in 1..9) for (y in 1..5) {
+            val px = (bounds.left + bounds.width * x / 10f).toInt().coerceIn(0, image.width - 1)
+            val py = (bounds.top + bounds.height * y / 6f).toInt().coerceIn(0, image.height - 1)
+            android.graphics.Color.colorToHSV(image.getPixel(px, py), hsv)
+            if (hsv[1] > .5f && hsv[2] > .25f) hues.add((hsv[0] / 30).toInt())
+        }
+        image.recycle()
+        assertTrue("Video must render the generated color pattern, not just an advancing clock/black surface; hue bins=$hues", hues.size >= 3)
     }
 
     @Test fun viewerLoginNavigationAndRecreation() {
@@ -196,7 +227,8 @@ class AppFlowTest {
         openMovie()
         ui.onNodeWithText("Play").performClick()
         waitForMovingPlayback()
-        ui.onNodeWithContentDescription("Pause playback").performClick()
+        pauseIfPlaying()
+        assertDecodedTestPattern()
         capture("app-hevc-network-player")
         pressBack()
         waitForText("Details")
@@ -208,8 +240,9 @@ class AppFlowTest {
         waitForText("My Downloads")
         ui.onNodeWithContentDescription("Play").performClick()
         waitForMovingPlayback()
-        ui.onNodeWithContentDescription("Pause playback").performClick()
+        pauseIfPlaying()
         ui.onNodeWithText("Offline").assertExists()
+        assertDecodedTestPattern()
         capture("app-hevc-offline-player")
         pressBack()
         // Playback returns to title details. Open the offline list again to remove the copy.
@@ -226,8 +259,9 @@ class AppFlowTest {
         openMovie()
         ui.onNodeWithText("Play").performClick()
         waitForMovingPlayback()
-        ui.onNodeWithContentDescription("Pause playback").performClick()
+        pauseIfPlaying()
         ui.onNodeWithText("VPS fallback").assertExists()
+        assertDecodedTestPattern()
         capture("app-hevc-vps-fallback")
     }
 
@@ -240,13 +274,13 @@ class AppFlowTest {
         ui.onNodeWithText("Season 2").performClick()
         ui.onNodeWithText("E1 · Second season episode").performScrollTo().performClick()
         waitForMovingPlayback()
-        ui.onNodeWithContentDescription("Pause playback").performClick()
+        pauseIfPlaying()
         ui.onNodeWithContentDescription("Choose episode").performClick()
         ui.onAllNodesWithTag("season-selector").onLast().performClick()
         ui.onNodeWithText("Season 1").performClick()
         ui.onNode(hasText("E1 · First season episode") and hasAnyAncestor(isDialog())).performClick()
         waitForMovingPlayback()
-        ui.onNodeWithContentDescription("Pause playback").performClick()
+        pauseIfPlaying()
         ui.runOnIdle { assertTrue(playedEpisodes.contains("201")); assertTrue(playedEpisodes.contains("101")) }
         capture("watch-season-switching")
     }
@@ -254,7 +288,7 @@ class AppFlowTest {
     @Test fun markPlayedDoesNotRecreateHistoryOnExit() {
         launchLoggedIn(); openMovie()
         ui.onNodeWithText("Play").performClick(); waitForMovingPlayback()
-        ui.onNodeWithContentDescription("Pause playback").performClick()
+        pauseIfPlaying()
         ui.onNodeWithText("Mark as played").performScrollTo().performClick()
         waitForText("Marked as played · removed from Continue watching")
         pressBack()
@@ -277,11 +311,11 @@ class AppFlowTest {
         waitForText("File saved")
         openMenu("sample.zip"); ui.onNodeWithText("Copy").performClick()
         ui.onNodeWithText("Samples").performClick(); waitForText("/Samples")
-        ui.onNodeWithText("Paste").performClick(); ui.onNode(hasText("Paste") and hasClickAction()).performClick()
+        ui.onNodeWithText("Paste").performClick(); ui.onNode(hasText("Paste") and hasClickAction() and hasAnyAncestor(isDialog())).performClick()
         ui.waitUntil(10000) { fileCommands.any { it.first.endsWith("/paste") } }
         waitForText("Paste started · see Transfers")
         ui.onNodeWithContentDescription("Transfers").performClick(); waitForText("Finished zip")
-        ui.onNodeWithText("Clear").performClick(); ui.onNode(hasText("Clear") and hasClickAction()).performClick()
+        ui.onNodeWithText("Clear").performClick(); ui.onNode(hasText("Clear") and hasClickAction() and hasAnyAncestor(isDialog())).performClick()
         ui.waitUntil(10000) { clearedTransfers.get() }
         ui.waitUntil(10000) { ui.onAllNodesWithText("Finished zip").fetchSemanticsNodes().isEmpty() }
         waitForText("Active copy")
@@ -303,13 +337,14 @@ class AppFlowTest {
     @Test fun syntheticHevcHlsPlaysThroughNativeTransport() {
         useHls.set(true); launchLoggedIn(); openMovie()
         ui.onNodeWithText("Play").performClick(); waitForMovingPlayback()
-        ui.onNodeWithContentDescription("Pause playback").performClick()
+        pauseIfPlaying()
+        assertDecodedTestPattern()
         capture("watch-hevc-hls")
     }
 
     @Test fun fullscreenBackReturnsToWatchAndSettingsRemainUsable() {
         launchLoggedIn(); openMovie(); ui.onNodeWithText("Play").performClick(); waitForMovingPlayback()
-        ui.onNodeWithContentDescription("Pause playback").performClick()
+        pauseIfPlaying()
         ui.onNodeWithContentDescription("Fullscreen").performClick()
         ui.waitUntil(10000) { ui.onAllNodesWithContentDescription("Exit fullscreen").fetchSemanticsNodes().isNotEmpty() }
         capture("watch-fullscreen")

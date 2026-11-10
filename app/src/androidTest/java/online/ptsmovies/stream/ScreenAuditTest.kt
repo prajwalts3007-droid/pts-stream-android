@@ -214,7 +214,7 @@ class ScreenAuditTest {
         ui.setContent { PtsTheme { TransfersScreen(list, {}, { cleared = true }) } }
         ui.onNodeWithText("Clear").performClick()
         ui.runOnIdle { assertFalse(cleared) }
-        ui.onNode(hasText("Clear") and hasClickAction()).performClick()
+        ui.onNode(hasText("Clear") and hasClickAction() and hasAnyAncestor(isDialog())).performClick()
         ui.runOnIdle { assertTrue(cleared) }
     }
 
@@ -224,5 +224,15 @@ class ScreenAuditTest {
         assertEquals(0L, resumePosition(Resume(1, 40, 100), 2))
         assertEquals(40L, resumePosition(Resume(1, 40, 100), 1))
         assertEquals(0L, resumePosition(Resume(0, 7, 8), 0))
+    }
+
+    @Test fun continueWatchingClearDoesNotOpenTheTitle() {
+        var cleared = 0L
+        var opened = false
+        ui.setContent { PtsTheme { PtsBackground { Column {
+            PtsPosterShelf("Continue watching", listOf(series), library.progress, library.watch, { opened = true }, {}, { cleared = it.id })
+        } } } }
+        ui.onNodeWithContentDescription("Remove from Continue watching").performClick()
+        ui.runOnIdle { assertEquals(series.id, cleared); assertFalse(opened) }
     }
 }

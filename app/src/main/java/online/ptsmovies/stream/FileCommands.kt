@@ -12,7 +12,7 @@ fun filePath(directory: String, name: String): String = if (directory.isBlank())
 fun validEntryName(name: String): Boolean = name.isNotBlank() && name.trim() !in setOf(".", "..") &&
     '/' !in name && '\\' !in name && '\u0000' !in name && name.toByteArray(Charsets.UTF_8).size <= 255
 fun editableFile(name: String): Boolean = name.substringAfterLast('.', "").lowercase() in setOf(
-    "txt", "json", "yaml", "yml", "toml", "ini", "cfg", "conf", "log", "md", "csv", "xml", "html", "css", "js", "py", "sh", "srt", "vtt", "ass")
+    "txt", "json", "yaml", "yml", "toml", "ini", "cfg", "conf", "log", "md", "csv", "xml", "html", "htm", "css", "js", "go", "py", "sh", "srt", "nfo", "env", "vtt", "ass")
 
 /** Exact bodies used by the live web Files UI. The device/path are captured before any dialog/request. */
 suspend fun PtsApi.executeFile(command: FileCommand, clipboard: FileClipboard? = null): JSONObject {

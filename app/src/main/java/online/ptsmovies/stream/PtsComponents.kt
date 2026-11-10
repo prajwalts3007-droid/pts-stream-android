@@ -466,7 +466,8 @@ fun PtsPosterCard(
     modifier: Modifier = Modifier,
     width: Dp? = 138.dp,
     onOpen: () -> Unit,
-    onToggleWatch: (() -> Unit)? = null
+    onToggleWatch: (() -> Unit)? = null,
+    onClearProgress: (() -> Unit)? = null
 ) {
     Column(
         modifier.then(if (width != null) Modifier.width(width) else Modifier.fillMaxWidth())
@@ -499,6 +500,9 @@ fun PtsPosterCard(
                     contentAlignment = Alignment.Center
                 ) { Icon(if (marked) PtsIcons.Check else PtsIcons.Plus, null, Modifier.size(16.dp), tint = if (marked) Pts.onAccent else Pts.accent) }
             }
+            if (onClearProgress != null) Box(Modifier.align(Alignment.TopEnd).padding(5.dp).background(Pts.card.copy(alpha = .94f), CircleShape)) {
+                PtsIconAction(PtsIcons.Close, "Remove from Continue watching", onClearProgress, tint = Pts.text, size = 32.dp)
+            }
         }
         Text(title.title, style = MaterialTheme.typography.titleSmall, color = Pts.text, maxLines = 2, overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(horizontal = 2.dp))
         Text(
@@ -509,12 +513,13 @@ fun PtsPosterCard(
 }
 
 @Composable
-fun PtsPosterShelf(label: String, titles: List<Title>, progress: Map<Long, Resume>, watch: Set<Long>, onOpen: (Title) -> Unit, onToggle: (Title) -> Unit) {
+fun PtsPosterShelf(label: String, titles: List<Title>, progress: Map<Long, Resume>, watch: Set<Long>, onOpen: (Title) -> Unit, onToggle: (Title) -> Unit, onClear: ((Title) -> Unit)? = null) {
     Column {
         PtsSectionHeader(label, titles.size)
         LazyRow(horizontalArrangement = Arrangement.spacedBy(11.dp), contentPadding = PaddingValues(bottom = 6.dp)) {
             items(titles, key = { it.id }) { title ->
-                PtsPosterCard(title, progress[title.id], title.id in watch, onOpen = { onOpen(title) }, onToggleWatch = { onToggle(title) })
+                PtsPosterCard(title, progress[title.id], title.id in watch, onOpen = { onOpen(title) }, onToggleWatch = { onToggle(title) },
+                    onClearProgress = onClear?.let { { it(title) } })
             }
         }
     }

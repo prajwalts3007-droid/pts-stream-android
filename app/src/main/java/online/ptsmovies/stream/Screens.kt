@@ -56,6 +56,7 @@ fun formatRate(bps: Long): String = if (bps <= 0) "—" else formatBytes(bps) + 
 
 fun formatDuration(seconds: Long): String {
     if (seconds <= 0) return ""
+    if (seconds < 60) return "${seconds}s"
     val h = seconds / 3600
     val m = (seconds % 3600) / 60
     return if (h > 0) "${h}h ${m}m" else "${m}m"
@@ -132,7 +133,8 @@ fun StreamHomeScreen(
     onOpen: (Title) -> Unit,
     onPlay: (Title) -> Unit,
     onToggleWatch: (Title) -> Unit,
-    onSeeAll: (String) -> Unit
+    onSeeAll: (String) -> Unit,
+    onMarkPlayed: (Title) -> Unit = {}
 ) {
     var query by rememberSaveable { mutableStateOf("") }
     val results = remember(library.titles, query) { library.titles.filter { it.title.contains(query.trim(), true) || it.genres.any { g -> g.contains(query.trim(), true) } } }
@@ -185,7 +187,7 @@ fun StreamHomeScreen(
                 }
             }
             if (continueWatching.isNotEmpty()) item {
-                PtsPosterShelf("Continue watching", continueWatching, library.progress, library.watch, onOpen, onToggleWatch)
+                PtsPosterShelf("Continue watching", continueWatching, library.progress, library.watch, onOpen, onToggleWatch, onMarkPlayed)
             }
             if (movies.isNotEmpty()) item {
                 Column {
