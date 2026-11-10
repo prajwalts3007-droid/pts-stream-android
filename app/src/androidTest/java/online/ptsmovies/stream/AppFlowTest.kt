@@ -49,6 +49,8 @@ class AppFlowTest {
     private val deletedJobs = ConcurrentLinkedQueue<String>()
     private val fileCommands = ConcurrentLinkedQueue<Pair<String, JSONObject>>()
     private val adminWrites = ConcurrentLinkedQueue<Pair<String, JSONObject>>()
+    private val queueWrites = ConcurrentLinkedQueue<Pair<String, JSONObject>>()
+    private val failedJob = AtomicBoolean(false)
     @Volatile private var role = "user"
     @Volatile private var profileName = "Test Viewer"
     private lateinit var media: ByteArray
@@ -74,11 +76,16 @@ class AppFlowTest {
                     avatarCalls.incrementAndGet()
                     return MockResponse().setHeader("Content-Type", "image/png").setBody(Buffer().write(avatar))
                 }
-                if (path.startsWith("/admin/") || path == "/queue" || path == "/system/metrics") {
+                if (path.startsWith("/admin/") || path.startsWith("/queue") || path == "/system/metrics") {
                     adminCalls.incrementAndGet()
                     if (role != "admin") return json("""{"error":"Forbidden"}""").setResponseCode(403)
                 }
                 if (path.startsWith("/queue/") && request.method == "DELETE") { deletedJobs.add(path.substringAfterLast('/')); return json("{}") }
+                if (path.startsWith("/queue/") && request.method == "POST") {
+                    if (request.getHeader("X-CSRF-Token") != "test-csrf") return json("{}").setResponseCode(403)
+                    queueWrites.add(path to JSONObject(request.body.readUtf8().ifBlank { "{}" })); failedJob.set(false)
+                    return json("""{"retried":1,"job":{"stage":"queued"}}""").setResponseCode(202)
+                }
                 if (path.startsWith("/admin/") && !path.startsWith("/admin/files") && request.method in listOf("POST", "PUT", "PATCH", "DELETE")) {
                     adminWrites.add(path to JSONObject(request.body.readUtf8().ifBlank { "{}" }))
                     return json("{}")
@@ -105,7 +112,7 @@ class AppFlowTest {
                     "/auth/logout" -> { signedIn.set(false); json("{}") }
                     "/stream/library" -> if (useSeries.get()) json("""{"titles":[{"id":90001,"kind":"series","title":"Synthetic series","synopsis":"${"A generated series description for the short watch-page summary. ".repeat(8)}","video_codec":"hevc","container":"mp4","episodes":[{"id":101,"season":1,"episode":1,"title":"First season episode","container":"mp4","duration":8},{"id":201,"season":2,"episode":1,"title":"Second season episode","container":"mp4","duration":8}]}],"watch":[],"progress":[]}""") else json("""{"titles":[{"id":90001,"kind":"movie","title":"Synthetic HEVC","year":2026,"synopsis":"Generated test pattern and tone. No third-party media.","video_codec":"hevc","container":"${if (useHls.get()) "hls" else "mp4"}","genres":["Test"],"episodes":[]}],"watch":[],"progress":[]}""")
                     "/stream/watch", "/stream/progress" -> json("{}")
-                    "/queue" -> json("""{"jobs":[{"job_id":"test-job","title":"Synthetic queue item","type":"movie","stage":"queued","progress":0}],"completed":${if ("done-one" in deletedJobs) "[]" else """[{"job_id":"done-one","title":"Finished job","stage":"done","progress":100}]"""}}""")
+                    "/queue" -> json("""{"jobs":[{"job_id":"test-job","title":"Synthetic queue item","type":"movie","stage":"${if (failedJob.get()) "failed" else "queued"}","download_url":"https://example.invalid/original.mp4","progress":0}],"completed":${if ("done-one" in deletedJobs) "[]" else """[{"job_id":"done-one","title":"Finished job","stage":"done","progress":100}]"""}}""")
                     "/system/metrics" -> json("{}")
                     "/admin/users" -> json("""{"users":[]}""")
                     "/admin/github" -> json("""{"configured":true}""")
@@ -639,5 +646,43 @@ class AppFlowTest {
         }
         assertDecodedTestPattern()
         capture("cinema-paused-fallback-recovery")
+    }
+
+    @Test fun mobileRetryAndSourceEditUseTheWorkingWebEndpointsWithConfirmationAndCsrf() {
+        role = "admin"; failedJob.set(true); launchLoggedIn()
+        ui.onNodeWithContentDescription("Queue").performClick(); ui.onNodeWithContentDescription("Failed").performClick()
+        ui.onNodeWithContentDescription("Retry job").performClick(); assertTrue(queueWrites.isEmpty())
+        ui.onNode(hasText("Retry") and hasAnyAncestor(isDialog())).performClick()
+        ui.waitUntil(10000) { queueWrites.size == 1 }; assertEquals("/queue/test-job/retry", queueWrites.first().first)
+        failedJob.set(true); ui.onNodeWithContentDescription("Refresh queue").performClick()
+        ui.waitUntil(10000) { ui.onAllNodesWithContentDescription("Retry job").fetchSemanticsNodes().isNotEmpty() }
+        ui.onNodeWithContentDescription("Retry failed jobs").performClick()
+        ui.onNode(hasText("Retry") and hasAnyAncestor(isDialog())).performClick()
+        ui.waitUntil(10000) { queueWrites.size == 2 }; assertEquals("/queue/retry-all", queueWrites.last().first)
+        ui.onNodeWithContentDescription("Queued").performClick()
+        ui.onNodeWithContentDescription("Change download link").performClick()
+        ui.onNode(hasSetTextAction()).performTextReplacement("javascript:invalid")
+        ui.onNodeWithText("Restart job").assertIsNotEnabled()
+        ui.onNode(hasSetTextAction()).performTextReplacement("https://example.invalid/replacement.mp4")
+        capture("native-queue-edit-source")
+        ui.onNodeWithText("Restart job").performClick()
+        ui.waitUntil(10000) { queueWrites.size == 3 }
+        assertEquals("/queue/test-job/edit", queueWrites.last().first)
+        assertEquals("https://example.invalid/replacement.mp4", queueWrites.last().second.getString("download_url"))
+        assertTrue(deletedJobs.isEmpty())
+    }
+
+    @Test fun aTapShowsControlsAndRestartsTheWholeTimeoutRatherThanTogglingThemAway() {
+        InstrumentationRegistry.getInstrumentation().targetContext.getSharedPreferences("playback_local", 0).edit().putInt("controls_seconds", 8).commit()
+        launchLoggedIn(); openMovie(); ui.onNodeWithText("Play").performClick(); waitForMovingPlayback()
+        scenario!!.onActivity { activity -> nativePlayer(activity.window.decorView)!!.repeatMode = androidx.media3.common.Player.REPEAT_MODE_ONE }
+        fun tapBlankVideo() { ui.onNodeWithTag("player-gesture-zone").performTouchInput { click(androidx.compose.ui.geometry.Offset(4f, height * .45f)) } }
+        tapBlankVideo(); ui.onNodeWithContentDescription("Pause playback").assertIsDisplayed()
+        Thread.sleep(4500); tapBlankVideo(); Thread.sleep(4500)
+        ui.onNodeWithContentDescription("Pause playback").assertIsDisplayed()
+        ui.waitUntil(10000) { ui.onAllNodesWithContentDescription("Pause playback").fetchSemanticsNodes().isEmpty() }
+        tapBlankVideo(); ui.waitUntil(2000) { ui.onAllNodesWithContentDescription("Pause playback").fetchSemanticsNodes().isNotEmpty() }
+        ui.onNodeWithContentDescription("Pause playback").performClick()
+        capture("simple-player-resettable-controls")
     }
 }

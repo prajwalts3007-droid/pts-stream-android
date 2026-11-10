@@ -14,7 +14,7 @@ import org.jsoup.Jsoup
 import java.util.concurrent.TimeUnit
 
 data class EpisodeName(val season: Int, val episode: Int, val name: String, val description: String = "")
-data class MetadataMatch(val provider: String, val id: String, val name: String, val year: Int = 0, val language: String = "") {
+data class MetadataMatch(val provider: String, val id: String, val name: String, val year: Int = 0, val language: String = "", val imdb: String = "") {
     val url get() = if (provider == "TVmaze") "https://www.tvmaze.com/shows/$id" else "https://en.wikipedia.org/wiki/${encodeMetadata(id).replace("+", "_")}"
 }
 data class EpisodeNames(val source: MetadataMatch, val episodes: List<EpisodeName>)
@@ -76,7 +76,7 @@ class EpisodeMetadata(context: Context, private val fetchOverride: ((String) -> 
     private fun get(url: String): String {
         fetchOverride?.let { return it(url) }
         val uri = java.net.URI(url)
-        require(uri.scheme == "https" && uri.host in listOf("api.tvmaze.com", "en.wikipedia.org"))
+        require(uri.scheme == "https" && uri.host in listOf("api.tvmaze.com", "en.wikipedia.org", "v3.sg.media-imdb.com"))
         client.newCall(Request.Builder().url(url).header("User-Agent", "PTSLibrary/1.0 (https://github.com/prajwalts3007-droid/pts-stream-android; metadata lookup)").build()).execute().use { response ->
             check(response.isSuccessful) { "${uri.host}: HTTP ${response.code}" }
             return response.body!!.byteStream().use { it.readBytesBounded(3 * 1024 * 1024).toString(Charsets.UTF_8) }
@@ -96,7 +96,7 @@ class EpisodeMetadata(context: Context, private val fetchOverride: ((String) -> 
     }
     suspend fun candidates(query: String): List<MetadataMatch> = withContext(Dispatchers.IO) {
         val tv = runCatching { JSONArray(get("https://api.tvmaze.com/search/shows?q=${encodeMetadata(query)}")).let { rows ->
-            (0 until rows.length()).take(6).map { val s = rows.getJSONObject(it).getJSONObject("show"); MetadataMatch("TVmaze", s.getInt("id").toString(), s.getString("name"), s.optString("premiered").take(4).toIntOrNull() ?: 0, s.optString("language")) }
+            (0 until rows.length()).take(6).map { val s = rows.getJSONObject(it).getJSONObject("show"); MetadataMatch("TVmaze", s.getInt("id").toString(), s.getString("name"), s.optString("premiered").take(4).toIntOrNull() ?: 0, s.optString("language"), s.optJSONObject("externals")?.optString("imdb").orEmpty()) }
         } }.getOrDefault(emptyList())
         val wiki = runCatching { JSONObject(get("https://en.wikipedia.org/w/api.php?action=query&list=search&format=json&srlimit=5&srsearch=${encodeMetadata("$query television series")}"))
             .getJSONObject("query").getJSONArray("search").let { rows -> (0 until rows.length()).map { val s = rows.getJSONObject(it); MetadataMatch("Wikipedia", s.getString("title"), s.getString("title")) } }
@@ -120,8 +120,14 @@ class EpisodeMetadata(context: Context, private val fetchOverride: ((String) -> 
             val record = runCatching { JSONObject(prefs.getString(key(title), "")!!) }.getOrNull()
             if (record != null && System.currentTimeMillis() - record.optLong("checked") < TimeUnit.DAYS.toMillis(if (record.has("source")) 7 else 1)) return@withLock applyEpisodeNames(title, cached(title))
             val found = candidates(title.title)
+            val imdb = runCatching {
+                val suggestions = JSONObject(get("https://v3.sg.media-imdb.com/suggestion/x/${encodeMetadata(title.title)}.json")).optJSONArray("d") ?: JSONArray()
+                (0 until suggestions.length()).map { suggestions.getJSONObject(it) }.filter {
+                    normalizedName(it.optString("l")) == normalizedName(title.title) && it.optInt("y") == title.year && it.optString("qid") in listOf("tvSeries", "tvMiniSeries")
+                }.singleOrNull()?.optString("id").orEmpty()
+            }.getOrDefault("")
             // Automatic matching is strict: same show name and debut year, not first search result.
-            val exact = found.filter { it.provider == "TVmaze" && normalizedName(it.name) == normalizedName(title.title) && it.year == title.year && title.year > 0 }.singleOrNull()
+            val exact = found.filter { it.provider == "TVmaze" && ((normalizedName(it.name) == normalizedName(title.title) && it.year == title.year && title.year > 0) || (imdb.startsWith("tt") && it.imdb == imdb)) }.singleOrNull()
             if (exact != null) runCatching { choose(title, exact) }.getOrNull()?.let { return@withLock applyEpisodeNames(title, it) }
             // Wikipedia infobox title/year must match before its public episode tables are accepted.
             for (candidate in found.filter { it.provider == "Wikipedia" }.take(2)) {
@@ -129,7 +135,8 @@ class EpisodeMetadata(context: Context, private val fetchOverride: ((String) -> 
                 val doc = Jsoup.parse(html)
                 val name = doc.selectFirst(".infobox .summary")?.text().orEmpty()
                 val firstDate = doc.select(".infobox .bday, .infobox .dtstart").firstOrNull()?.text().orEmpty()
-                if (normalizedName(name) != normalizedName(title.title) || firstDate.take(4).toIntOrNull() != title.year || title.year <= 0) continue
+                val sameIdentity = imdb.startsWith("tt") && doc.select("a[href]").any { Regex("https?://(?:www\\.)?imdb\\.com/title/$imdb/?(?:[?#].*)?").matches(it.attr("href")) }
+                if (!sameIdentity && (normalizedName(name) != normalizedName(title.title) || firstDate.take(4).toIntOrNull() != title.year || title.year <= 0)) continue
                 val names = parseWikipediaNames(html)
                 if (names.isNotEmpty()) { val data = EpisodeNames(candidate.copy(year = title.year), names); store(title, data); return@withLock applyEpisodeNames(title, data) }
             }

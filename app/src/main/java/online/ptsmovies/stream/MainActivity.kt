@@ -152,6 +152,7 @@ class MainActivity : ComponentActivity() {
     private var metricsTarget by mutableStateOf("vps")
     private var queueJobs by mutableStateOf(emptyList<JSONObject>())
     private var queueBusy by mutableStateOf(false)
+    private var googleClientId by mutableStateOf("")
     private val episodeNames by lazy { EpisodeMetadata(this) }
     private var queueDone by mutableStateOf(emptyList<JSONObject>())
     private var queueStage by mutableStateOf("queued")
@@ -209,6 +210,7 @@ class MainActivity : ComponentActivity() {
             window.isNavigationBarContrastEnforced = false
         }
         scope.launch { restoreSession() }
+        scope.launch { try { val cfg = api.json("/auth/config"); googleClientId = if (cfg.optBoolean("google_enabled")) cfg.optString("google_client_id") else "" } catch (_: Exception) { } }
         startAccountSync()
         setContent {
             PtsTheme(device.theme) {
@@ -230,7 +232,7 @@ class MainActivity : ComponentActivity() {
                     }
                     when {
                         loading -> PtsLoading()
-                        account == null -> LoginScreen(startupError, busy = false) { user, pass, remember -> signIn(user, pass, remember) }
+                        account == null -> LoginScreen(startupError, busy = false, googleEnabled = googleClientId.isNotBlank(), onGoogle = { signInGoogle(it) }) { user, pass, remember -> signIn(user, pass, remember) }
                         playing && selected != null -> key(selected!!.id, episode?.id) {
                             PlayerScreen(selected!!, episode, offline.find(selected!!, episode)) {
                                 playing = false; episode = null; playerFullscreen = false
@@ -289,20 +291,37 @@ class MainActivity : ComponentActivity() {
             loading = true
             startupError = ""
             try {
-                account = api.login(user, password, remember)
-                device.account(account!!)
-                attachDownloads()
-                mode = "Stream"
-                toast("Welcome back, " + account!!.optString("name").ifBlank { account!!.optString("username") }, ok = true)
-                refreshLibrary()
-                loadPlaybackPrefs()
-                if (account!!.optString("role") == "admin") {
-                    loadMetrics(); loadQueue(); loadSettings()
-                }
+                finishSignIn(api.login(user, password, remember))
             } catch (e: CancellationException) { throw e }
             catch (e: Exception) {
                 startupError = e.message ?: "Sign in failed"
             } finally { loading = false }
+        }
+    }
+
+    private suspend fun finishSignIn(user: JSONObject) {
+        account = user; device.account(user); attachDownloads(); mode = "Stream"
+        toast("Welcome back, " + user.optString("name").ifBlank { user.optString("username") }, true)
+        refreshLibrary(); loadPlaybackPrefs()
+        if (user.optString("role") == "admin") { loadMetrics(); loadQueue(); loadSettings() }
+    }
+
+    private fun signInGoogle(remember: Boolean) {
+        if (googleClientId.isBlank() || loading) return
+        scope.launch {
+            loading = true; startupError = ""
+            try {
+                val option = com.google.android.libraries.identity.googleid.GetSignInWithGoogleOption.Builder(googleClientId).build()
+                val request = androidx.credentials.GetCredentialRequest.Builder().addCredentialOption(option).build()
+                val result = androidx.credentials.CredentialManager.create(this@MainActivity).getCredential(this@MainActivity, request)
+                val credential = result.credential
+                require(credential is androidx.credentials.CustomCredential && credential.type == com.google.android.libraries.identity.googleid.GoogleIdTokenCredential.TYPE_GOOGLE_ID_TOKEN_CREDENTIAL)
+                val token = com.google.android.libraries.identity.googleid.GoogleIdTokenCredential.createFrom(credential.data).idToken
+                finishSignIn(api.googleLogin(token, remember))
+            } catch (_: androidx.credentials.exceptions.GetCredentialCancellationException) { /* User cancelled; keep password login available. */ }
+            catch (e: CancellationException) { throw e }
+            catch (_: Exception) { startupError = "Google sign-in is unavailable on this device or its Android OAuth registration is missing. Use your password; no account was created locally." }
+            finally { loading = false }
         }
     }
 

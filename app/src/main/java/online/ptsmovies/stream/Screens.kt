@@ -71,7 +71,7 @@ private fun JSONObject.array(key: String): List<JSONObject> = optJSONArray(key).
 // ---------- login ----------
 
 @Composable
-fun LoginScreen(message: String, busy: Boolean, onLogin: (String, String, Boolean) -> Unit) {
+fun LoginScreen(message: String, busy: Boolean, googleEnabled: Boolean = false, onGoogle: (Boolean) -> Unit = {}, onLogin: (String, String, Boolean) -> Unit) {
     var user by remember { mutableStateOf("") }
     var pass by remember { mutableStateOf("") }
     var keep by remember { mutableStateOf(true) }
@@ -119,6 +119,7 @@ fun LoginScreen(message: String, busy: Boolean, onLogin: (String, String, Boolea
                 PtsPrimaryButton(if (busy) "Signing in…" else "Sign in", Modifier.fillMaxWidth(), enabled = !busy && user.isNotBlank() && pass.isNotBlank()) {
                     onLogin(user.trim(), pass, keep)
                 }
+                if (googleEnabled) PtsSecondaryButton("Continue with Google", Modifier.fillMaxWidth(), enabled = !busy) { onGoogle(keep) }
                 Text("Sessions are stored only on this device. The app never stores your password.",
                     style = MaterialTheme.typography.labelSmall, color = Pts.muted, textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth())
             }

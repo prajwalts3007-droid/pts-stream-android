@@ -118,7 +118,7 @@ class OfflineStore(private val context: Context, private val api: PtsApi, ownerI
                 var written = start
                 val started = SystemClock.elapsedRealtime()
                 var lastReport = 0L
-                java.io.FileOutputStream(partial, append).buffered().use { out ->
+                java.io.FileOutputStream(partial, append).buffered(256 * 1024).use { out ->
                     body.byteStream().use { input ->
                         val buffer = ByteArray(256 * 1024)
                         while (true) {

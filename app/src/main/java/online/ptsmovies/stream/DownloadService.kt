@@ -53,11 +53,21 @@ class DownloadRepository internal constructor(private val context: Context, priv
         }.getOrNull() }.filter { it.status != "complete" || saved.any { s -> s.key == it.key } }
         mutable.value = DownloadSnapshot(tasks, saved)
     }
-    private fun update(transform: (DownloadSnapshot) -> DownloadSnapshot) = synchronized(lock) {
-        mutable.value = transform(mutable.value)
-        prefs.edit().putString("jobs", JSONArray(mutable.value.tasks.map { it.json() }).toString()).apply()
+    private var checkpointAt = 0L
+    private fun update(checkpoint: Boolean = true, transform: (DownloadSnapshot) -> DownloadSnapshot) = synchronized(lock) {
+        val next = transform(mutable.value)
+        if (next == mutable.value) return@synchronized
+        mutable.value = next
+        val now = android.os.SystemClock.elapsedRealtime()
+        // Serializing every episode's full title metadata twice per 250ms report stalls fast LAN
+        // transfers. State transitions persist immediately; resumable byte counters checkpoint
+        // at most every two seconds. Resume validates the actual partial length and validator.
+        if (checkpoint || now - checkpointAt >= 2000) {
+            prefs.edit().putString("jobs", JSONArray(next.tasks.map { it.json() }).toString()).apply()
+            checkpointAt = now
+        }
     }
-    private fun task(key: String, transform: (DownloadTask) -> DownloadTask) { update { s -> s.copy(tasks = s.tasks.map { if (it.key == key) transform(it) else it }) } }
+    private fun task(key: String, checkpoint: Boolean = true, transform: (DownloadTask) -> DownloadTask) { update(checkpoint) { s -> s.copy(tasks = s.tasks.map { if (it.key == key) transform(it) else it }) } }
     fun enqueue(title: Title, episode: Episode?) {
         require(episode?.container != "hls" && (episode != null || title.container != "hls")) { "This HLS title is not available as an authorized offline MP4" }
         val t = DownloadTask(title, episode)
@@ -127,9 +137,9 @@ class DownloadRepository internal constructor(private val context: Context, priv
                             reservations[next.key] = needed
                         } }, onTransfer = { p ->
                             synchronized(lock) { reservations[next.key] = (p.total - p.bytes).coerceAtLeast(0) }
-                            task(next.key) { it.copy(bytes = p.bytes, total = p.total, speed = if (it.status == "downloading") p.speed else 0) }
+                            task(next.key, checkpoint = false) { it.copy(bytes = p.bytes, total = p.total, speed = if (it.status == "downloading") p.speed else 0) }
                             statusCallback?.invoke(mutable.value.tasks.firstOrNull { it.key == next.key })
-                        }, onRoute = { route -> task(next.key) { it.copy(route = route.label) } }) { }
+                        }, onRoute = { route -> task(next.key, checkpoint = false) { it.copy(route = route.label) } }) { }
                         val finished = store.find(next.title, next.episode) ?: error("Downloaded file is missing")
                         task(next.key) { it.copy(status = "complete", bytes = finished.bytes, total = finished.bytes, speed = 0) }; refresh()
                     } catch (e: CancellationException) {

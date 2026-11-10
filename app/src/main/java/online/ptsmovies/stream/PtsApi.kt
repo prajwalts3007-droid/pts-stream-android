@@ -69,6 +69,9 @@ class PtsApi(private val baseUrl: String = BASE, cookieJar: CookieJar? = null) {
     suspend fun login(user: String, password: String, remember: Boolean = true): JSONObject = withContext(Dispatchers.IO) {
         request("/auth/login", JSONObject().put("username", user).put("password", password).put("remember", remember)).getJSONObject("user")
     }
+    suspend fun googleLogin(credential: String, remember: Boolean): JSONObject = withContext(Dispatchers.IO) {
+        request("/auth/google", JSONObject().put("credential", credential).put("remember", remember)).getJSONObject("user")
+    }
     suspend fun logout() = withContext(Dispatchers.IO) {
         try { request("/auth/logout", JSONObject()) } finally {
             cookies.removeAllCookies(null)

@@ -317,6 +317,55 @@ class ScreenAuditTest {
         capture("web-queue-single-row")
     }
 
+    @Test fun queueAllNineActionsFitWithoutScrollingAtCompactWidthsAndLargerFonts() {
+        var width by mutableIntStateOf(320); var font by mutableFloatStateOf(1f)
+        var selected by mutableStateOf("queued")
+        val tabs = stageOrder.map { WebTab(it, stageLabel(it), PtsIcons.Queue, 999) } + WebTab("retry", "Retry failed jobs", PtsIcons.Retry, 999)
+        ui.setContent { PtsTheme { val density = LocalDensity.current
+            CompositionLocalProvider(LocalDensity provides Density(density.density.coerceAtMost(2f), font)) {
+                Box(Modifier.width(width.dp)) { WebIconTabs(tabs, selected, { selected = it }, "fit-queue", fit = true) }
+            }
+        } }
+        for (size in listOf(280, 320, 360, 412)) for (scale in listOf(1f, 1.3f)) {
+            ui.runOnIdle { width = size; font = scale }
+            val row = ui.onNodeWithTag("fit-queue").fetchSemanticsNode()
+            assertFalse(row.config.contains(androidx.compose.ui.semantics.SemanticsProperties.HorizontalScrollAxisRange))
+            val bounds = row.boundsInRoot
+            val actions = tabs.map { tab ->
+                ui.onNodeWithContentDescription(tab.label).assertIsDisplayed().performClick()
+                ui.runOnIdle { assertEquals(tab.key, selected) }
+                ui.onNodeWithContentDescription(tab.label).fetchSemanticsNode().boundsInRoot
+            }
+            actions.forEach { assertTrue(it.left >= bounds.left && it.right <= bounds.right + 1); assertEquals(actions.first().top, it.top, 1f) }
+            capture("queue-nine-fit-${size}-${scale}")
+        }
+    }
+
+    @Test fun simplePlayerRegionsNeverOverlapAndTransportOnlySeeksTenSeconds() {
+        var width by mutableIntStateOf(320); var height by mutableIntStateOf(260); var font by mutableFloatStateOf(1f)
+        var seek = -1L
+        ui.setContent { PtsTheme("dark") { val density = LocalDensity.current
+            CompositionLocalProvider(LocalDensity provides Density(1.5f.coerceAtMost(density.density), font)) {
+                Box(Modifier.requiredSize(width.dp, height.dp)) {
+                    CinemaControls("A long generated title with several episode words", true, 20000, 60000, 35000, false, false, "Local Pi", true,
+                        {}, {}, { seek = it }, {}, {}, {}, {}, {}, {}, {}, {}, {})
+                }
+            }
+        } }
+        for ((w, h) in listOf(280 to 260, 320 to 280, 412 to 310, 640 to 300)) for (scale in listOf(1f, 1.3f)) {
+            ui.runOnIdle { width = w; height = h; font = scale }
+            val header = ui.onNodeWithTag("player-header").fetchSemanticsNode().boundsInRoot
+            val transport = ui.onNodeWithTag("player-transport").fetchSemanticsNode().boundsInRoot
+            val footer = ui.onNodeWithTag("player-footer").fetchSemanticsNode().boundsInRoot
+            assertTrue(header.bottom <= transport.top + 1); assertTrue(transport.bottom <= footer.top + 1)
+            ui.onNodeWithContentDescription("Back 10 seconds").performClick(); ui.runOnIdle { assertEquals(10000L, seek) }
+            ui.onNodeWithContentDescription("Forward 10 seconds").performClick(); ui.runOnIdle { assertEquals(30000L, seek) }
+            ui.onNodeWithContentDescription("Next episode").assertDoesNotExist(); ui.onNodeWithContentDescription("Previous episode").assertDoesNotExist()
+            ui.onNodeWithContentDescription("Pause playback").assertIsDisplayed(); ui.onNodeWithContentDescription("Choose episode").assertIsDisplayed()
+            capture("simple-player-${w}-${h}-${scale}")
+        }
+    }
+
     @Test fun movieDetailsHaveNoCodecOrContainerBadges() {
         ui.setContent { PtsTheme { TitleScreen(movie, null, false, emptySet(), "", {}, {}, {}, {}) } }
         ui.onNodeWithText("HEVC").assertDoesNotExist(); ui.onNodeWithText("MP4").assertDoesNotExist()

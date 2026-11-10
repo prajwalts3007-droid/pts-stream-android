@@ -53,6 +53,7 @@ fun NativeAdminSettings(user: JSONObject, api: PtsApi, onUpdate: () -> Unit, onS
     val fields = remember { mutableStateMapOf<String, String>() }
     var password by remember { mutableStateOf("") }
     var token by remember { mutableStateOf("") }
+    var cleanupToken by remember { mutableStateOf("") }
     var clientId by remember { mutableStateOf("") }
     var account by remember { mutableStateOf("primary") }
     var unlocked by remember { mutableStateOf(false) }
@@ -73,7 +74,7 @@ fun NativeAdminSettings(user: JSONObject, api: PtsApi, onUpdate: () -> Unit, onS
         scope.launch {
             try { val result = api.json(command.path, command.method, command.body); after(result); notice = "Saved" }
             catch (e: Exception) { error = e.message ?: "Request failed" }
-            finally { busy = false; token = ""; powerPassword = ""; newPassword = "" }
+            finally { busy = false; token = ""; cleanupToken = ""; powerPassword = ""; newPassword = "" }
         }
     }
     fun refreshUsers() { scope.launch { try { val a = api.json("/admin/users").optJSONArray("users"); users = (0 until (a?.length() ?: 0)).map { a!!.getJSONObject(it) } } catch (e: Exception) { error = e.message.orEmpty() } } }
@@ -94,16 +95,17 @@ fun NativeAdminSettings(user: JSONObject, api: PtsApi, onUpdate: () -> Unit, onS
     }
     DisposableEffect(lifecycle) {
         val observer = LifecycleEventObserver { _, event -> if (event == Lifecycle.Event.ON_STOP) {
-            password = ""; token = ""; powerPassword = ""; newPassword = ""; unlocked = false; pending = null; newUser = false
+            password = ""; token = ""; cleanupToken = ""; powerPassword = ""; newPassword = ""; unlocked = false; pending = null; newUser = false
         } }
         lifecycle.addObserver(observer); onDispose { lifecycle.removeObserver(observer) }
     }
     pending?.let { command ->
+        val needsPassword = command.path == "/admin/power" || command.path.startsWith("/admin/relay/bucket/")
         PtsConfirmDialog("Confirm change", confirmation, "Confirm", destructive = command.path.startsWith("/admin/power") || command.method == "DELETE",
-            confirmEnabled = !busy && phrase == "CONFIRM" && (command.path != "/admin/power" || powerPassword.isNotBlank()),
+            confirmEnabled = !busy && phrase == "CONFIRM" && (!needsPassword || powerPassword.isNotBlank()),
             onConfirm = {
                 pending = null
-                val captured = if (command.path == "/admin/power") command.copy(body = JSONObject(command.body.toString()).put("password", powerPassword)) else command
+                val captured = if (needsPassword) command.copy(body = JSONObject(command.body.toString()).put("password", powerPassword)) else command
                 run(captured) { result ->
                     if (command.path.startsWith("/admin/users")) refreshUsers()
                     if (command.path == "/admin/pipeline-settings") refreshPipeline()
@@ -111,7 +113,7 @@ fun NativeAdminSettings(user: JSONObject, api: PtsApi, onUpdate: () -> Unit, onS
                 }
             }, onDismiss = { pending = null; powerPassword = "" }) {
             PtsField(phrase, { phrase = it }, "Type CONFIRM", Modifier.fillMaxWidth())
-            if (command.path == "/admin/power") PtsField(powerPassword, { powerPassword = it }, "Your password", Modifier.fillMaxWidth(), password = true)
+            if (needsPassword) PtsField(powerPassword, { powerPassword = it }, "Your password", Modifier.fillMaxWidth(), password = true)
         }
     }
     if (newUser) PtsConfirmDialog("Create user", "", "Create", confirmEnabled = !busy && username.isNotBlank() && newPassword.length >= 8,
@@ -134,7 +136,7 @@ fun NativeAdminSettings(user: JSONObject, api: PtsApi, onUpdate: () -> Unit, onS
         val sections = when (category) {
             "pipeline" -> listOf("API management", "Pipeline settings")
             "playback" -> listOf("Playback preferences")
-            "devices" -> listOf("Power options")
+            "devices" -> listOf("Power options", "Legacy Hugging Face transfer bucket")
             else -> listOf("User management")
         }
         sections.forEach { section ->
@@ -146,6 +148,11 @@ fun NativeAdminSettings(user: JSONObject, api: PtsApi, onUpdate: () -> Unit, onS
                         "Pipeline settings" -> {
                             val labels = linkedMapOf("pi_bwlimit_kbps" to "Pi transfer speed (Mbps, 0 = unlimited)", "max_runners" to "GitHub jobs at once", "max_pi_transfers" to "Pi transfers at once", "min_free_gib" to "Keep VPS space free (GiB)", "max_staging_gib" to "VPS space for waiting files (GiB)", "reserve_per_job_gib" to "Estimated file size (GiB)")
                             if (pipeline != null) labels.forEach { (key, label) -> PtsField(fields[key].orEmpty(), { fields[key] = it }, label, Modifier.fillMaxWidth().testTag("pipeline-$key")) }
+                            pipeline?.optJSONObject("status")?.let { status ->
+                                Text((if (status.optBoolean("dispatch_paused")) "Dispatch paused: ${status.optString("reason")} · " else "") +
+                                    "GitHub: ${status.optInt("active_runners")}/${pipeline!!.optInt("max_runners")} · Pi: ${status.optInt("active_transfers")}/${pipeline!!.optInt("max_pi_transfers")} · Waiting: ${status.optInt("waiting_transfers")}",
+                                    color = Pts.muted, style = MaterialTheme.typography.bodySmall)
+                            }
                             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                             PtsPrimaryButton("Save limits", Modifier.weight(1f), enabled = pipeline != null && !busy) {
                                 try { confirm(AdminCommand("/admin/pipeline-settings", "PUT", pipelineBody(fields.toMap(), pipeline!!)), "Apply pipeline settings?") } catch (e: Exception) { error = e.message.orEmpty() }
@@ -172,7 +179,9 @@ fun NativeAdminSettings(user: JSONObject, api: PtsApi, onUpdate: () -> Unit, onS
                                 WebSelect("Runner account", roles.map { it to it.replaceFirstChar(Char::uppercase) }, account) { account = it; token = "" }
                                 val cfg = (0 until (accounts?.length() ?: 0)).map { accounts!!.getJSONObject(it) }.firstOrNull { it.optString("role") == account } ?: github
                                 Text(cfg.optString("repo"), color = Pts.muted, style = MaterialTheme.typography.bodySmall)
-                                Text(cfg.optString("token_masked", "Not configured"), color = Pts.muted, style = MaterialTheme.typography.bodySmall)
+                                 Text(cfg.optString("token_masked", "Not configured"), color = Pts.muted, style = MaterialTheme.typography.bodySmall)
+                                 Text("${(0 until (accounts?.length() ?: 0)).sumOf { accounts!!.getJSONObject(it).optInt("active") }}/${github.optInt("max_runners", 60)} active · up to ${github.optInt("per_account", 20)} per account · round robin with failover" +
+                                     if (cfg.optLong("cooldown_until") > System.currentTimeMillis() / 1000) " · Selected account temporarily unavailable" else "", color = Pts.muted, style = MaterialTheme.typography.bodySmall)
                                 PtsField(token, { token = it }, "Replacement GitHub token", Modifier.fillMaxWidth(), password = true)
                                 PtsPrimaryButton("Save & provision", Modifier.fillMaxWidth(), enabled = token.isNotBlank() && !busy) {
                                     confirm(AdminCommand("/admin/github", "POST", JSONObject().put("password", password).put("token", token.trim()).put("account", account)), "Replace the selected account token and provision its runner repository?")
@@ -180,6 +189,7 @@ fun NativeAdminSettings(user: JSONObject, api: PtsApi, onUpdate: () -> Unit, onS
                                 }
                                 PtsSecondaryButton("Google sign-in", Modifier.fillMaxWidth(), icon = PtsIcons.ChevronDown) { provider = if (provider == "google") "" else "google" }
                                 if (provider == "google") {
+                                Text("${if (google.optBoolean("enabled")) "Enabled" else "Not configured"} · ${google.optString("origin")}", color = Pts.muted, style = MaterialTheme.typography.bodySmall)
                                 PtsField(clientId, { clientId = it }, "Google client ID", Modifier.fillMaxWidth())
                                 Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                                 PtsSecondaryButton("Save", enabled = !busy) {
@@ -189,6 +199,16 @@ fun NativeAdminSettings(user: JSONObject, api: PtsApi, onUpdate: () -> Unit, onS
                                 }
                                 }
                                 PtsSecondaryButton("Lock panel", Modifier.fillMaxWidth()) { password = ""; token = ""; unlocked = false; github = JSONObject(); google = JSONObject() }
+                            }
+                        }
+                        "Legacy Hugging Face transfer bucket" -> {
+                            Text("Read-only historical cleanup. Hugging Face currently rejects its token; cleanup requires restored account access. Purge All does not remove Pixeldrain files.", color = Pts.muted, style = MaterialTheme.typography.bodySmall)
+                            PtsField(cleanupToken, { cleanupToken = it }, "Replacement token for historical cleanup", Modifier.fillMaxWidth(), password = true)
+                            PtsSecondaryButton("Update cleanup token", enabled = !busy && cleanupToken.isNotBlank()) {
+                                confirm(AdminCommand("/admin/relay/bucket/token", "PUT", JSONObject().put("token", cleanupToken.trim())), "Update the historical cleanup credential only? This does not restore a suspended account.")
+                            }
+                            PtsSecondaryButton("Purge All", danger = true, enabled = !busy) {
+                                confirm(AdminCommand("/admin/relay/bucket/purge", "POST", JSONObject()), "Permanently remove every historical public ZIP-streamer upload and invalidate its text links? Pixeldrain files are not affected. Locked provider access can still prevent cleanup.")
                             }
                         }
                         "Power options" -> listOf("vps" to "VPS", "pi" to "Raspberry Pi").forEach { (target, label) ->

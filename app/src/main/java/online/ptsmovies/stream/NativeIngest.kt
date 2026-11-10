@@ -11,6 +11,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.*
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -123,7 +124,7 @@ fun NativeIngest(api: PtsApi, query: String, onQuery: (String) -> Unit, results:
                 itemsIndexed(rows, key = { _, r -> "${r.season}_${r.episode}" }) { index, row ->
                     Column {
                         Row(verticalAlignment = Alignment.CenterVertically) {
-                            Checkbox(row.selected, { value -> rows = rows.toMutableList().also { it[index] = row.copy(selected = value) } })
+                            Checkbox(row.selected, { value -> rows = rows.toMutableList().also { it[index] = row.copy(selected = value) } }, Modifier.semantics { contentDescription = "Select S%02dE%02d".format(row.season, row.episode) })
                             Text("S%02dE%02d".format(row.season, row.episode), color = Pts.text)
                         }
                         PtsField(row.link, { link -> rows = rows.toMutableList().also { it[index] = row.copy(link = link, member = "") } }, "Source link", Modifier.fillMaxWidth())
