@@ -101,7 +101,7 @@ class ApiContractTest {
     }
 
     @Test fun updateAssetMustBelongToExactRelease() {
-        val url = "https://github.com/sundar211954-debug/pts-stream-android/releases/download/v3/PTS-Stream-v3.apk"
+        val url = "https://github.com/${BuildConfig.APP_REPOSITORY}/releases/download/v3/PTS-Stream-v3.apk"
         val release = JSONObject("""{"tag_name":"v3","assets":[{"name":"PTS-Stream-v3.apk","browser_download_url":"$url"}]}""")
         assertEquals(3, parseReleaseUpdate(release, 1)?.code)
         release.getJSONArray("assets").getJSONObject(0).put("browser_download_url", "https://github.com/other/repo/file.apk")

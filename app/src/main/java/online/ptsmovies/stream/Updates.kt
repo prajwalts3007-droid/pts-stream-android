@@ -34,7 +34,7 @@ internal fun parseReleaseUpdate(update: JSONObject, installedVersion: Int): Rele
     val name = "PTS-Stream-v$code.apk"
     val asset = (0 until assets.length()).map { assets.getJSONObject(it) }
         .firstOrNull { it.optString("name") == name } ?: error("Signed APK not found in release")
-    val expected = "https://github.com/sundar211954-debug/pts-stream-android/releases/download/$tag/$name"
+    val expected = "https://github.com/${BuildConfig.APP_REPOSITORY}/releases/download/$tag/$name"
     require(asset.optString("browser_download_url") == expected) { "Untrusted download address" }
     return ReleaseUpdate(code, expected, asset.optString("digest"))
 }

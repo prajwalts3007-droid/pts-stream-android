@@ -14,7 +14,8 @@ android {
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         versionCode = (providers.gradleProperty("ptsVersionCode").orNull ?: "1").toInt()
         versionName = "1.0.${versionCode}"
-        buildConfigField("String", "RELEASES_API", "\"https://api.github.com/repos/sundar211954-debug/pts-stream-android/releases/latest\"")
+        buildConfigField("String", "APP_REPOSITORY", "\"prajwalts3007-droid/pts-stream-android\"")
+        buildConfigField("String", "RELEASES_API", "\"https://api.github.com/repos/prajwalts3007-droid/pts-stream-android/releases/latest\"")
     }
     buildFeatures { compose = true; buildConfig = true }
     compileOptions { sourceCompatibility = JavaVersion.VERSION_17; targetCompatibility = JavaVersion.VERSION_17 }
