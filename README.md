@@ -6,6 +6,8 @@ Native Kotlin/Compose client for `https://ptsmovies.online`. Android 8+, HEVC-ca
 
 GitHub Actions builds a **debug test APK** on each commit; find it under the run's Artifacts. Debug APKs are not published as OTA releases. A signed production APK requires a persistent signing key, kept outside Git and provided as repository Actions secrets: `PTS_KEYSTORE_B64`, `PTS_KEYSTORE_PASSWORD`, `PTS_KEY_ALIAS`, `PTS_KEY_PASSWORD`. Never change or lose this key: Android will reject updates signed by a different key. Once configured, tag the verified commit with a monotonically increasing numeric tag (`v2`, `v3`, …) to publish a signed GitHub release. The app checks the public release API and opens the system package installer; Android always asks the user to approve the update. No silent installation. APKs installed from debug artifacts cannot be upgraded in place by a signed release; uninstall the debug build first (which deletes its app-private downloads).
 
+Release-candidate tags (`v1-rc1`) produce a **prerelease** APK for manual testing; they are excluded from the in-app `releases/latest` update channel. Do not distribute it as a finished app until backend compatibility and device tests pass.
+
 ## Constraints before production release
 
 - This is an independent Android client; the production backend has **not** been rebuilt or changed. The checked-out VPS Go source predates the running binary. Verify normal-user login, playback URLs, progress, watchlist and download authorization against the deployed API before distributing.

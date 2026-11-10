@@ -17,6 +17,7 @@ import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
+import androidx.compose.animation.animateContentSize
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
@@ -49,6 +50,7 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import org.json.JSONObject
+import coil.compose.AsyncImage
 import java.io.File
 import kotlin.math.roundToLong
 
@@ -400,12 +402,18 @@ class MainActivity : ComponentActivity() {
 }
 
 @Composable private fun TitleCard(title: Title, position: Long?, open: () -> Unit) {
-    Column(Modifier.fillMaxWidth().background(Color(0xFF172235), RoundedCornerShape(14.dp))
-        .clickable(onClick = open).padding(18.dp)) {
-        Text(title.title, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
-        Text("${title.kind.replaceFirstChar { it.uppercase() }} · ${title.year} · ${title.genres.take(2).joinToString()}")
-        if (position != null && position > 0) Text("Continue · ${position / 60} min", color = accent)
-        if (title.synopsis.isNotBlank()) Text(title.synopsis, maxLines = 2, overflow = TextOverflow.Ellipsis)
+    Row(Modifier.fillMaxWidth().background(Color(0xFF172235), RoundedCornerShape(14.dp))
+        .clickable(onClick = open).animateContentSize().padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
+        if (title.poster.startsWith("https://")) {
+            AsyncImage(model = title.poster, contentDescription = "Poster for ${title.title}", modifier = Modifier.width(75.dp).height(110.dp))
+            Spacer(Modifier.width(12.dp))
+        }
+        Column {
+            Text(title.title, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+            Text("${title.kind.replaceFirstChar { it.uppercase() }} · ${title.year} · ${title.genres.take(2).joinToString()}")
+            if (position != null && position > 0) Text("Continue · ${position / 60} min", color = accent)
+            if (title.synopsis.isNotBlank()) Text(title.synopsis, maxLines = 2, overflow = TextOverflow.Ellipsis)
+        }
     }
 }
 

@@ -73,6 +73,7 @@ jobs:
           PTS_KEY_PASSWORD: ${{ secrets.PTS_KEY_PASSWORD }}
         run: |
           code="${GITHUB_REF_NAME#v}"
+          code="${code%%-*}"
           [[ "$code" =~ ^[1-9][0-9]*$ ]] || { echo 'Use numeric tags such as v2'; exit 1; }
           gradle --no-daemon :app:assembleRelease -PptsVersionCode="$code"
           mv app/build/outputs/apk/release/app-release.apk PTS-Stream-v"$code".apk
@@ -80,3 +81,4 @@ jobs:
         with:
           files: PTS-Stream-v*.apk
           generate_release_notes: true
+          prerelease: ${{ contains(github.ref_name, '-rc') }}
