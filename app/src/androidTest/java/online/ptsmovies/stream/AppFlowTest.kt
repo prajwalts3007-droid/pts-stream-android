@@ -268,18 +268,22 @@ class AppFlowTest {
         openMenu("sample.zip"); ui.onNodeWithText("Unzip").performClick()
         ui.onNode(hasText("Unzip") and hasClickAction()).performClick()
         ui.waitUntil(10000) { fileCommands.any { it.first.endsWith("/unzip") } }
+        waitForText("Unzip started · see Transfers")
         openMenu("notes.txt"); ui.onNodeWithText("Edit").performClick()
         waitForText("synthetic notes")
         ui.onNode(hasSetTextAction()).performTextReplacement("updated synthetic notes")
         ui.onNodeWithText("Save").performClick()
         ui.waitUntil(10000) { fileCommands.any { it.first.endsWith("/content") && it.second.optString("content") == "updated synthetic notes" } }
+        waitForText("File saved")
         openMenu("sample.zip"); ui.onNodeWithText("Copy").performClick()
         ui.onNodeWithText("Samples").performClick(); waitForText("/Samples")
         ui.onNodeWithText("Paste").performClick(); ui.onNode(hasText("Paste") and hasClickAction()).performClick()
         ui.waitUntil(10000) { fileCommands.any { it.first.endsWith("/paste") } }
+        waitForText("Paste started · see Transfers")
         ui.onNodeWithContentDescription("Transfers").performClick(); waitForText("Finished zip")
         ui.onNodeWithText("Clear").performClick(); ui.onNode(hasText("Clear") and hasClickAction()).performClick()
         ui.waitUntil(10000) { clearedTransfers.get() }
+        ui.waitUntil(10000) { ui.onAllNodesWithText("Finished zip").fetchSemanticsNodes().isEmpty() }
         waitForText("Active copy")
         ui.onNodeWithText("Finished zip").assertDoesNotExist()
         val paste = fileCommands.first { it.first.endsWith("/paste") }.second
