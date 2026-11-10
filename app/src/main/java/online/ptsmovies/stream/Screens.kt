@@ -192,7 +192,7 @@ fun StreamHomeScreen(
             }
             if (movies.isNotEmpty()) item {
                 Column {
-                    PtsSectionHeader("Movies", movies.size) {
+                    PtsSectionHeader("Movies") {
                         Text("See all", style = MaterialTheme.typography.labelLarge, color = Pts.accent,
                             modifier = Modifier.clickable { onSeeAll("Movies") }.padding(start = 8.dp))
                     }
@@ -205,7 +205,7 @@ fun StreamHomeScreen(
             }
             if (series.isNotEmpty()) item {
                 Column {
-                    PtsSectionHeader("TV Shows", series.size) {
+                    PtsSectionHeader("TV Shows") {
                         Text("See all", style = MaterialTheme.typography.labelLarge, color = Pts.accent,
                             modifier = Modifier.clickable { onSeeAll("Series") }.padding(start = 8.dp))
                     }

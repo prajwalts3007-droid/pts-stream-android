@@ -525,7 +525,7 @@ fun PtsPosterCard(
 @Composable
 fun PtsPosterShelf(label: String, titles: List<Title>, progress: Map<Long, Resume>, watch: Set<Long>, onOpen: (Title) -> Unit, onToggle: (Title) -> Unit, onClear: ((Title) -> Unit)? = null) {
     Column {
-        PtsSectionHeader(label, titles.size)
+        PtsSectionHeader(label)
         LazyRow(horizontalArrangement = Arrangement.spacedBy(11.dp), contentPadding = PaddingValues(bottom = 6.dp)) {
             items(titles, key = { it.id }) { title ->
                 PtsPosterCard(title, progress[title.id], title.id in watch, onOpen = { onOpen(title) }, onToggleWatch = { onToggle(title) },
