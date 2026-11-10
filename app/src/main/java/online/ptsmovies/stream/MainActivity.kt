@@ -933,7 +933,7 @@ class MainActivity : ComponentActivity() {
                 override fun onRenderedFirstFrame() { firstFrame = true }
                 override fun onPlayerError(exception: PlaybackException) {
                     if (saved == null && !fallback && exception.errorCode in 2000..2999) {
-                        resumeAt = exo.currentPosition.coerceAtLeast(0)
+                        resumeAt = if (firstFrame) exo.currentPosition.coerceAtLeast(0) else maxOf(resumeAt, exo.currentPosition.coerceAtLeast(0))
                         fallback = true
                         controls = true
                     } else {

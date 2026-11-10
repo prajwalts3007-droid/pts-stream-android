@@ -653,7 +653,7 @@ fun QueueScreen(
             val icons = listOf(PtsIcons.Clock, PtsIcons.Play, PtsIcons.Download, PtsIcons.Cpu, PtsIcons.Upload, PtsIcons.Transfers, PtsIcons.Info, PtsIcons.Check)
             WebIconTabs(stageOrder.mapIndexed { index, s ->
                 WebTab(s, stageLabel(s), icons[index], if (s == "done") completed.size else jobs.count { it.optString("stage", "queued") == s })
-            }, stage, onStage, "queue-stage-row")
+            } + WebTab("retry", "Retry failed jobs", PtsIcons.Retry, jobs.count { it.optString("stage") == "failed" }, enabled = false), stage, onStage, "queue-stage-row")
         }
         item {
             Row(verticalAlignment = Alignment.CenterVertically) {

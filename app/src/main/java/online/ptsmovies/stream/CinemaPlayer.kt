@@ -16,6 +16,7 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.*
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
@@ -182,8 +183,8 @@ fun PlayerMenuRow(icon: ImageVector, title: String, value: String = "", action: 
 private fun TimingControl(label: String, value: Int, limit: Int, onChange: (Int) -> Unit) {
     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
         Text(label, Modifier.weight(1f), color = Color.White)
-        TextButton({ onChange((value - 100).coerceAtLeast(-limit)) }) { Text("−") }
+        TextButton({ onChange((value - 100).coerceAtLeast(-limit)) }, Modifier.semantics { contentDescription = "Decrease $label" }) { Text("−") }
         Text("${if (value > 0) "+" else ""}${value}ms", color = Pts.accent)
-        TextButton({ onChange((value + 100).coerceAtMost(limit)) }) { Text("+") }
+        TextButton({ onChange((value + 100).coerceAtMost(limit)) }, Modifier.semantics { contentDescription = "Increase $label" }) { Text("+") }
     }
 }

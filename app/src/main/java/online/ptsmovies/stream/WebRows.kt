@@ -17,7 +17,7 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.*
 import androidx.compose.ui.unit.dp
 
-data class WebTab(val key: String, val label: String, val icon: ImageVector, val count: Int? = null)
+data class WebTab(val key: String, val label: String, val icon: ImageVector, val count: Int? = null, val enabled: Boolean = true)
 
 /** One web-style row. It scrolls instead of wrapping or shrinking touch targets. */
 @Composable
@@ -28,8 +28,8 @@ fun WebIconTabs(tabs: List<WebTab>, selected: String, onSelect: (String) -> Unit
             Row(Modifier.heightIn(min = 48.dp).widthIn(min = 48.dp)
                 .background(if (active) Pts.accentSoft else Pts.card, RoundedCornerShape(12.dp))
                 .border(1.dp, if (active) Pts.accent else Pts.line, RoundedCornerShape(12.dp))
-                .semantics { contentDescription = tab.label; this.selected = active; role = Role.Tab }
-                .clickable { onSelect(tab.key) }.padding(horizontal = 12.dp),
+                .semantics { contentDescription = tab.label; this.selected = active; role = Role.Tab; if (!tab.enabled) disabled() }
+                .clickable(enabled = tab.enabled) { onSelect(tab.key) }.padding(horizontal = 12.dp),
                 verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                 Icon(tab.icon, null, Modifier.size(22.dp), tint = if (active) Pts.accent else Pts.muted)
                 tab.count?.let { Text(it.toString(), color = if (active) Pts.accent else Pts.muted, style = MaterialTheme.typography.labelMedium) }

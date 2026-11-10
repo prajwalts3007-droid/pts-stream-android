@@ -388,7 +388,7 @@ class AppFlowTest {
     @Test fun clearCompletedUsesOnlyPerJobDeletes() {
         role = "admin"; launchLoggedIn()
         ui.onNodeWithContentDescription("Queue").performClick()
-        ui.onNode(hasText("Completed") and hasClickAction()).performClick()
+        ui.onNodeWithContentDescription("Completed").performScrollTo().performClick()
         waitForText("Clear completed")
         ui.onNodeWithText("Clear completed").performClick(); ui.onNodeWithText("Clear").performClick()
         ui.waitUntil(10000) { "done-one" in deletedJobs }
@@ -413,9 +413,11 @@ class AppFlowTest {
         capture("watch-fullscreen")
         pressBack()
         ui.waitUntil(10000) { ui.onAllNodesWithContentDescription("Fullscreen").fetchSemanticsNodes().isNotEmpty() }
-        ui.onNodeWithContentDescription("Playback settings").performClick()
+        ui.onNodeWithContentDescription("Player options").performClick()
+        ui.onNodeWithText("Speed").performScrollTo().performClick()
         ui.onNodeWithText("1.25×").performClick()
-        ui.onNodeWithContentDescription("Playback settings").assertExists()
+        ui.onNodeWithContentDescription("Close player menu").performClick()
+        ui.onNodeWithContentDescription("Player options").assertExists()
     }
 
     @Test fun downloadPageSurvivesRecreationAndShowsTransferMetrics() {
@@ -469,10 +471,10 @@ class AppFlowTest {
             android.graphics.Color.green(pixel) > 200 && android.graphics.Color.blue(pixel) > 200 && android.graphics.Color.red(pixel) < 50
         }
         ui.onNodeWithContentDescription("Movies").performClick()
-        ui.onNodeWithContentDescription("List view").performClick()
+        ui.onNodeWithContentDescription("Switch to list view").performClick()
         ui.onNodeWithText("Synthetic HEVC").assertExists()
         scenario!!.recreate()
-        ui.onNodeWithContentDescription("List view").assertExists()
+        ui.onNodeWithContentDescription("Switch to grid view").assertExists()
         assertEquals("list", DeviceState(InstrumentationRegistry.getInstrumentation().targetContext).view("Movies"))
         capture("native-movies-list")
         ui.onNodeWithContentDescription("Open profile").performClick()
@@ -576,7 +578,7 @@ class AppFlowTest {
         ui.onNodeWithTag("gesture-feedback").assertTextContains("Zoom 0.50", substring = true)
         capture("native-player-pinch-in")
         ui.onNodeWithContentDescription("Player options").performClick()
-        ui.onNodeWithText("Lock screen").performClick()
+        ui.onNodeWithText("Lock screen").performScrollTo().performClick()
         ui.onNodeWithTag("player-gesture-zone").assertDoesNotExist()
         ui.onNodeWithContentDescription("Unlock player").performClick()
         ui.onNodeWithTag("player-gesture-zone").assertExists()
@@ -585,10 +587,9 @@ class AppFlowTest {
     @Test fun nativePipelineSettingsLoadAndRequireTypedSaveConfirmation() {
         role = "admin"; launchLoggedIn()
         ui.onNodeWithContentDescription("Settings").performClick()
-        ui.onNodeWithText("Pipeline settings").performClick()
         waitForText("Concurrent runners")
-        ui.onAllNodes(hasSetTextAction())[1].performTextReplacement("3")
-        ui.onNodeWithText("Save").performScrollTo().performClick()
+        ui.onNode(hasSetTextAction() and hasAnyAncestor(hasTestTag("pipeline-max_runners"))).performScrollTo().performTextReplacement("3")
+        ui.onNodeWithText("Save limits").performScrollTo().performClick()
         ui.onNodeWithText("Confirm").assertIsNotEnabled()
         assertTrue(adminWrites.isEmpty())
         ui.onNode(hasSetTextAction() and hasAnyAncestor(isDialog())).performTextInput("CONFIRM")
@@ -597,5 +598,41 @@ class AppFlowTest {
         val body = adminWrites.first { it.first == "/admin/pipeline-settings" }.second
         assertEquals(3, body.getInt("max_runners")); assertEquals(12345, body.getInt("pi_bwlimit_kbps"))
         capture("native-pipeline-settings")
+    }
+
+    @Test fun playerConnectionMenuUsesActualRouteAndTimingMenuUpdates() {
+        launchLoggedIn(); openMovie(); ui.onNodeWithText("Play").performClick(); waitForMovingPlayback(); pauseIfPlaying()
+        ui.onNodeWithTag("media-route").assertTextContains("Server fallback", substring = true)
+        ui.onNodeWithTag("media-route").performClick()
+        ui.onNode(hasText("Server fallback") and hasAnyAncestor(isDialog())).assertExists()
+        capture("cinema-connection-menu")
+        ui.onNodeWithContentDescription("Back to player menu").performClick()
+        ui.onNodeWithText("Synchronisation").performScrollTo().performClick()
+        ui.onNodeWithContentDescription("Increase Audio delay").performClick()
+        ui.onNodeWithText("+100ms").assertExists()
+        ui.onNodeWithContentDescription("Close player menu").performClick()
+        ui.onNodeWithContentDescription("Play playback").assertExists()
+        scenario!!.onActivity { activity ->
+            assertEquals(android.graphics.Color.BLACK, activity.window.statusBarColor)
+            assertEquals(android.graphics.Color.BLACK, activity.window.navigationBarColor)
+            assertEquals(android.view.WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES, activity.window.attributes.layoutInDisplayCutoutMode)
+        }
+        capture("cinema-player-paused")
+    }
+
+    @Test fun pausedRestorationKeepsPositionAndPauseThroughNetworkFallback() {
+        launchLoggedIn(); openMovie(); ui.onNodeWithText("Play").performClick(); waitForMovingPlayback(); pauseIfPlaying()
+        var before = 0L
+        scenario!!.onActivity { activity -> before = checkNotNull(nativePlayer(activity.window.decorView)).currentPosition }
+        failDirectStream.set(true); scenario!!.recreate()
+        ui.waitUntil(20000) {
+            var ready = false
+            scenario!!.onActivity { activity -> nativePlayer(activity.window.decorView)?.let { player ->
+                ready = usedVpsFallback.get() && !player.playWhenReady && player.playbackState == androidx.media3.common.Player.STATE_READY && kotlin.math.abs(player.currentPosition - before) <= 250
+            } }
+            ready
+        }
+        assertDecodedTestPattern()
+        capture("cinema-paused-fallback-recovery")
     }
 }

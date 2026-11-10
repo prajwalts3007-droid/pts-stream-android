@@ -18,11 +18,14 @@ import org.json.JSONObject
 import org.junit.Assert.*
 import org.junit.Rule
 import org.junit.Test
+import org.junit.After
 import java.io.File
 
 /** Deterministic, synthetic data only. No production API or media is used. */
 class ScreenAuditTest {
     @get:Rule val ui = createComposeRule()
+    private var mock: okhttp3.mockwebserver.MockWebServer? = null
+    @After fun closeMock() { mock?.shutdown() }
 
     private val episode = Episode(101, 1, 1, "A new beginning", 2400.0, "mp4")
     private val series = Title(1, "series", "The Open Road", 2025, "", "A small team explores the world, one story at a time. Synthetic audit fixture.", listOf("Adventure", "Documentary"), listOf(episode), "hevc", "mp4")
@@ -39,6 +42,14 @@ class ScreenAuditTest {
     }
 
     @Test fun renderEveryScreen() {
+        val server = okhttp3.mockwebserver.MockWebServer().apply {
+            dispatcher = object : okhttp3.mockwebserver.Dispatcher() {
+                override fun dispatch(request: okhttp3.mockwebserver.RecordedRequest) = okhttp3.mockwebserver.MockResponse().setHeader("Content-Type", "application/json")
+                    .setBody("""{"pi_bwlimit_kbps":12345,"max_runners":4,"max_pi_transfers":1,"min_free_gib":10,"max_staging_gib":0,"reserve_per_job_gib":6}""")
+            }
+            start()
+        }
+        mock = server
         var screen by mutableIntStateOf(0)
         ui.setContent {
             PtsTheme {
@@ -57,7 +68,7 @@ class ScreenAuditTest {
                                 7 -> TitleScreen(series, library.progress[1], true, emptySet(), "", {}, {}, {}, {})
                                 8 -> DownloadsScreen(emptyList(), {}, {})
                                 9 -> ProfileScreen(admin, 0, {}, {}, {}, {})
-                                10 -> NativeAdminSettings(admin, ApiProvider.create(), {}, {})
+                                10 -> NativeAdminSettings(admin, remember { PtsApi(server.url("/").toString(), okhttp3.CookieJar.NO_COOKIES) }, {}, {})
                                 11 -> SearchScreen("Open Road", {}, listOf(JSONObject("""{"title":"The Open Road","year":2025,"type":"series"}""")), false)
                             }
                         }
@@ -275,7 +286,7 @@ class ScreenAuditTest {
         ui.setContent { PtsTheme { BrowseScreen("Movies", listOf(movie), emptyMap(), emptySet(), "", {}, {}, {}, onViewChange = { selected = it }) } }
         ui.onNodeWithText("1 title").assertDoesNotExist()
         ui.onNodeWithText("Grid").assertDoesNotExist()
-        ui.onNodeWithContentDescription("List view").performClick()
+        ui.onNodeWithContentDescription("Switch to list view").performClick()
         ui.runOnIdle { assertEquals("list", selected) }
         capture("compact-browse-search-icons")
     }
@@ -287,5 +298,44 @@ class ScreenAuditTest {
         assertEquals(labels[1].top, labels[2].top, 2f)
         labels.forEach { assertTrue(it.right <= 320 * InstrumentationRegistry.getInstrumentation().targetContext.resources.displayMetrics.density + 1) }
         capture("compact-watch-actions")
+    }
+
+    @Test fun dashboardOnlyShowsTheRequestedDeviceToggleWithoutShortcutOrLiveBadge() {
+        ui.setContent { PtsTheme { DashboardScreen("Alex", metrics, "vps", {}, {}, listOf(job), emptyList(), {}) } }
+        ui.onNodeWithText("Pipeline").assertDoesNotExist(); ui.onNodeWithText("Live").assertDoesNotExist()
+        ui.onNodeWithText("VPS").assertExists(); ui.onNodeWithText("Pi").assertExists()
+        capture("web-dashboard-toggle")
+    }
+
+    @Test fun queueAllStagesRemainInOneIconAndCountRow() {
+        ui.setContent { PtsTheme { Box(Modifier.width(320.dp).height(640.dp)) { QueueScreen(listOf(job), emptyList(), "queued", {}, {}, {}, { _, _ -> }) } } }
+        val tops = listOf("Queued", "Starting", "Downloading", "Compressing", "Uploading", "To Pi", "Failed", "Completed").map {
+            ui.onNodeWithContentDescription(it).performScrollTo().fetchSemanticsNode().boundsInRoot.top
+        }
+        tops.forEach { assertEquals(tops.first(), it, 2f) }
+        capture("web-queue-single-row")
+    }
+
+    @Test fun movieDetailsHaveNoCodecOrContainerBadges() {
+        ui.setContent { PtsTheme { TitleScreen(movie, null, false, emptySet(), "", {}, {}, {}, {}) } }
+        ui.onNodeWithText("HEVC").assertDoesNotExist(); ui.onNodeWithText("MP4").assertDoesNotExist()
+        capture("web-movie-details")
+    }
+
+    @Test fun episodeDownloadSeasonSelectionIsDirectAndFooterButtonsAlign() {
+        val five = series.copy(episodes = (1..5).map { season -> episode.copy(id = season.toLong(), season = season, title = "Season $season opener") })
+        var selection = emptyList<Episode>()
+        ui.setContent { PtsTheme { EpisodeDownloadDialog(five, emptySet(), emptySet(), { selection = it }, {}) } }
+        ui.onNodeWithTag("download-season-selector").performClick()
+        ui.onNodeWithText("Season 4").performScrollTo().performClick()
+        ui.onNodeWithText("E1 · Season 4 opener").assertExists()
+        ui.onNodeWithText("E1 · Season 1 opener").assertDoesNotExist()
+        ui.onNodeWithText("Whole season").performClick()
+        val cancel = ui.onNodeWithText("Cancel").fetchSemanticsNode().boundsInRoot
+        val download = ui.onNodeWithText("Download").fetchSemanticsNode().boundsInRoot
+        assertEquals(cancel.center.y, download.center.y, 2f)
+        saveAuditCapture("direct-download-season-picker", checkNotNull(InstrumentationRegistry.getInstrumentation().uiAutomation.takeScreenshot()))
+        ui.onNodeWithText("Download").performClick()
+        ui.runOnIdle { assertEquals(listOf(4), selection.map { it.season }) }
     }
 }

@@ -86,4 +86,26 @@ class MediaRoutingTest {
         client().newCall(request()).execute().use { assertEquals("fallback", it.body!!.string()) }
         assertEquals(signed, tunnel.takeRequest(2, TimeUnit.SECONDS)!!.path)
     }
+
+    @Test fun telemetryCountsActualLocalPayloadWithoutCountingHealthOrInferringWifi() {
+        val telemetry = MediaTelemetry()
+        local.enqueue(MockResponse().setBody("pts-pi-lan-v1"))
+        local.enqueue(MockResponse().setResponseCode(206).setBody("local-payload"))
+        client().newCall(request().newBuilder().tag(MediaTelemetry::class.java, telemetry).build()).execute().use { assertEquals("local-payload", it.body!!.string()) }
+        val snapshot = telemetry.snapshot()
+        assertEquals(MediaRoute.LAN, snapshot.route)
+        assertEquals(13L, snapshot.bytes[MediaRoute.LAN]); assertEquals(13L, snapshot.total)
+        assertEquals(0, tunnel.requestCount)
+    }
+
+    @Test fun telemetryRecordsTunnelAfterLocalRejectionNotLocalBandwidth() {
+        val telemetry = MediaTelemetry()
+        local.enqueue(MockResponse().setBody("pts-pi-lan-v1"))
+        local.enqueue(MockResponse().setResponseCode(403).setBody("not-media"))
+        tunnel.enqueue(MockResponse().setBody("internet-payload"))
+        client().newCall(request().newBuilder().tag(MediaTelemetry::class.java, telemetry).build()).execute().use { it.body!!.string() }
+        val snapshot = telemetry.snapshot()
+        assertEquals(MediaRoute.TUNNEL, snapshot.route)
+        assertEquals(0L, snapshot.bytes[MediaRoute.LAN]); assertEquals(16L, snapshot.bytes[MediaRoute.TUNNEL])
+    }
 }

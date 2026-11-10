@@ -7,10 +7,12 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.platform.testTag
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import kotlinx.coroutines.launch
@@ -39,7 +41,7 @@ fun NativeAdminSettings(user: JSONObject, api: PtsApi, onUpdate: () -> Unit, onS
     playbackPrefs: JSONObject = JSONObject(), onPlayback: (String, Any) -> Unit = { _, _ -> }) {
     if (user.optString("role") != "admin") return
     val scope = rememberCoroutineScope()
-    var category by remember { mutableStateOf("pipeline") }
+    var category by rememberSaveable { mutableStateOf("pipeline") }
     var provider by remember { mutableStateOf("") }
     var error by remember { mutableStateOf("") }
     var notice by remember { mutableStateOf("") }
@@ -143,7 +145,7 @@ fun NativeAdminSettings(user: JSONObject, api: PtsApi, onUpdate: () -> Unit, onS
                         "Playback preferences" -> PlaybackPreferencesScreen(playbackPrefs, onPlayback, {}, embedded = true)
                         "Pipeline settings" -> {
                             val labels = linkedMapOf("pi_bwlimit_kbps" to "Pi transfer speed (Mbps)", "max_runners" to "Concurrent runners", "max_pi_transfers" to "Pi transfers", "min_free_gib" to "Minimum free space (GiB)", "max_staging_gib" to "Staging limit (GiB)", "reserve_per_job_gib" to "Reserve per job (GiB)")
-                            if (pipeline != null) labels.forEach { (key, label) -> PtsField(fields[key].orEmpty(), { fields[key] = it }, label, Modifier.fillMaxWidth()) }
+                            if (pipeline != null) labels.forEach { (key, label) -> PtsField(fields[key].orEmpty(), { fields[key] = it }, label, Modifier.fillMaxWidth().testTag("pipeline-$key")) }
                             Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                             PtsPrimaryButton("Save limits", enabled = pipeline != null && !busy) {
                                 try { confirm(AdminCommand("/admin/pipeline-settings", "PUT", pipelineBody(fields.toMap(), pipeline!!)), "Apply pipeline settings?") } catch (e: Exception) { error = e.message.orEmpty() }
