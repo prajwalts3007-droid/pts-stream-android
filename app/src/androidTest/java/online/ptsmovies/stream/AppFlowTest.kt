@@ -724,7 +724,9 @@ class AppFlowTest {
             }
             entered.get() && moving.get()
         }
-        ui.waitUntil(3000) { ui.onAllNodesWithTag("cinema-controls").fetchSemanticsNodes().isEmpty() }
+        // Compose excludes PAUSED Activity roots while Android hosts PiP. An
+        // absent active root is expected here, not a failure to launch the app.
+        ui.waitUntil(3000) { ui.onAllNodesWithTag("cinema-controls").fetchSemanticsNodes(atLeastOneRootRequired = false).isEmpty() }
         saveAuditCapture("automatic-home-pip", checkNotNull(InstrumentationRegistry.getInstrumentation().uiAutomation.takeScreenshot()))
         val context = InstrumentationRegistry.getInstrumentation().targetContext
         // Use the real launcher action/category. ActivityScenario filters lifecycle
