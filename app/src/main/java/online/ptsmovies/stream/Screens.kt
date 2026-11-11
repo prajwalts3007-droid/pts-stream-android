@@ -169,13 +169,7 @@ fun StreamHomeScreen(
         verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
         item { PtsPage("Stream") }
-        item { PtsSearchField(query, { query = it.take(160) }, "Titles or episode names") }
-        item {
-            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                PtsSecondaryButton("Library filters", Modifier.weight(1f), icon = PtsIcons.Settings) { filtersOpen = true }
-                Text(sort.label, Modifier.weight(1f), color = Pts.muted, style = MaterialTheme.typography.labelMedium, maxLines = 2, overflow = TextOverflow.Ellipsis)
-            }
-        }
+        item { LibrarySearchBar(query, { query = it }, { filtersOpen = true }) }
         if (query.isNotBlank()) {
             item { Text("${results.size} results", style = MaterialTheme.typography.bodySmall, color = Pts.muted) }
             if (results.isEmpty()) item { PtsEmpty("No matching titles", actionLabel = "Clear search", icon = PtsIcons.Search) { query = "" } }
@@ -296,16 +290,7 @@ fun BrowseScreen(
             PtsPage(label)
         }
         item(span = { GridItemSpan(maxLineSpan) }) {
-            PtsSearchField(query, { onQuery(it.take(160)) }, "Titles or episode names")
-        }
-        item(span = { GridItemSpan(maxLineSpan) }) {
-            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                PtsSecondaryButton("Filters", Modifier.weight(1f), icon = PtsIcons.Settings) { filtersOpen = true }
-                Text(sort.label, Modifier.weight(1f), color = Pts.muted, style = MaterialTheme.typography.labelMedium, maxLines = 2, overflow = TextOverflow.Ellipsis)
-                PtsIconAction(if (view == "grid") PtsIcons.List else PtsIcons.Grid, if (view == "grid") "Switch to list view" else "Switch to grid view", {
-                    view = if (view == "grid") "list" else "grid"; onViewChange(view)
-                }, tint = Pts.accent)
-            }
+            LibrarySearchBar(query, onQuery, { filtersOpen = true }, view, { view = it; onViewChange(it) })
         }
         if (genres.isNotEmpty()) {
             item(span = { GridItemSpan(maxLineSpan) }) {

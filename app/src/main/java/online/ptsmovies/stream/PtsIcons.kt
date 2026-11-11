@@ -60,6 +60,7 @@ object PtsIcons {
     val Fit by lazy { stroke("fit", "M4 9V4h5 M20 9V4h-5 M4 15v5h5 M20 15v5h-5") }
     val Pip by lazy { stroke("pip", "M3 5h18v14H3z M12 11h7v6h-7z") }
     val Grid by lazy { stroke("grid", "M4 4h6v6H4z M14 4h6v6h-6z M4 14h6v6H4z M14 14h6v6h-6z") }
+    val Filter by lazy { stroke("filter", "M3 4h18l-7 8v7l-4 2v-9z") }
     val List by lazy { stroke("list", "M4 5h3v3H4z M11 6h9 M4 11h3v3H4z M11 12h9 M4 17h3v3H4z M11 18h9") }
     val Lock by lazy { stroke("lock", "M6 11h12v9H6z M9 11V8a3 3 0 0 1 6 0v3") }
     val Clock by lazy { stroke("clock", "M21 12a9 9 0 1 1 -18 0a9 9 0 1 1 18 0 M12 7v5l3 2") }

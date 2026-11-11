@@ -18,6 +18,36 @@ import java.util.concurrent.atomic.AtomicInteger
 class LayoutPolishTest {
     @get:Rule val ui = createComposeRule()
 
+    @Test fun libraryIconsStayBesideSearchWithoutVisibleLabels() {
+        val query = mutableStateOf("")
+        val view = mutableStateOf("grid")
+        var filtersOpened = false
+        ui.setContent { PtsTheme("dark") { Box(Modifier.width(288.dp)) {
+            LibrarySearchBar(query.value, { query.value = it }, { filtersOpened = true }, view.value, { view.value = it })
+        } } }
+        val search = ui.onNodeWithTag("library-search-input").fetchSemanticsNode().boundsInRoot
+        val filter = ui.onNodeWithTag("library-filter-action").fetchSemanticsNode().boundsInRoot
+        val toggle = ui.onNodeWithTag("library-view-action").fetchSemanticsNode().boundsInRoot
+        assertTrue(search.right <= filter.left); assertTrue(filter.right <= toggle.left)
+        assertEquals(search.center.y, filter.center.y, 1f); assertEquals(search.center.y, toggle.center.y, 1f)
+        ui.onNodeWithText("Filters").assertDoesNotExist()
+        ui.onNodeWithText("Library filters").assertDoesNotExist()
+        ui.onNodeWithContentDescription("Library filters").performClick()
+        ui.runOnIdle { assertTrue(filtersOpened) }
+        ui.onNodeWithContentDescription("Switch to list view").performClick()
+        ui.runOnIdle { assertEquals("list", view.value) }
+        ui.onNodeWithContentDescription("Switch to grid view").performClick()
+        ui.onNode(hasSetTextAction()).performTextInput("Signal")
+        ui.runOnIdle { assertEquals("grid", view.value); assertEquals("Signal", query.value) }
+    }
+
+    @Test fun homeSearchShowsOnlyItsFilterIconBesideSearch() {
+        ui.setContent { PtsTheme("dark") { Box(Modifier.width(288.dp)) { LibrarySearchBar("", {}, {}) } } }
+        ui.onNodeWithContentDescription("Library filters").assertIsDisplayed()
+        ui.onNodeWithTag("library-view-action").assertDoesNotExist()
+        ui.onNodeWithText("Relevance").assertDoesNotExist()
+    }
+
     @Test fun sortLivesInsideLibraryFiltersAndResetClearsIt() {
         val filter = mutableStateOf(LibraryFilter(year = 2026))
         val sort = mutableStateOf(LibrarySort.RECENT)
