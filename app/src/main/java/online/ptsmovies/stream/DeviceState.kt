@@ -31,7 +31,7 @@ fun Episode.toJson() = JSONObject().put("id", id).put("season", season).put("epi
     .put("title", title).put("duration", duration).put("container", container).put("description", description).put("size", size)
 fun Title.toJson() = JSONObject().put("id", id).put("kind", kind).put("title", title).put("year", year)
     .put("poster", poster).put("synopsis", synopsis).put("genres", JSONArray(genres)).put("video_codec", codec)
-    .put("container", container).put("episodes", JSONArray(episodes.map { it.toJson() }))
+    .put("container", container).put("episodes", JSONArray(episodes.map { it.toJson() })).put("languages", JSONArray(languages))
 fun parseEpisode(e: JSONObject) = Episode(e.getLong("id"), e.optInt("season"), e.optInt("episode"), e.optString("title"),
     e.optDouble("duration", 0.0), e.optString("container"), e.optString("description"), e.optLong("size"))
 fun parseTitle(t: JSONObject): Title {
@@ -39,7 +39,7 @@ fun parseTitle(t: JSONObject): Title {
     val episodes = t.optJSONArray("episodes") ?: JSONArray()
     return Title(t.getLong("id"), t.optString("kind"), t.optString("title"), t.optInt("year"), t.optString("poster"), t.optString("synopsis"),
         (0 until genres.length()).map { genres.optString(it) }, (0 until episodes.length()).map { parseEpisode(episodes.getJSONObject(it)) },
-        t.optString("video_codec"), t.optString("container"))
+        t.optString("video_codec"), t.optString("container"), titleLanguages(t))
 }
 fun parseLibrary(result: JSONObject): Library {
     val titles = result.optJSONArray("titles") ?: JSONArray()

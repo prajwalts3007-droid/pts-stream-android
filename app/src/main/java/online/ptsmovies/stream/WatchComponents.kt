@@ -96,7 +96,7 @@ fun SeasonEpisodes(
     savedKeys: Set<String> = emptySet(),
     downloading: String = "",
     onPlay: (Episode) -> Unit,
-    onDownload: (Episode) -> Unit
+    onDownload: (Episode) -> Unit, completed: Set<String> = emptySet(), onCompleted: ((Episode, Boolean) -> Unit)? = null
 ) {
     val seasons = remember(title) { title.episodes.map { it.season }.distinct().sorted() }
     var season by rememberSaveable(title.id) { mutableIntStateOf(active?.season
@@ -116,7 +116,8 @@ fun SeasonEpisodes(
                 if (ep.id == active?.id) Text("NOW PLAYING", Modifier.padding(bottom = 4.dp),
                     style = MaterialTheme.typography.labelSmall, color = Pts.accent)
                 EpisodeRow(title, ep, resume?.takeIf { it.episodeId == ep.id }, "${title.id}_${ep.id}" in savedKeys,
-                    downloading, { onPlay(ep) }, { onDownload(ep) })
+                    downloading, { onPlay(ep) }, { onDownload(ep) }, "${title.id}_${ep.id}" in completed,
+                    onCompleted?.let { action -> { action(ep, "${title.id}_${ep.id}" !in completed) } })
             }
         }
     }

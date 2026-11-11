@@ -44,6 +44,7 @@ import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -69,6 +70,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import org.json.JSONArray
@@ -100,6 +102,8 @@ class MainActivity : ComponentActivity() {
     private val preferenceMutex = Mutex()
     private val progressMutex = Mutex()
     private fun journal() = account?.optLong("id")?.let { ProgressJournal(this, it) }
+    private fun episodeProgress() = account?.optLong("id")?.let { EpisodeProgress(this, it) }
+    private var episodeProgressRevision by mutableIntStateOf(0)
     private val selectPhoto = registerForActivityResult(ActivityResultContracts.GetContent()) { uri ->
         if (uri != null) scope.launch {
             try {
@@ -196,14 +200,31 @@ class MainActivity : ComponentActivity() {
     }
 
     private val askNotifications = registerForActivityResult(ActivityResultContracts.RequestPermission()) { }
+    private var subtitleRevision by mutableIntStateOf(0)
+    private var subtitleTarget: Triple<Long, Long, Long>? = null
+    private val pickSubtitle = registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        val target = subtitleTarget; subtitleTarget = null
+        if (uri != null && target != null) scope.launch {
+            try {
+                val bytes = withContext(Dispatchers.IO) { contentResolver.openInputStream(uri)!!.use { input ->
+                    val out = java.io.ByteArrayOutputStream(); val buffer = ByteArray(8192)
+                    while (true) { val n = input.read(buffer); if (n < 0) break; require(out.size() + n <= MAX_SUBTITLE_BYTES) { "Subtitle exceeds 2 MiB" }; out.write(buffer, 0, n) }; out.toByteArray()
+                } }
+                require(target.first == account?.optLong("id")) { "Account changed; choose the subtitle again" }
+                withContext(Dispatchers.IO) { LocalSubtitles(this@MainActivity, target.first).save(target.second, target.third, bytes) }
+                subtitleRevision++; toast("Subtitles imported for this video", true)
+            } catch (e: Exception) { toast(e.message ?: "Could not import subtitles") }
+        }
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         if (Build.VERSION.SDK_INT >= 33 && ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
             askNotifications.launch(Manifest.permission.POST_NOTIFICATIONS)
         }
-        window.statusBarColor = android.graphics.Color.rgb(17, 19, 45)
-        window.navigationBarColor = android.graphics.Color.rgb(32, 35, 67)
+        window.setBackgroundDrawable(android.graphics.drawable.ColorDrawable(android.graphics.Color.BLACK))
+        window.statusBarColor = android.graphics.Color.BLACK
+        window.navigationBarColor = android.graphics.Color.BLACK
         WindowCompat.setDecorFitsSystemWindows(window, false)
         WindowCompat.getInsetsController(window, window.decorView).apply {
             isAppearanceLightStatusBars = false
@@ -337,8 +358,10 @@ class MainActivity : ComponentActivity() {
         try {
             try { progressMutex.withLock { if (owner == account?.optLong("id")) journal()?.flush(api) } } catch (_: Exception) { }
             val fresh = api.library()
+            episodeProgress()?.sync(api)
             val result = (journal()?.overlay(fresh) ?: fresh).let { lib -> lib.copy(titles = lib.titles.map { applyEpisodeNames(it, episodeNames.cached(it)) }) }
             if (generation != sessionGeneration || owner != account?.optLong("id")) return
+            episodeProgressRevision++
             val current = selected?.id?.takeIf { playing }
             library = if (current != null && library?.progress?.containsKey(current) == true) result.copy(progress = result.progress + (current to library!!.progress.getValue(current))) else result
             account?.let { device.library(it.optLong("id"), library!!) }
@@ -352,6 +375,7 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun signOut() {
+        stopService(Intent(this, JobAlertsService::class.java))
         sessionGeneration++
         persistNavigation()
         downloads?.pauseAll()
@@ -457,6 +481,7 @@ class MainActivity : ComponentActivity() {
         val named = applyEpisodeNames(title, episodeNames.cached(title))
         episode = named.episodes.firstOrNull { it.id == ep?.id } ?: ep
         selected = named
+        downloads?.smartNext(named, episode, episodeProgress()?.completed().orEmpty())
         playing = true
         profileOpen = false; downloadsOpen = false
         restoredPosition = -1L; restoredAutoplay = true
@@ -584,6 +609,10 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun markPlayed(title: Title) {
+        val active = episode?.takeIf { selected?.id == title.id && playing }
+        if (title.kind == "series" && active == null) title.episodes.forEach { episodeProgress()?.record(title.id, it.id, 0, it.duration.toLong(), true) }
+        else episodeProgress()?.record(title.id, active?.id ?: 0, 0, active?.duration?.toLong() ?: 0, true)
+        episodeProgressRevision++
         clearedProgress.add(title.id)
         journal()?.markCompleted("${title.id}_${episode?.takeIf { selected?.id == title.id }?.id ?: 0}")
         recordProgress(title.id, episode?.id, 0, 0, clear = true)
@@ -594,10 +623,18 @@ class MainActivity : ComponentActivity() {
     private fun recordProgress(title: Long, ep: Long?, position: Long, duration: Long, clear: Boolean = false) {
         val owner = account?.optLong("id") ?: return
         val log = ProgressJournal(this, owner)
+        if (!clear) EpisodeProgress(this, owner).record(title, ep ?: 0, position, duration, duration > 0 && position >= duration * 95 / 100)
         log.put(title, ep, position, duration, clear)
         library = library?.let { log.overlay(it) }
         library?.let { device.library(owner, it) }
-        scope.launch { progressMutex.withLock { if (owner == account?.optLong("id")) try { log.flush(api) } catch (_: Exception) { } } }
+        scope.launch { progressMutex.withLock { if (owner == account?.optLong("id")) { try { log.flush(api) } catch (_: Exception) { }; EpisodeProgress(this@MainActivity, owner).sync(api) } } }
+    }
+
+    private fun markEpisode(title: Title, ep: Episode, completed: Boolean) {
+        episodeProgress()?.record(title.id, ep.id, 0, ep.duration.toLong(), completed)
+        episodeProgressRevision++
+        scope.launch { episodeProgress()?.sync(api); episodeProgressRevision++ }
+        toast(if (completed) "Episode marked completed" else "Episode marked unwatched", true)
     }
 
     private fun playerPreference(key: String, value: Any) {
@@ -748,6 +785,7 @@ class MainActivity : ComponentActivity() {
     private fun AppShell() {
         BackHandler { routeBack() }
         val user = account ?: return
+        val completed = remember(user.optLong("id"), episodeProgressRevision) { episodeProgress()?.completed().orEmpty() }
         var about by remember { mutableStateOf(false) }
         if (about && profileOpen) SourceCreditsDialog(library?.titles.orEmpty().mapNotNull { episodeNames.cached(it)?.source }.distinct(), { about = false })
         if (editProfile) EditProfileDialog(user, onSave = { name, email ->
@@ -780,6 +818,7 @@ class MainActivity : ComponentActivity() {
                 when {
                     nativeSettings == "downloads" -> DownloadSettingsScreen(NativePreferences(this@MainActivity), { nativeSettings = ""; profileOpen = true }, { downloads?.reconcile(); nativeSettings = ""; profileOpen = true })
                     nativeSettings == "playback" -> PlaybackPreferencesScreen(playbackPrefs, { key, value -> playerPreference(key, value) }, { nativeSettings = ""; profileOpen = true })
+                    nativeSettings == "sync" -> SyncAlertsScreen(user, api) { nativeSettings = ""; profileOpen = true; episodeProgressRevision++ }
                     updatesOpen -> NativeUpdateScreen(NativeUpdates.get(this@MainActivity), { NativeUpdates.get(this@MainActivity).install(this@MainActivity) }, { updatesOpen = false })
                     profileOpen -> ProfileScreen(user, savedVideos.size, { profileOpen = false; downloadsOpen = true }, {
                         openUpdates()
@@ -788,7 +827,7 @@ class MainActivity : ComponentActivity() {
                         onPhoto = { selectPhoto.launch("image/*") }, onRemovePhoto = {
                             scope.launch { try { account = api.json("/auth/avatar", "DELETE").getJSONObject("user"); device.account(account!!); toast("Photo removed", true) }
                                 catch (e: Exception) { toast(e.message ?: "Could not remove photo") } }
-                        }, onPlayback = { nativeSettings = "playback"; profileOpen = false }, onDownloadSettings = { nativeSettings = "downloads"; profileOpen = false }, onAbout = { about = true })
+                        }, onPlayback = { nativeSettings = "playback"; profileOpen = false }, onDownloadSettings = { nativeSettings = "downloads"; profileOpen = false }, onAbout = { about = true }, onSync = { nativeSettings = "sync"; profileOpen = false })
                     downloadsOpen -> DownloadsScreen(savedVideos, { item ->
                         val title = library?.titles?.firstOrNull { it.id == item.titleId }
                         val stored = title ?: item.titleMetadata()
@@ -856,7 +895,7 @@ class MainActivity : ComponentActivity() {
                                 onBack = { selected = null },
                                 onPlay = { ep -> play(t, ep) },
                                 onToggleWatch = { toggleWatch(t) },
-                                onDownload = { ep -> startDownload(t, ep) }, onMarkPlayed = { markPlayed(t) })
+                                onDownload = { ep -> startDownload(t, ep) }, onMarkPlayed = { markPlayed(t) }, related = relatedTitles(t, lib.titles), onRelated = { selected = it }, completed = completed, onEpisodeComplete = { ep, done -> markEpisode(t, ep, done) })
                         } else when (streamTab) {
                             "Home" -> StreamHomeScreen(lib, { selected = it }, { title ->
                                 val resume = lib.progress[title.id]
@@ -865,11 +904,11 @@ class MainActivity : ComponentActivity() {
                                 play(title, next)
                             }, { toggleWatch(it) }, onSeeAll = { streamTab = it }, onMarkPlayed = { markPlayed(it) })
                             "Movies" -> BrowseScreen("Movies", lib.titles.filter { it.kind == "movie" }, lib.progress, lib.watch,
-                                browseQueries["Movies"].orEmpty(), { browseQueries["Movies"] = it }, { selected = it }, { toggleWatch(it) }, device.view("Movies"), { device.view("Movies", it) })
+                                    browseQueries["Movies"].orEmpty(), { browseQueries["Movies"] = it }, { selected = it }, { toggleWatch(it) }, device.view("Movies"), { device.view("Movies", it) }, episodeProgress()?.completed().orEmpty(), savedVideos.map { it.key }.toSet())
                             "Series" -> BrowseScreen("Series", lib.titles.filter { it.kind == "series" }, lib.progress, lib.watch,
-                                browseQueries["Series"].orEmpty(), { browseQueries["Series"] = it }, { selected = it }, { toggleWatch(it) }, device.view("Series"), { device.view("Series", it) })
+                                    browseQueries["Series"].orEmpty(), { browseQueries["Series"] = it }, { selected = it }, { toggleWatch(it) }, device.view("Series"), { device.view("Series", it) }, episodeProgress()?.completed().orEmpty(), savedVideos.map { it.key }.toSet())
                             else -> BrowseScreen("Watchlist", lib.titles, lib.progress, lib.watch,
-                                browseQueries["Watchlist"].orEmpty(), { browseQueries["Watchlist"] = it }, { selected = it }, { toggleWatch(it) }, device.view("Watchlist"), { device.view("Watchlist", it) })
+                                    browseQueries["Watchlist"].orEmpty(), { browseQueries["Watchlist"] = it }, { selected = it }, { toggleWatch(it) }, device.view("Watchlist"), { device.view("Watchlist", it) }, episodeProgress()?.completed().orEmpty(), savedVideos.map { it.key }.toSet())
                         }
                     }
                 }
@@ -882,7 +921,7 @@ class MainActivity : ComponentActivity() {
                     else PtsErrorToast(message) { message = "" }
                 }
             }
-            if (!profileOpen && !updatesOpen && !downloadsOpen && nativeSettings.isBlank()) {
+            if (!profileOpen && !updatesOpen && !downloadsOpen && nativeSettings.isBlank() && WindowInsets.ime.getBottom(LocalDensity.current) == 0) {
                 val pages = when (mode) {
                     "Hub" -> listOf(DockItem("Dashboard", PtsIcons.Home), DockItem("Ingest", PtsIcons.Download, "Download"), DockItem("Queue", PtsIcons.Queue), DockItem("Settings", PtsIcons.Settings))
                     "Files" -> listOf(DockItem("Browse", PtsIcons.Browse), DockItem("Transfers", PtsIcons.Transfers))
@@ -965,10 +1004,10 @@ class MainActivity : ComponentActivity() {
             } else touchControls()
         }
         fun leavePlayer() { if (playerFullscreen) fullscreen(false) else onBack() }
-        fun selectEpisode(next: Episode) { clearedProgress.remove(title.id); journal()?.begin(title.id); episode = next; showEpisodes = false }
+        fun selectEpisode(next: Episode) { clearedProgress.remove(title.id); journal()?.begin(title.id); downloads?.smartNext(title, next, episodeProgress()?.completed().orEmpty()); episode = next; showEpisodes = false }
         var resumeAt by remember(title.id, ep?.id) {
             mutableLongStateOf(if (restoredPosition >= 0) restoredPosition.also { restoredPosition = -1L }
-                else resumePosition(library?.progress?.get(title.id), ep?.id ?: 0L, ep?.duration?.toLong() ?: 0L) * 1000)
+                else resumePosition(episodeProgress()?.resume(title.id, ep?.id ?: 0) ?: library?.progress?.get(title.id), ep?.id ?: 0L, ep?.duration?.toLong() ?: 0L) * 1000)
         }
         val startPlaying = remember { restoredAutoplay.also { restoredAutoplay = true } }
         var desiredPlay by remember { mutableStateOf(startPlaying) }
@@ -976,6 +1015,8 @@ class MainActivity : ComponentActivity() {
             !info.isEncoder && info.supportedTypes.any { it.equals("video/hevc", true) }
         } }
         val source = saved?.file?.toURI()?.toString() ?: api.streamUrl(title, ep, fallback)
+        val externalSubtitle = remember(title.id, ep?.id, subtitleRevision) { LocalSubtitles(context, playbackOwner ?: 0).get(title.id, ep?.id ?: 0) }
+        val mediaItem = remember(source, externalSubtitle?.path, subtitleRevision) { playbackItem(source, externalSubtitle) }
         val exo = remember {
             val dataSource = DefaultDataSource.Factory(context, OkHttpDataSource.Factory(TrackedCallFactory(api.http, telemetry)).setUserAgent("PTS-Library-Android"))
             if (saved != null) dataSource.setTransferListener(object : androidx.media3.datasource.TransferListener {
@@ -988,14 +1029,14 @@ class MainActivity : ComponentActivity() {
                 androidx.media3.exoplayer.source.DefaultMediaSourceFactory(
                     dataSource
                 )).build().apply {
-                setMediaItem(MediaItem.fromUri(source))
+                setMediaItem(mediaItem)
                 setAudioAttributes(androidx.media3.common.AudioAttributes.Builder()
                     .setUsage(androidx.media3.common.C.USAGE_MEDIA).setContentType(androidx.media3.common.C.AUDIO_CONTENT_TYPE_MOVIE).build(), true)
                 setHandleAudioBecomingNoisy(true)
                 trackSelectionParameters = trackSelectionParameters.buildUpon()
                     .setPreferredAudioLanguage(playbackPrefs.optString("audio_lang").ifBlank { null })
                     .setPreferredTextLanguage(playbackPrefs.optString("subtitle_lang").ifBlank { null })
-                    .setTrackTypeDisabled(androidx.media3.common.C.TRACK_TYPE_TEXT, playbackPrefs.optString("subtitle_lang").isBlank()).build()
+                    .setTrackTypeDisabled(androidx.media3.common.C.TRACK_TYPE_TEXT, externalSubtitle == null && playbackPrefs.optString("subtitle_lang").isBlank()).build()
                 if (resumeAt > 0) seekTo(resumeAt)
                 setPlaybackSpeed(speed)
             }
@@ -1025,7 +1066,12 @@ class MainActivity : ComponentActivity() {
                     ended = state == Player.STATE_ENDED
                     if (state == Player.STATE_ENDED) {
                         controls = true
-                        if (playbackOwner == account?.optLong("id")) journal()?.markCompleted("${title.id}_${ep?.id ?: 0}")
+                        if (playbackOwner == account?.optLong("id")) {
+                            journal()?.markCompleted("${title.id}_${ep?.id ?: 0}")
+                            episodeProgress()?.record(title.id, ep?.id ?: 0, 0, exo.duration.coerceAtLeast(0) / 1000, true)
+                            episodeProgressRevision++
+                            scope.launch { episodeProgress()?.sync(api) }
+                        }
                         completedOffline[0] = true
                         if (sleepAtEnd) { exo.pause(); cancelNext = true; sleepAtEnd = false }
                     }
@@ -1057,10 +1103,12 @@ class MainActivity : ComponentActivity() {
                 pipVideoView = null; updatePipParameters()
             }
         }
-        LaunchedEffect(source) {
-            if (exo.currentMediaItem?.localConfiguration?.uri?.toString() != source) {
+        LaunchedEffect(mediaItem, subtitleRevision) {
+            if (exo.currentMediaItem != mediaItem) {
                 val keepPlaying = desiredPlay
-                exo.setMediaItem(MediaItem.fromUri(source), resumeAt.coerceAtLeast(0)); firstFrame = false; error = ""
+                val keepPosition = exo.currentPosition.coerceAtLeast(resumeAt.coerceAtLeast(0))
+                exo.setMediaItem(mediaItem, keepPosition); firstFrame = false; error = ""
+                if (externalSubtitle != null) exo.trackSelectionParameters = exo.trackSelectionParameters.buildUpon().setTrackTypeDisabled(androidx.media3.common.C.TRACK_TYPE_TEXT, false).build()
                 exo.prepare(); exo.playWhenReady = keepPlaying
             }
         }
@@ -1200,12 +1248,17 @@ class MainActivity : ComponentActivity() {
              if (!hevcAvailable) PtsErrorBanner("This device may not support HEVC playback", modifier = Modifier.padding(12.dp))
               Column(Modifier.weight(1f).windowInsetsPadding(WindowInsets.navigationBars).background(Pts.bg).verticalScroll(rememberScrollState()).padding(16.dp), verticalArrangement = Arrangement.spacedBy(9.dp)) {
                  Text(title.title, style = MaterialTheme.typography.titleLarge, color = Pts.text)
-                 ep?.let { Text("S${it.season}E${it.episode} · ${it.title.ifBlank { "Episode ${it.episode}" }}", style = MaterialTheme.typography.bodySmall, color = Pts.muted) }
+                  ep?.let { Text("S${it.season}E${it.episode} · ${it.title.ifBlank { "Episode ${it.episode}" }}", style = MaterialTheme.typography.bodySmall, color = Pts.muted) }
+                  Text("Description", style = MaterialTheme.typography.titleMedium, color = Pts.text)
+                  ShortSynopsis(ep?.description?.takeIf { it.isNotBlank() } ?: title.synopsis.ifBlank { "No description is available for this title." })
                 if (ended && nextEpisode != null && !cancelNext) UpNextCard(nextEpisode, if (autoplay) nextCountdown else null, { selectEpisode(nextEpisode) }, { cancelNext = true })
-                 WatchActionBar(downloaded, "${title.id}_${ep?.id ?: 0}" in journal()?.completed().orEmpty(), title.kind == "series",
+                  WatchActionBar(downloaded, "${title.id}_${ep?.id ?: 0}" in episodeProgress()?.completed().orEmpty(), title.kind == "series",
                      onComplete = { markPlayed(title) }, onSave = { startDownload(title, ep) }, onSeasonDownload = { episodeDownloadTitle = title })
-                if (title.kind == "series") SeasonEpisodes(title, ep, library?.progress?.get(title.id), savedVideos.map { it.key }.toSet(), downloading,
-                    onPlay = { selectEpisode(it) }, onDownload = { startDownload(title, it) })
+                 if (title.kind == "series") SeasonEpisodes(title, ep, library?.progress?.get(title.id), savedVideos.map { it.key }.toSet(), downloading,
+                     onPlay = { selectEpisode(it) }, onDownload = { startDownload(title, it) }, completed = remember(episodeProgressRevision) { episodeProgress()?.completed().orEmpty() }, onCompleted = { e, done -> markEpisode(title, e, done) })
+                 val related = relatedTitles(title, library?.titles.orEmpty())
+                 if (related.isNotEmpty()) PtsPosterShelf("Related", related, library?.progress.orEmpty(), library?.watch.orEmpty(),
+                     { play(it, if (it.kind == "series") it.episodes.firstOrNull() else null) }, { toggleWatch(it) })
              }
             }
           }
@@ -1229,7 +1282,7 @@ class MainActivity : ComponentActivity() {
         if (showEpisodes) androidx.compose.ui.window.Dialog(onDismissRequest = { showEpisodes = false }) {
             PtsCard(Modifier.fillMaxWidth().heightIn(max = 620.dp).verticalScroll(rememberScrollState()), padding = 16.dp) {
                 SeasonEpisodes(title, ep, library?.progress?.get(title.id), savedVideos.map { it.key }.toSet(), downloading,
-                    onPlay = { selectEpisode(it) }, onDownload = { startDownload(title, it) })
+                    onPlay = { selectEpisode(it) }, onDownload = { startDownload(title, it) }, completed = remember(episodeProgressRevision) { episodeProgress()?.completed().orEmpty() }, onCompleted = { e, done -> markEpisode(title, e, done) })
                 PtsSecondaryButton("Close", Modifier.fillMaxWidth()) { showEpisodes = false }
             }
         }
@@ -1261,6 +1314,11 @@ class MainActivity : ComponentActivity() {
                 Column(Modifier.fillMaxWidth().heightIn(max = 560.dp).background(Pts.card, androidx.compose.foundation.shape.RoundedCornerShape(24.dp))
                     .verticalScroll(rememberScrollState()).padding(20.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Text("Audio and subtitles", style = MaterialTheme.typography.titleLarge, color = Pts.text)
+                    PtsSecondaryButton("Import SRT / VTT", Modifier.fillMaxWidth(), icon = PtsIcons.Subtitles) {
+                        subtitleTarget = Triple(playbackOwner ?: 0, title.id, ep?.id ?: 0); pickSubtitle.launch(arrayOf("*/*"))
+                    }
+                    Text("Local files up to 2 MiB. Saved privately for this account and video, including offline playback.", color = Pts.muted, style = MaterialTheme.typography.bodySmall)
+                    if (externalSubtitle != null) PtsSecondaryButton("Remove imported subtitles", Modifier.fillMaxWidth()) { LocalSubtitles(context, playbackOwner ?: 0).remove(title.id, ep?.id ?: 0); subtitleRevision++ }
                     Text("Audio", style = MaterialTheme.typography.labelMedium, color = Pts.muted)
                     if (audioGroups.isEmpty()) Text("No alternate audio tracks", style = MaterialTheme.typography.bodySmall, color = Pts.muted)
                     audioGroups.forEach { group ->
@@ -1398,6 +1456,7 @@ class MainActivity : ComponentActivity() {
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent); setIntent(intent)
         if (intent.getBooleanExtra("open_downloads", false)) { playing = false; mode = "Stream"; downloadsOpen = false; profileOpen = true; updatesOpen = false; streamTab = "Home" }
+        if (intent.getBooleanExtra("open_jobs", false) && admin()) { playing = false; mode = "Hub"; hubTab = "Queue"; profileOpen = false; downloadsOpen = false; updatesOpen = false; nativeSettings = "" }
     }
 
     override fun onStart() {

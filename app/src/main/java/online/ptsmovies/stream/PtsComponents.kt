@@ -75,9 +75,10 @@ val PosterShape = RoundedCornerShape(12.dp)
 fun PtsBackground(modifier: Modifier = Modifier, decorative: Boolean = true, content: @Composable BoxScope.() -> Unit) {
     val accent = Pts.accent
     val spark = Pts.spark
+    val black = LocalPitchBlack.current
     Box(
         Modifier.fillMaxSize().background(Pts.bg).then(modifier).drawBehind {
-            if (!decorative) return@drawBehind
+            if (!decorative || black) return@drawBehind
             drawRect(Brush.radialGradient(
                 colors = listOf(accent.copy(alpha = 0.12f), Color.Transparent),
                 center = Offset(size.width * 0.92f, size.height * 0.03f),
@@ -590,7 +591,7 @@ data class DockItem(val label: String, val icon: ImageVector, val value: String 
 fun PtsDock(items: List<DockItem>, selected: String, onSelect: (String) -> Unit) {
     val accent = Pts.accent
     Row(
-        Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 10.dp).height(66.dp)
+        Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp).heightIn(min = 72.dp)
             .shadow(16.dp, RoundedCornerShape(22.dp), ambientColor = Color(0x33000000), spotColor = Color(0x44000000))
             .clip(RoundedCornerShape(22.dp)).background(Pts.card.copy(alpha = .97f))
             .border(2.dp, Pts.line, RoundedCornerShape(22.dp)).padding(5.dp),
@@ -601,7 +602,7 @@ fun PtsDock(items: List<DockItem>, selected: String, onSelect: (String) -> Unit)
             val bg by animateColorAsState(if (active) Pts.accentSoft else Color.Transparent, label = "dock")
             val tint by animateColorAsState(if (active) Pts.accent else Pts.muted, label = "docktint")
             Box(
-                Modifier.weight(1f).fillMaxHeight().clip(RoundedCornerShape(15.dp)).background(bg)
+                Modifier.weight(1f).height(60.dp).clip(RoundedCornerShape(15.dp)).background(bg)
                     .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null) { onSelect(item.value) }
                     .drawBehind {
                         if (active) drawRect(accent, topLeft = Offset(8.dp.toPx(), size.height - 3.dp.toPx()),
@@ -609,10 +610,10 @@ fun PtsDock(items: List<DockItem>, selected: String, onSelect: (String) -> Unit)
                     },
                 contentAlignment = Alignment.Center
             ) {
-                Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                Column(Modifier.fillMaxWidth().padding(horizontal = 2.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(3.dp)) {
                     Icon(item.icon, item.label, Modifier.size(22.dp), tint = tint)
                     Text(item.label, fontFamily = Nunito, fontWeight = FontWeight.ExtraBold, fontSize = 11.sp,
-                        color = tint, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        color = tint, maxLines = 1, overflow = TextOverflow.Ellipsis, textAlign = androidx.compose.ui.text.style.TextAlign.Center)
                 }
             }
         }

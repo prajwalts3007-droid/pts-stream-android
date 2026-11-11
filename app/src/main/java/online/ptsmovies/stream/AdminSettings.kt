@@ -57,7 +57,6 @@ fun NativeAdminSettings(user: JSONObject, api: PtsApi, onUpdate: () -> Unit, onS
     val fields = remember { mutableStateMapOf<String, String>() }
     var password by remember { mutableStateOf("") }
     var token by remember { mutableStateOf("") }
-    var cleanupToken by remember { mutableStateOf("") }
     var clientId by remember { mutableStateOf("") }
     var account by remember { mutableStateOf("primary") }
     var unlocked by remember { mutableStateOf(false) }
@@ -78,7 +77,7 @@ fun NativeAdminSettings(user: JSONObject, api: PtsApi, onUpdate: () -> Unit, onS
         scope.launch {
             try { val result = api.json(command.path, command.method, command.body); after(result); notice = "Saved" }
             catch (e: Exception) { error = e.message ?: "Request failed" }
-            finally { busy = false; token = ""; cleanupToken = ""; powerPassword = ""; newPassword = "" }
+            finally { busy = false; token = ""; powerPassword = ""; newPassword = "" }
         }
     }
     fun refreshUsers() { scope.launch { try { val a = api.json("/admin/users").optJSONArray("users"); users = (0 until (a?.length() ?: 0)).map { a!!.getJSONObject(it) } } catch (e: Exception) { error = e.message.orEmpty() } } }
@@ -99,14 +98,13 @@ fun NativeAdminSettings(user: JSONObject, api: PtsApi, onUpdate: () -> Unit, onS
     }
     LaunchedEffect(category) {
         error = ""; notice = ""
-        if (category != "devices") cleanupToken = ""
         if (category == "pipeline") refreshPipeline()
         if (category == "users") refreshUsers()
         if (category != "pipeline") { password = ""; token = ""; unlocked = false; provider = "" }
     }
     DisposableEffect(lifecycle) {
         val observer = LifecycleEventObserver { _, event -> if (event == Lifecycle.Event.ON_STOP) {
-            password = ""; token = ""; cleanupToken = ""; powerPassword = ""; newPassword = ""; unlocked = false; pending = null; newUser = false
+            password = ""; token = ""; powerPassword = ""; newPassword = ""; unlocked = false; pending = null; newUser = false
         } }
         lifecycle.addObserver(observer); onDispose { lifecycle.removeObserver(observer) }
     }
@@ -137,17 +135,17 @@ fun NativeAdminSettings(user: JSONObject, api: PtsApi, onUpdate: () -> Unit, onS
         PtsSegmented(listOf("user" to "User", "admin" to "Admin"), role, { role = it })
     }
     fun confirm(command: AdminCommand, message: String) { pending = command; confirmation = message; phrase = ""; powerPassword = "" }
-    LazyColumn(contentPadding = PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+    LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
         item { PtsPage("Settings") }
         item { WebIconTabs(listOf(WebTab("pipeline", "Pipeline", PtsIcons.Pipeline), WebTab("playback", "Playback", PtsIcons.Play),
-            WebTab("devices", "Devices", PtsIcons.Tv), WebTab("users", "Users", PtsIcons.User)), category, { category = it }, "settings-tab-row") }
+            WebTab("devices", "Devices", PtsIcons.Tv), WebTab("users", "Users", PtsIcons.User)), category, { category = it }, "settings-tab-row", fit = true) }
         if (error.isNotBlank()) item { PtsErrorBanner(error) }
         if (notice.isNotBlank()) item { Text(notice, color = Pts.ok) }
         if (busy) item { LinearProgressIndicator(Modifier.fillMaxWidth()) }
         val sections = when (category) {
             "pipeline" -> listOf("API management", "Pipeline settings")
             "playback" -> listOf("Playback preferences")
-            "devices" -> listOf("Power options", "Legacy Hugging Face transfer bucket")
+            "devices" -> listOf("Power options")
             else -> listOf("User management")
         }
         sections.forEach { section ->
@@ -210,16 +208,6 @@ fun NativeAdminSettings(user: JSONObject, api: PtsApi, onUpdate: () -> Unit, onS
                                 }
                                 }
                                 PtsSecondaryButton("Lock panel", Modifier.fillMaxWidth()) { password = ""; token = ""; unlocked = false; github = JSONObject(); google = JSONObject() }
-                            }
-                        }
-                        "Legacy Hugging Face transfer bucket" -> {
-                            Text("Read-only historical cleanup. Hugging Face currently rejects its token; cleanup requires restored account access. Purge All does not remove Pixeldrain files.", color = Pts.muted, style = MaterialTheme.typography.bodySmall)
-                            PtsField(cleanupToken, { cleanupToken = it }, "Replacement token for historical cleanup", Modifier.fillMaxWidth(), password = true)
-                            PtsSecondaryButton("Update cleanup token", enabled = !busy && cleanupToken.isNotBlank()) {
-                                confirm(AdminCommand("/admin/relay/bucket/token", "PUT", JSONObject().put("token", cleanupToken.trim())), "Update the historical cleanup credential only? This does not restore a suspended account.")
-                            }
-                            PtsSecondaryButton("Purge All", danger = true, enabled = !busy) {
-                                confirm(AdminCommand("/admin/relay/bucket/purge", "POST", JSONObject()), "Permanently remove every historical public ZIP-streamer upload and invalidate its text links? Pixeldrain files are not affected. Locked provider access can still prevent cleanup.")
                             }
                         }
                         "Power options" -> listOf("vps" to "VPS", "pi" to "Raspberry Pi").forEach { (target, label) ->

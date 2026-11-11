@@ -232,10 +232,17 @@ fun BrowseScreen(
     onOpen: (Title) -> Unit,
     onToggleWatch: (Title) -> Unit,
     initialView: String = "grid",
-    onViewChange: (String) -> Unit = {}
+    onViewChange: (String) -> Unit = {}, completed: Set<String> = emptySet(), saved: Set<String> = emptySet()
 ) {
     var view by rememberSaveable(tab) { mutableStateOf(initialView) }
     var genre by remember(tab) { mutableStateOf("") }
+    var filtersOpen by remember { mutableStateOf(false) }
+    var year by rememberSaveable(tab) { mutableIntStateOf(0) }
+    var language by rememberSaveable(tab) { mutableStateOf("") }
+    var unwatched by rememberSaveable(tab) { mutableStateOf(false) }
+    var downloaded by rememberSaveable(tab) { mutableStateOf(false) }
+    val selection = LibraryFilter(year, language, unwatched, downloaded)
+    if (filtersOpen) LibraryFiltersDialog(titles, selection, { next -> year = next.year; language = next.language; unwatched = next.unwatched; downloaded = next.downloaded }, { filtersOpen = false })
     val genres = remember(tab, titles) {
         when (tab) {
             "Movies" -> titles.flatMap { it.genres }.distinct().sorted()
@@ -243,8 +250,8 @@ fun BrowseScreen(
             else -> emptyList()
         }.take(10)
     }
-    val filtered = remember(titles, genre, query, watch, tab) {
-        titles.filter { t ->
+    val filtered = remember(titles, genre, query, watch, tab, selection, completed, saved) {
+        filterLibrary(titles, selection, completed, saved).filter { t ->
             (tab != "Watchlist" || t.id in watch) &&
                 (genre.isBlank() || t.genres.any { it.equals(genre, true) }) &&
                 (query.isBlank() || t.title.contains(query, true) || t.genres.any { it.contains(query, true) })
@@ -263,6 +270,7 @@ fun BrowseScreen(
         item(span = { GridItemSpan(maxLineSpan) }) {
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                 PtsSearchField(query, onQuery, "Search", Modifier.weight(1f))
+                PtsIconAction(PtsIcons.Settings, "Library filters", { filtersOpen = true }, tint = Pts.accent)
                 PtsIconAction(if (view == "grid") PtsIcons.List else PtsIcons.Grid, if (view == "grid") "Switch to list view" else "Switch to grid view", {
                     view = if (view == "grid") "list" else "grid"; onViewChange(view)
                 }, tint = Pts.accent)
@@ -276,8 +284,8 @@ fun BrowseScreen(
                 }
             }
         }
-        if (query.isNotBlank() || genre.isNotBlank()) item(span = { GridItemSpan(maxLineSpan) }) {
-            PtsSecondaryButton("Clear search and filters", Modifier.fillMaxWidth()) { genre = ""; onQuery("") }
+        if (query.isNotBlank() || genre.isNotBlank() || selection != LibraryFilter()) item(span = { GridItemSpan(maxLineSpan) }) {
+            PtsSecondaryButton("Clear search and filters", Modifier.fillMaxWidth()) { genre = ""; onQuery(""); year = 0; language = ""; unwatched = false; downloaded = false }
         }
         if (filtered.isEmpty()) {
             item(span = { GridItemSpan(maxLineSpan) }) {
@@ -286,7 +294,7 @@ fun BrowseScreen(
                     if (tab == "Watchlist") "Use the + button on any poster to add it to My List." else "Try a different search or genre.",
                     actionLabel = if (tab == "Watchlist") null else "Clear filters",
                     icon = if (tab == "Watchlist") PtsIcons.Watchlist else PtsIcons.Search
-                ) { genre = ""; onQuery("") }
+                ) { genre = ""; onQuery(""); year = 0; language = ""; unwatched = false; downloaded = false }
             }
         }
         items(filtered, key = { it.id }) { t ->
@@ -319,7 +327,8 @@ fun TitleScreen(
     onPlay: (Episode?) -> Unit,
     onToggleWatch: () -> Unit,
     onDownload: (Episode?) -> Unit,
-    onMarkPlayed: () -> Unit = {}
+    onMarkPlayed: () -> Unit = {}, related: List<Title> = emptyList(), onRelated: (Title) -> Unit = {},
+    completed: Set<String> = emptySet(), onEpisodeComplete: ((Episode, Boolean) -> Unit)? = null
 ) {
     val episodes = remember(title) { title.episodes.sortedWith(compareBy({ it.season }, { it.episode })) }
     LazyColumn(
@@ -361,11 +370,15 @@ fun TitleScreen(
                 }
             }
         }
+        item {
+            Text("Description", color = Pts.text, style = MaterialTheme.typography.titleMedium)
+            ShortSynopsis(title.synopsis.ifBlank { "No description is available for this title." })
+        }
         if (title.kind == "series") {
             item { PtsSecondaryButton("Download episodes", Modifier.fillMaxWidth(), icon = PtsIcons.Download) { onDownload(null) } }
             item {
                 SeasonEpisodes(title, resume = resume, savedKeys = savedKeys, downloading = downloading,
-                    onPlay = { onPlay(it) }, onDownload = { onDownload(it) })
+                    onPlay = { onPlay(it) }, onDownload = { onDownload(it) }, completed = completed, onCompleted = onEpisodeComplete)
             }
         } else {
             item {
@@ -381,6 +394,7 @@ fun TitleScreen(
         if (resume != null) item {
             PtsSecondaryButton("Mark completed", Modifier.fillMaxWidth(), icon = PtsIcons.Check, onClick = onMarkPlayed)
         }
+        if (related.isNotEmpty()) item { PtsPosterShelf("Related", related, emptyMap(), emptySet(), onRelated, {}) }
     }
 }
 
@@ -392,7 +406,7 @@ internal fun EpisodeRow(
     saved: Boolean,
     downloading: String,
     onPlay: () -> Unit,
-    onDownload: () -> Unit
+    onDownload: () -> Unit, completed: Boolean = false, onCompleted: (() -> Unit)? = null
 ) {
     PtsCard(Modifier.fillMaxWidth(), padding = 10.dp, onClick = onPlay) {
         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -403,11 +417,12 @@ internal fun EpisodeRow(
             ) { Icon(PtsIcons.Play, "Play episode", Modifier.size(22.dp), tint = Pts.accent) }
             Column(Modifier.weight(1f).padding(horizontal = 12.dp), verticalArrangement = Arrangement.spacedBy(3.dp)) {
                 Text("E${ep.episode} · ${ep.title.ifBlank { title.title }}", style = MaterialTheme.typography.titleSmall, color = Pts.text, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                if (saved) Text("Downloaded", style = MaterialTheme.typography.labelSmall, color = Pts.muted)
+                if (saved || completed) Text(listOfNotNull(if (saved) "Downloaded" else null, if (completed) "Completed" else null).joinToString(" · "), style = MaterialTheme.typography.labelSmall, color = Pts.muted)
                 if (resume != null && resume.seconds > 0) PtsProgressBar(
                     if (resume.duration > 0) resume.seconds.toFloat() / resume.duration else 0f, height = 4.dp, tint = Pts.spark
                 )
             }
+            if (onCompleted != null) PtsIconAction(PtsIcons.Check, if (completed) "Mark episode unwatched" else "Mark episode completed", onCompleted, tint = if (completed) Pts.ok else Pts.muted, size = 36.dp)
             PtsIconAction(
                 if (saved) PtsIcons.Check else PtsIcons.Download,
                 if (saved) "Saved" else "Save offline",
@@ -429,7 +444,7 @@ fun DownloadsScreen(saved: List<SavedVideo>, onPlay: (SavedVideo) -> Unit, onDel
 @Composable
 fun ProfileScreen(user: JSONObject, savedCount: Int, onDownloads: () -> Unit, onUpdate: () -> Unit, onSection: (String) -> Unit, onSignOut: () -> Unit,
     avatar: String? = null, imageLoader: coil.ImageLoader? = null, theme: String = "dark", onTheme: (String) -> Unit = {},
-    onEdit: () -> Unit = {}, onPhoto: () -> Unit = {}, onRemovePhoto: () -> Unit = {}, onPlayback: () -> Unit = {}, onDownloadSettings: () -> Unit = {}, onAbout: () -> Unit = {}) {
+    onEdit: () -> Unit = {}, onPhoto: () -> Unit = {}, onRemovePhoto: () -> Unit = {}, onPlayback: () -> Unit = {}, onDownloadSettings: () -> Unit = {}, onAbout: () -> Unit = {}, onSync: () -> Unit = {}) {
     val name = user.optString("name").ifBlank { user.optString("username") }
     val role = user.optString("role")
     LazyColumn(
@@ -484,6 +499,7 @@ fun ProfileScreen(user: JSONObject, savedCount: Int, onDownloads: () -> Unit, on
                 MenuRow(PtsIcons.Settings, "Downloads & network", "") { onDownloadSettings() }
                 MenuDivider()
                 MenuRow(PtsIcons.Play, "Playback", "") { onPlayback() }
+                MenuRow(PtsIcons.Refresh, "Sync & alerts", "Episode progress and live job alerts") { onSync() }
                 MenuDivider()
                 MenuRow(PtsIcons.Refresh, "Check for updates", "Signed releases only") { onUpdate() }
                 MenuDivider()

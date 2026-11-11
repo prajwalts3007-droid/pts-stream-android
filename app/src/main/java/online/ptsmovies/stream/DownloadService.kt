@@ -68,12 +68,13 @@ class DownloadRepository internal constructor(private val context: Context, priv
         }
     }
     private fun task(key: String, checkpoint: Boolean = true, transform: (DownloadTask) -> DownloadTask) { update(checkpoint) { s -> s.copy(tasks = s.tasks.map { if (it.key == key) transform(it) else it }) } }
-    fun enqueue(title: Title, episode: Episode?) {
+    fun enqueue(title: Title, episode: Episode?, smart: Boolean = false) {
         if (episode?.container == "hls" || (episode == null && title.container == "hls")) {
             val user = DeviceState(context).account()
             require(user?.optLong("id") == owner && user.optString("role") == "admin") { "Pi MP4 preparation is currently verified only for administrator accounts" }
         }
         val t = DownloadTask(title, episode)
+        if (!smart) prefs.edit().putStringSet("smart_blocked", prefs.getStringSet("smart_blocked", emptySet())!! - t.key).apply()
         if (mutable.value.saved.any { it.key == t.key } || mutable.value.tasks.any { it.key == t.key && it.status in listOf("queued", "preparing", "downloading", "waiting_wifi", "cancelling") }) return
         update { s -> s.copy(tasks = s.tasks.filterNot { it.key == t.key } + t) }
         startService()
@@ -95,6 +96,7 @@ class DownloadRepository internal constructor(private val context: Context, priv
         if (jobs.isEmpty()) reconcile()
     }
     fun cancel(key: String) {
+        prefs.edit().putStringSet("smart_blocked", prefs.getStringSet("smart_blocked", emptySet())!! + key).apply()
         val metadata = mutable.value.tasks.firstOrNull { it.key == key } ?: return
         val running = synchronized(lock) { jobs[key] }
         pause(key)
@@ -114,6 +116,12 @@ class DownloadRepository internal constructor(private val context: Context, priv
     fun remove(saved: SavedVideo) { store.remove(saved); update { s -> s.copy(saved = store.list(), tasks = s.tasks.filterNot { it.key == saved.key }) } }
     fun refresh() { update { it.copy(saved = store.list()) } }
     fun enqueueSeason(title: Title, episodes: List<Episode>) { episodes.filter { ep -> store.find(title, ep) == null }.forEach { enqueue(title, it) } }
+    fun smartNext(title: Title, current: Episode?, completed: Set<String>) {
+        if (current == null || DeviceState(context).account()?.optLong("id") != owner) return
+        val count = NativePreferences(context).downloads().smartEpisodes
+        val skip = mutable.value.tasks.map { it.key }.toSet() + mutable.value.saved.map { it.key } + prefs.getStringSet("smart_blocked", emptySet())!!
+        smartEpisodes(title, current, count, completed, skip).forEach { enqueue(title, it, smart = true) }
+    }
     fun runNext(onStatus: (DownloadTask?) -> Unit) { synchronized(lock) { statusCallback = onStatus }; reconcile() }
     fun reconcile(): Unit = synchronized(lock) {
         val callback = statusCallback ?: return@synchronized
