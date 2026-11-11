@@ -47,6 +47,7 @@ fun NativeAdminSettings(user: JSONObject, api: PtsApi, onUpdate: () -> Unit, onS
     var notice by remember { mutableStateOf("") }
     var busy by remember { mutableStateOf(false) }
     var pipeline by remember { mutableStateOf<JSONObject?>(null) }
+    var formOriginal by remember { mutableStateOf<JSONObject?>(null) }
     var github by remember { mutableStateOf(JSONObject()) }
     var google by remember { mutableStateOf(JSONObject()) }
     var users by remember { mutableStateOf(emptyList<JSONObject>()) }
@@ -78,13 +79,17 @@ fun NativeAdminSettings(user: JSONObject, api: PtsApi, onUpdate: () -> Unit, onS
         }
     }
     fun refreshUsers() { scope.launch { try { val a = api.json("/admin/users").optJSONArray("users"); users = (0 until (a?.length() ?: 0)).map { a!!.getJSONObject(it) } } catch (e: Exception) { error = e.message.orEmpty() } } }
-    fun refreshPipeline() {
+    fun refreshPipeline(statusOnly: Boolean = false) {
         scope.launch { try {
             val value = api.json("/admin/pipeline-settings")
             val keys = listOf("pi_bwlimit_kbps", "max_runners", "max_pi_transfers", "min_free_gib", "max_staging_gib", "reserve_per_job_gib")
             require(keys.all { value.has(it) }) { "Pipeline settings response is incomplete" }
+            val fill = !statusOnly || pipeline == null
             pipeline = value
-            keys.forEach { fields[it] = if (it == "pi_bwlimit_kbps") "%.2f".format(java.util.Locale.US, value.getLong(it) * 8192.0 / 1000000) else value.getLong(it).toString() }
+            if (fill) {
+                formOriginal = value
+                keys.forEach { fields[it] = if (it == "pi_bwlimit_kbps") "%.2f".format(java.util.Locale.US, value.getLong(it) * 8192.0 / 1000000) else value.getLong(it).toString() }
+            }
         } catch (e: Exception) { error = e.message.orEmpty() } }
     }
     LaunchedEffect(category) {
@@ -156,9 +161,9 @@ fun NativeAdminSettings(user: JSONObject, api: PtsApi, onUpdate: () -> Unit, onS
                             }
                             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                             PtsPrimaryButton("Save limits", Modifier.weight(1f), enabled = pipeline != null && !busy) {
-                                try { confirm(AdminCommand("/admin/pipeline-settings", "PUT", pipelineBody(fields.toMap(), pipeline!!)), "Apply pipeline settings?") } catch (e: Exception) { error = e.message.orEmpty() }
+                                try { confirm(AdminCommand("/admin/pipeline-settings", "PUT", pipelineBody(fields.toMap(), formOriginal ?: pipeline!!)), "Apply pipeline settings?") } catch (e: Exception) { error = e.message.orEmpty() }
                             }
-                            PtsSecondaryButton("Refresh status", Modifier.weight(1f)) { refreshPipeline() }
+                            PtsSecondaryButton("Refresh status", Modifier.weight(1f)) { refreshPipeline(statusOnly = true) }
                             }
                         }
                         "API management" -> {

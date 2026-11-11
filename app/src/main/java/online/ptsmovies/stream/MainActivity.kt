@@ -475,9 +475,12 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun loadQueue() {
+        val owner = account?.optLong("id")
+        val generation = sessionGeneration
         scope.launch {
             try {
                 val data = api.json("/queue")
+                if (generation != sessionGeneration || owner != account?.optLong("id") || !admin()) return@launch
                 queueJobs = data.optJSONArray("jobs").objects()
                 queueDone = data.optJSONArray("completed").objects()
             } catch (e: Exception) { toast("Queue: ${e.message}") }
