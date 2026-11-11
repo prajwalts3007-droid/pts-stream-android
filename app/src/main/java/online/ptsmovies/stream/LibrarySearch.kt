@@ -7,8 +7,11 @@ enum class LibrarySort(val label: String) {
     RELEVANCE("Relevance"), RECENT("Recently added"), TITLE_ASC("Title · A–Z"), TITLE_DESC("Title · Z–A"), YEAR_DESC("Year · newest"), YEAR_ASC("Year · oldest")
 }
 
+private val latinMarks = Regex("(?<=[a-z])\\p{M}+")
+private val searchPunctuation = Regex("[^\\p{L}\\p{N}\\p{M}]+")
+private val searchSpace = Regex("\\s+")
 fun searchWords(text: String): String = Normalizer.normalize(text.take(8000), Normalizer.Form.NFKD).lowercase(Locale.ROOT)
-    .replace(Regex("(?<=[a-z])\\p{M}+"), "").replace(Regex("[^\\p{L}\\p{N}\\p{M}]+"), " ").trim().replace(Regex("\\s+"), " ")
+    .replace(latinMarks, "").replace(searchPunctuation, " ").trim().replace(searchSpace, " ")
 
 /** Bounded edit distance, not a network lookup or an unconstrained fuzzy scan. */
 fun closeSearchWord(query: String, word: String): Boolean {
@@ -26,7 +29,7 @@ fun closeSearchWord(query: String, word: String): Boolean {
     return previous.last() <= limit
 }
 
-data class SearchEntry(val title: Title, val name: String, val episodes: List<String>, val genres: String)
+data class SearchEntry(val title: Title, val name: String, val episodes: List<String>, val genres: String, val added: Long = addedMillis(title.addedAt))
 fun indexLibrary(titles: List<Title>): List<SearchEntry> = titles.map { title ->
     SearchEntry(title, searchWords(title.title), title.episodes.map { searchWords("${it.title} s${it.season} e${it.episode} s${it.season.toString().padStart(2, '0')}e${it.episode.toString().padStart(2, '0')} s${it.season}e${it.episode}") }, searchWords(title.genres.joinToString(" ")))
 }
@@ -53,14 +56,14 @@ fun addedMillis(value: String): Long = runCatching { java.time.Instant.parse(val
 
 fun searchLibrary(index: List<SearchEntry>, text: String, sort: LibrarySort): List<Title> {
     val query = searchWords(text.take(160))
-    val results = index.mapIndexedNotNull { order, entry -> searchScore(entry, query).takeIf { it > 0 }?.let { Triple(entry.title, it, order) } }
+    val results = index.mapIndexedNotNull { order, entry -> searchScore(entry, query).takeIf { it > 0 }?.let { Triple(entry, it, order) } }
     val comparator = when (sort) {
-        LibrarySort.RELEVANCE -> compareByDescending<Triple<Title, Int, Int>> { it.second }.thenBy { it.third }
-        LibrarySort.RECENT -> compareByDescending<Triple<Title, Int, Int>> { addedMillis(it.first.addedAt) }.thenBy { it.third }
-        LibrarySort.TITLE_ASC -> compareBy<Triple<Title, Int, Int>> { searchWords(it.first.title) }.thenBy { it.first.id }
-        LibrarySort.TITLE_DESC -> compareByDescending<Triple<Title, Int, Int>> { searchWords(it.first.title) }.thenBy { it.first.id }
-        LibrarySort.YEAR_DESC -> compareByDescending<Triple<Title, Int, Int>> { it.first.year }.thenBy { searchWords(it.first.title) }
-        LibrarySort.YEAR_ASC -> compareBy<Triple<Title, Int, Int>> { if (it.first.year > 0) it.first.year else Int.MAX_VALUE }.thenBy { searchWords(it.first.title) }
+        LibrarySort.RELEVANCE -> compareByDescending<Triple<SearchEntry, Int, Int>> { it.second }.thenBy { it.third }
+        LibrarySort.RECENT -> compareByDescending<Triple<SearchEntry, Int, Int>> { it.first.added }.thenBy { it.third }
+        LibrarySort.TITLE_ASC -> compareBy<Triple<SearchEntry, Int, Int>> { it.first.name }.thenBy { it.first.title.id }
+        LibrarySort.TITLE_DESC -> compareByDescending<Triple<SearchEntry, Int, Int>> { it.first.name }.thenBy { it.first.title.id }
+        LibrarySort.YEAR_DESC -> compareByDescending<Triple<SearchEntry, Int, Int>> { it.first.title.year }.thenBy { it.first.name }
+        LibrarySort.YEAR_ASC -> compareBy<Triple<SearchEntry, Int, Int>> { if (it.first.title.year > 0) it.first.title.year else Int.MAX_VALUE }.thenBy { it.first.name }
     }
-    return results.sortedWith(comparator).map { it.first }
+    return results.sortedWith(comparator).map { it.first.title }
 }

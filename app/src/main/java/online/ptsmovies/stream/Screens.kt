@@ -150,27 +150,26 @@ fun StreamHomeScreen(
     var downloaded by rememberSaveable { mutableStateOf(false) }
     val selection = LibraryFilter(year, language, unwatched, downloaded)
     val sort = LibrarySort.entries.firstOrNull { it.name == sortName } ?: LibrarySort.RELEVANCE
-    val searchIndex = remember(library.titles) { indexLibrary(library.titles) }
     if (filtersOpen) LibraryFiltersDialog(library.titles, selection, { next -> year = next.year; language = next.language; unwatched = next.unwatched; downloaded = next.downloaded },
         { filtersOpen = false }, sort, { sortName = it.name; onSortChange(it.name) })
-    val results = remember(searchIndex, query, sort, selection, completed, saved) { filterLibrary(searchLibrary(searchIndex, query, sort), selection, completed, saved) }
-    val featured = remember(results) { results.filter { it.poster.startsWith("https://") }.ifEmpty { results }.take(4) }
-    val continueWatching = remember(library, results) {
-        results.filter { val p = library.progress[it.id]; p != null && p.duration > 0 && p.seconds > 5 && p.seconds < p.duration - 15 }
-    }
-    val movies = results.filter { it.kind == "movie" }
-    val series = results.filter { it.kind == "series" }
+    val queryResults = rememberLibraryResults(library.titles, query, sort, selection, completed, saved)
+    val results = queryResults.orEmpty()
+    val shelves = remember(results, library.progress) { homeShelves(results, library.progress) }
+    val featured = shelves.featured
+    val continueWatching = shelves.continuing
+    val movies = shelves.movies
+    val series = shelves.shows
     val ptsMotionForPager = ptsMotionEnabled()
     val fontScale = LocalDensity.current.fontScale
     BoxWithConstraints(Modifier.fillMaxSize()) {
     val resultColumns = libraryColumns((maxWidth - 32.dp).value, fontScale, false)
     LazyColumn(
-        contentPadding = PaddingValues(start = 16.dp, end = 16.dp, bottom = 20.dp),
+        contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 12.dp, bottom = 20.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
-        item { PtsPage("Stream") }
-        item { LibrarySearchBar(query, { query = it }, { filtersOpen = true }) }
-        if (query.isNotBlank()) {
+        item { LibrarySearchBar(query, { query = it }, { filtersOpen = true }, filtersActive = libraryFiltersActive(selection, sort)) }
+        if (queryResults == null) item { androidx.compose.material3.LinearProgressIndicator(Modifier.fillMaxWidth(), color = Pts.accent) }
+        else if (query.isNotBlank()) {
             item { Text("${results.size} results", style = MaterialTheme.typography.bodySmall, color = Pts.muted) }
             if (results.isEmpty()) item { PtsEmpty("No matching titles", actionLabel = "Clear search", icon = PtsIcons.Search) { query = "" } }
             results.chunked(resultColumns).forEach { pair -> item(key = "result-${pair.first().id}") {
@@ -190,7 +189,7 @@ fun StreamHomeScreen(
                     Column(verticalArrangement = Arrangement.spacedBy(9.dp)) {
                         HorizontalPager(state = pager, pageSpacing = 12.dp, modifier = Modifier.fillMaxWidth()) { index ->
                             val t = featured[index]
-                            PtsHero(t, t.id in library.watch, { onOpen(t) }, { onPlay(t) }, { onToggleWatch(t) })
+                            PtsHero(t, t.id in library.watch, { onPlay(t) }, { onPlay(t) }, { onToggleWatch(t) })
                         }
                         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Center) {
                             repeat(featured.size) { index ->
@@ -206,7 +205,7 @@ fun StreamHomeScreen(
             }
             if (movies.isNotEmpty()) item {
                 Column {
-                    PtsSectionHeader("Movies") {
+                    PtsSectionHeader("Recently added movies") {
                         Text("See all", style = MaterialTheme.typography.labelLarge, color = Pts.accent,
                             modifier = Modifier.clickable { onSeeAll("Movies") }.padding(start = 8.dp))
                     }
@@ -219,7 +218,7 @@ fun StreamHomeScreen(
             }
             if (series.isNotEmpty()) item {
                 Column {
-                    PtsSectionHeader("TV Shows") {
+                    PtsSectionHeader("Recently added shows") {
                         Text("See all", style = MaterialTheme.typography.labelLarge, color = Pts.accent,
                             modifier = Modifier.clickable { onSeeAll("Series") }.padding(start = 8.dp))
                     }
@@ -258,10 +257,9 @@ fun BrowseScreen(
     var downloaded by rememberSaveable(tab) { mutableStateOf(false) }
     var sortName by rememberSaveable(tab) { mutableStateOf(initialSort) }
     val sort = LibrarySort.entries.firstOrNull { it.name == sortName } ?: LibrarySort.RELEVANCE
-    val searchIndex = remember(titles) { indexLibrary(titles) }
     val selection = LibraryFilter(year, language, unwatched, downloaded)
     if (filtersOpen) LibraryFiltersDialog(titles, selection, { next -> year = next.year; language = next.language; unwatched = next.unwatched; downloaded = next.downloaded },
-        { filtersOpen = false }, sort, { sortName = it.name; onSortChange(it.name) })
+        { filtersOpen = false }, sort, { sortName = it.name; onSortChange(it.name) }, onReset = { genre = "" })
     val genres = remember(tab, titles) {
         when (tab) {
             "Movies" -> titles.flatMap { it.genres }.distinct().sorted()
@@ -269,28 +267,25 @@ fun BrowseScreen(
             else -> emptyList()
         }.take(10)
     }
-    val filtered = remember(searchIndex, genre, query, watch, tab, selection, completed, saved, sort) {
-        filterLibrary(searchLibrary(searchIndex, query, sort), selection, completed, saved).filter { t ->
+    val queryResults = rememberLibraryResults(titles, query, sort, selection, completed, saved)
+    val filtered = remember(queryResults, genre, watch, tab) {
+        queryResults.orEmpty().filter { t ->
             (tab != "Watchlist" || t.id in watch) &&
                 (genre.isBlank() || t.genres.any { it.equals(genre, true) })
         }
     }
-    val label = when (tab) { "Movies" -> "Movies"; "Series" -> "TV Shows"; "Watchlist" -> "My List"; else -> tab }
     val motion = ptsMotionEnabled()
     val fontScale = LocalDensity.current.fontScale
     BoxWithConstraints(Modifier.fillMaxSize()) {
     val columns = libraryColumns((maxWidth - 32.dp).value, fontScale, view == "list")
     LazyVerticalGrid(
         columns = GridCells.Fixed(columns),
-        contentPadding = PaddingValues(start = 16.dp, end = 16.dp, bottom = 20.dp),
+        contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 12.dp, bottom = 20.dp),
         horizontalArrangement = Arrangement.spacedBy(12.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
         item(span = { GridItemSpan(maxLineSpan) }) {
-            PtsPage(label)
-        }
-        item(span = { GridItemSpan(maxLineSpan) }) {
-            LibrarySearchBar(query, onQuery, { filtersOpen = true }, view, { view = it; onViewChange(it) })
+            LibrarySearchBar(query, onQuery, { filtersOpen = true }, view, { view = it; onViewChange(it) }, libraryFiltersActive(selection, sort, genre))
         }
         if (genres.isNotEmpty()) {
             item(span = { GridItemSpan(maxLineSpan) }) {
@@ -300,17 +295,18 @@ fun BrowseScreen(
                 }
             }
         }
-        if (query.isNotBlank() || genre.isNotBlank() || selection != LibraryFilter()) item(span = { GridItemSpan(maxLineSpan) }) {
-            PtsSecondaryButton("Clear search and filters", Modifier.fillMaxWidth()) { genre = ""; onQuery(""); year = 0; language = ""; unwatched = false; downloaded = false }
+        if (query.isNotBlank() || libraryFiltersActive(selection, sort, genre)) item(span = { GridItemSpan(maxLineSpan) }) {
+            PtsSecondaryButton("Clear search and filters", Modifier.fillMaxWidth()) { genre = ""; onQuery(""); year = 0; language = ""; unwatched = false; downloaded = false; sortName = LibrarySort.RELEVANCE.name; onSortChange(sortName) }
         }
-        if (filtered.isEmpty()) {
+        if (queryResults == null) item(span = { GridItemSpan(maxLineSpan) }) { androidx.compose.material3.LinearProgressIndicator(Modifier.fillMaxWidth(), color = Pts.accent) }
+        else if (filtered.isEmpty()) {
             item(span = { GridItemSpan(maxLineSpan) }) {
                 PtsEmpty(
                     if (tab == "Watchlist") "Nothing saved yet" else "No matching titles",
                     if (tab == "Watchlist") "Use the + button on any poster to add it to My List." else "Try a different search or genre.",
                     actionLabel = if (tab == "Watchlist") null else "Clear filters",
                     icon = if (tab == "Watchlist") PtsIcons.Watchlist else PtsIcons.Search
-                ) { genre = ""; onQuery(""); year = 0; language = ""; unwatched = false; downloaded = false }
+                ) { genre = ""; onQuery(""); year = 0; language = ""; unwatched = false; downloaded = false; sortName = LibrarySort.RELEVANCE.name; onSortChange(sortName) }
             }
         }
         items(filtered, key = { it.id }) { t ->
@@ -365,7 +361,7 @@ fun TitleScreen(
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Box(Modifier.widthIn(max = 116.dp).fillMaxWidth(.36f).aspectRatio(2f / 3f).clip(PosterShape).background(Pts.soft)
                         .border(1.dp, Pts.line, PosterShape)) {
-                        if (title.poster.startsWith("https://")) AsyncImage(title.poster, "Poster", Modifier.fillMaxSize(), contentScale = androidx.compose.ui.layout.ContentScale.Crop)
+                        if (title.poster.startsWith("https://")) PtsPosterImage(title.poster, "Poster", Modifier.fillMaxSize())
                         else Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                             Text(title.title.take(1).uppercase(), fontFamily = Nunito, fontWeight = FontWeight.Black, fontSize = 36.sp, color = Pts.accent)
                         }
@@ -461,7 +457,7 @@ fun DownloadsScreen(saved: List<SavedVideo>, onPlay: (SavedVideo) -> Unit, onDel
 @Composable
 fun ProfileScreen(user: JSONObject, savedCount: Int, onDownloads: () -> Unit, onUpdate: () -> Unit, onSection: (String) -> Unit, onSignOut: () -> Unit,
     avatar: String? = null, imageLoader: coil.ImageLoader? = null, theme: String = "dark", onTheme: (String) -> Unit = {},
-    onEdit: () -> Unit = {}, onPhoto: () -> Unit = {}, onRemovePhoto: () -> Unit = {}, onPlayback: () -> Unit = {}, onDownloadSettings: () -> Unit = {}, onAbout: () -> Unit = {}, onSync: () -> Unit = {}) {
+    onEdit: () -> Unit = {}, onPhoto: () -> Unit = {}, onRemovePhoto: () -> Unit = {}, onPlayback: () -> Unit = {}, onDownloadSettings: () -> Unit = {}, onAbout: () -> Unit = {}, onSync: () -> Unit = {}, onPassword: () -> Unit = {}) {
     val name = user.optString("name").ifBlank { user.optString("username") }
     val role = user.optString("role")
     LazyColumn(
@@ -491,6 +487,7 @@ fun ProfileScreen(user: JSONObject, savedCount: Int, onDownloads: () -> Unit, on
                 Text("Appearance", style = MaterialTheme.typography.titleMedium, color = Pts.text)
                 PtsSegmented(listOf("system" to "System", "light" to "Light", "dark" to "Dark"), theme, onTheme)
                 PtsSecondaryButton("Edit profile", Modifier.fillMaxWidth(), onClick = onEdit)
+                PtsSecondaryButton("Change password", Modifier.fillMaxWidth(), onClick = onPassword)
                 if (avatar != null) PtsButtonPair(first = { PtsSecondaryButton("Change photo", it, onClick = onPhoto) },
                     second = { PtsSecondaryButton("Remove photo", it, onClick = onRemovePhoto) })
                 else PtsSecondaryButton("Change photo", Modifier.fillMaxWidth(), onClick = onPhoto)
@@ -804,7 +801,7 @@ fun SearchScreen(query: String, onQuery: (String) -> Unit, results: List<JSONObj
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Box(Modifier.width(54.dp).height(80.dp).clip(RoundedCornerShape(9.dp)).background(Pts.soft).border(1.dp, Pts.line, RoundedCornerShape(9.dp))) {
                         val poster = result.optString("poster")
-                        if (poster.startsWith("https://")) AsyncImage(poster, null, Modifier.fillMaxSize(), contentScale = androidx.compose.ui.layout.ContentScale.Crop)
+                        if (poster.startsWith("https://")) PtsPosterImage(poster, null, Modifier.fillMaxSize())
                         else Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                             Text(result.optString("title").take(1).uppercase(), fontFamily = Nunito, fontWeight = FontWeight.Black, color = Pts.accent)
                         }

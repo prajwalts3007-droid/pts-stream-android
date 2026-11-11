@@ -95,6 +95,8 @@ class MainActivity : ComponentActivity() {
     private var resumeAfterBackground = false
     private var foregroundSync: Job? = null
     private var sessionGeneration = 0
+    private var roleVerified by mutableStateOf(false)
+    private var librarySave: Job? = null
     private var nativeSettings by mutableStateOf("")
     private var episodeDownloadTitle by mutableStateOf<Title?>(null)
     private var sleepDeadline by mutableLongStateOf(0L)
@@ -154,6 +156,8 @@ class MainActivity : ComponentActivity() {
     private var savedVideos by mutableStateOf(emptyList<SavedVideo>())
     private var fileJob: Job? = null
     private var fileGeneration = 0
+    private var filesEntriesKey by mutableStateOf("")
+    private var filesCheckedAt = 0L
 
     private var metrics by mutableStateOf<JSONObject?>(null)
     private var metricsTarget by mutableStateOf("vps")
@@ -259,7 +263,7 @@ class MainActivity : ComponentActivity() {
                     episodeDownloadTitle?.let { title ->
                         EpisodeDownloadDialog(title, savedVideos.map { it.key }.toSet(), journal()?.completed().orEmpty(),
                             onStart = { episodes -> episodeDownloadTitle = null; try { downloads?.enqueueSeason(title, episodes); toast("Downloads queued", true) } catch (e: Exception) { toast(e.message ?: "Cannot queue downloads") } },
-                            onClose = { episodeDownloadTitle = null }, allowHls = admin())
+                            onClose = { episodeDownloadTitle = null }, allowHls = account != null)
                     }
                     when {
                         loading -> PtsLoading()
@@ -288,20 +292,23 @@ class MainActivity : ComponentActivity() {
         val cached = device.account()
         if (cached != null) {
             account = cached
-            library = device.library(cached.optLong("id"))?.let { ProgressJournal(this, cached.optLong("id")).overlay(it) }
+            library = withContext(Dispatchers.IO) { device.library(cached.optLong("id"))?.let { ProgressJournal(this@MainActivity, cached.optLong("id")).overlay(it) } }
             attachDownloads()
             mode = "Stream"
-            restoreNavigation()
+            if (cached.optString("role") != "admin") restoreNavigation()
             loading = false
         }
         try {
             val verified = api.me()
             if (generation != sessionGeneration) return
             if (cached != null && cached.optLong("id") != verified.optLong("id")) {
+                librarySave?.cancel(); filesEntries = emptyList(); filesEntriesKey = ""
                 downloads?.pauseAll(); device.clearSession(); library = null; selected = null; episode = null
                 playing = false; profileOpen = false; downloadsOpen = false; updatesOpen = false; navigationRestored = false
             }
             account = verified
+            roleVerified = true
+            if (!admin()) restrictToStream()
             device.account(account!!)
             attachDownloads()
             if (cached == null) mode = "Stream"
@@ -309,11 +316,7 @@ class MainActivity : ComponentActivity() {
             refreshLibrary()
             loadPlaybackPrefs()
             restoreNavigation()
-            if (account!!.optString("role") == "admin") {
-                loadMetrics()
-                loadQueue()
-                loadSettings()
-            }
+            // Hub requests are started only by the visible Hub lifecycle, not login.
         } catch (e: CancellationException) { throw e }
         catch (e: Exception) {
             if (e is ApiException && e.status == 401) { account = null; library = null; device.clearSession(); downloads?.pauseAll(); playing = false; selected = null; downloadsOpen = false; profileOpen = false; updatesOpen = false; navigationRestored = false }
@@ -336,10 +339,10 @@ class MainActivity : ComponentActivity() {
     }
 
     private suspend fun finishSignIn(user: JSONObject) {
-        account = user; device.account(user); attachDownloads(); mode = "Stream"
+        account = user; roleVerified = true; device.account(user); attachDownloads(); mode = "Stream"
+        if (!admin()) restrictToStream()
         toast("Welcome back, " + user.optString("name").ifBlank { user.optString("username") }, true)
         refreshLibrary(); loadPlaybackPrefs()
-        if (user.optString("role") == "admin") { loadMetrics(); loadQueue(); loadSettings() }
     }
 
     private fun signInGoogle(remember: Boolean) {
@@ -368,12 +371,14 @@ class MainActivity : ComponentActivity() {
             try { progressMutex.withLock { if (owner == account?.optLong("id")) journal()?.flush(api) } } catch (_: Exception) { }
             val fresh = api.library()
             episodeProgress()?.sync(api)
-            val result = (journal()?.overlay(fresh) ?: fresh).let { lib -> lib.copy(titles = lib.titles.map { applyEpisodeNames(it, episodeNames.cached(it)) }) }
+            val result = withContext(Dispatchers.IO) {
+                ProgressJournal(this@MainActivity, owner).overlay(fresh).let { lib -> lib.copy(titles = lib.titles.map { applyEpisodeNames(it, episodeNames.cached(it)) }) }
+            }
             if (generation != sessionGeneration || owner != account?.optLong("id")) return
             episodeProgressRevision++
             val current = playbackTitle?.id?.takeIf { playing }
             library = if (current != null && library?.progress?.containsKey(current) == true) result.copy(progress = result.progress + (current to library!!.progress.getValue(current))) else result
-            account?.let { device.library(it.optLong("id"), library!!) }
+            saveLibraryCache(owner, library!!)
             val repository = downloads
             scope.launch { if (repository?.owner == owner) { repository.store.hydrate(result.titles); repository.refresh() } }
             selected?.let { old -> library?.titles?.firstOrNull { it.id == old.id }?.let { selected = it } }
@@ -388,6 +393,7 @@ class MainActivity : ComponentActivity() {
         val signedOutOwner = account?.optLong("id")
         stopService(Intent(this, JobAlertsService::class.java))
         sessionGeneration++
+        roleVerified = false; librarySave?.cancel()
         persistNavigation()
         downloads?.pauseAll()
         downloadWatch?.cancel()
@@ -402,7 +408,7 @@ class MainActivity : ComponentActivity() {
             finally {
                 account = null; library = null; selected = null; playbackTitle = null; miniPlayer = false; playing = false; profileOpen = false; downloadsOpen = false
                 device.clearSession(); signedOutOwner?.let { DownloadNotifications.clear(this@MainActivity, it) }; navigationRestored = false; updatesOpen = false
-                queueJobs = emptyList(); queueDone = emptyList(); metrics = null; users = emptyList()
+                queueJobs = emptyList(); queueDone = emptyList(); metrics = null; users = emptyList(); filesEntries = emptyList(); filesEntriesKey = ""
                 savedVideos = emptyList(); downloadTasks = emptyList(); downloading = ""; message = ""; startupError = ""
                 fileClipboard = null; fileEditor = null; fileStatus = ""; clearedProgress.clear()
                 relayJobs = emptyList()
@@ -417,11 +423,28 @@ class MainActivity : ComponentActivity() {
         messageOk = ok
     }
 
-    private fun admin(): Boolean = account?.optString("role") == "admin"
+    private fun admin(): Boolean = roleVerified && account?.optString("role") == "admin"
+
+    private fun restrictToStream() {
+        mode = "Stream"
+        fileJob?.cancel(); fileOperation?.cancel(); searchJob?.cancel(); fileGeneration++
+        fileEditor = null; fileClipboard = null; filesEntries = emptyList(); filesEntriesKey = ""; filesLoading = false
+        queueJobs = emptyList(); queueDone = emptyList(); metrics = null; users = emptyList(); ops = emptyList(); relayJobs = emptyList()
+        stopService(Intent(this, JobAlertsService::class.java))
+    }
+
+    private fun saveLibraryCache(owner: Long, value: Library) {
+        librarySave?.cancel()
+        val generation = sessionGeneration
+        librarySave = scope.launch {
+            val serialized = withContext(Dispatchers.Default) { value.toJson().toString() }
+            if (generation == sessionGeneration && account?.optLong("id") == owner) device.librarySerialized(owner, serialized)
+        }
+    }
 
     private fun enterMode(next: String) {
         if (!admin() && next != "Stream") return
-        mode = next
+        mode = streamOnlyMode(if (admin()) "admin" else "user", next)
         profileOpen = false; downloadsOpen = false; updatesOpen = false; selected = null
         if (!miniPlayer) playing = false
         persistNavigation()
@@ -533,15 +556,19 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun loadMetrics() {
-        if (metricsRefreshing) return
+        if (!admin() || metricsRefreshing) return
         metricsRefreshing = true
+        val owner = account?.optLong("id"); val generation = sessionGeneration
         scope.launch {
-            try { metrics = api.json("/system/metrics") } catch (e: Exception) { toast("Metrics: ${e.message}") }
+            try { val result = api.json("/system/metrics"); if (admin() && owner == account?.optLong("id") && generation == sessionGeneration) metrics = result }
+            catch (e: CancellationException) { throw e }
+            catch (e: Exception) { if (admin() && generation == sessionGeneration) toast("Metrics: ${e.message}") }
             finally { metricsRefreshing = false }
         }
     }
 
     private fun loadQueue() {
+        if (!admin()) return
         if (queueRefreshing) { queueReloadPending = true; return }
         queueRefreshing = true
         val owner = account?.optLong("id")
@@ -578,6 +605,7 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun loadSettings() {
+        if (!admin()) return
         scope.launch {
             try { users = api.json("/admin/users").optJSONArray("users").objects() } catch (_: Exception) { }
             try { githubConfigured = api.json("/admin/github").optBoolean("configured", true) } catch (_: Exception) { githubConfigured = false }
@@ -585,6 +613,7 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun search(query: String) {
+        if (!admin()) return
         searchQuery = query
         searchJob?.cancel()
         if (query.trim().length < 2) { searchResults = emptyList(); searchLoading = false; return }
@@ -598,24 +627,34 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    private fun loadFiles(device: String = filesDevice, path: String = filesPath) {
+    private fun loadFiles(device: String = filesDevice, path: String = filesPath, force: Boolean = true) {
+        if (!admin()) return
+        val key = "$device/$path"
+        if (!force && filesEntriesKey == key && android.os.SystemClock.elapsedRealtime() - filesCheckedAt < 15000) return
         fileJob?.cancel()
         val generation = ++fileGeneration
+        val owner = account?.optLong("id"); val session = sessionGeneration
+        if (filesEntriesKey != key) filesEntries = emptyList()
         filesLoading = true
         fileJob = scope.launch {
             try {
                 val entries = api.json("/admin/files?path=${java.net.URLEncoder.encode(path, "UTF-8")}&device=$device").optJSONArray("entries").objects()
-                if (generation == fileGeneration && device == filesDevice && path == filesPath) filesEntries = entries
+                if (admin() && owner == account?.optLong("id") && session == sessionGeneration && generation == fileGeneration && device == filesDevice && path == filesPath) {
+                    filesEntries = entries; filesEntriesKey = key; filesCheckedAt = android.os.SystemClock.elapsedRealtime()
+                }
             } catch (e: CancellationException) { throw e }
-            catch (e: Exception) { filesEntries = emptyList(); toast("Files: ${e.message}") }
+            catch (e: Exception) { if (admin() && session == sessionGeneration && generation == fileGeneration) toast("Files: ${e.message}") }
             finally { if (generation == fileGeneration) filesLoading = false }
         }
     }
 
     private fun loadOps() {
+        if (!admin()) return
+        val owner = account?.optLong("id"); val generation = sessionGeneration
         scope.launch {
             try {
                 val next = api.json("/admin/files/ops").optJSONArray("ops").objects()
+                if (!admin() || owner != account?.optLong("id") || generation != sessionGeneration) return@launch
                 val finished = next.any { op -> op.optString("state") != "running" && ops.none { it.optString("id") == op.optString("id") && it.optString("state") == op.optString("state") } }
                 ops = next
                 if (finished && mode == "Files" && filesTab == "Browse") loadFiles()
@@ -624,7 +663,9 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun loadRelay() {
-        scope.launch { try { relayJobs = api.json("/relay").optJSONArray("jobs").objects() } catch (_: Exception) { } }
+        if (!admin()) return
+        val owner = account?.optLong("id"); val generation = sessionGeneration
+        scope.launch { try { val result = api.json("/relay").optJSONArray("jobs").objects(); if (admin() && owner == account?.optLong("id") && generation == sessionGeneration) relayJobs = result } catch (_: Exception) { } }
     }
 
     private fun loadPlaybackPrefs() {
@@ -659,7 +700,7 @@ class MainActivity : ComponentActivity() {
         if (!clear) EpisodeProgress(this, owner).record(title, ep ?: 0, position, duration, duration > 0 && position >= duration * 95 / 100)
         log.put(title, ep, position, duration, clear)
         library = library?.let { log.overlay(it) }
-        library?.let { device.library(owner, it) }
+        library?.let { saveLibraryCache(owner, it) }
         scope.launch { progressMutex.withLock { if (owner == account?.optLong("id")) { try { log.flush(api) } catch (_: Exception) { }; EpisodeProgress(this@MainActivity, owner).sync(api) } } }
     }
 
@@ -820,6 +861,8 @@ class MainActivity : ComponentActivity() {
         val user = account ?: return
         val completed = remember(user.optLong("id"), episodeProgressRevision) { episodeProgress()?.completed().orEmpty() }
         var about by remember { mutableStateOf(false) }
+        var passwordOpen by remember { mutableStateOf(false) }
+        if (passwordOpen && profileOpen) PasswordDialog(api, { passwordOpen = false; toast("Password updated", true) }, { passwordOpen = false })
         if (about && profileOpen) SourceCreditsDialog(library?.titles.orEmpty().mapNotNull { episodeNames.cached(it)?.source }.distinct(), { about = false })
         if (editProfile) EditProfileDialog(user, onSave = { name, email ->
             scope.launch { try {
@@ -827,7 +870,7 @@ class MainActivity : ComponentActivity() {
                 device.account(account!!); editProfile = false; toast("Profile synced", true)
             } catch (e: Exception) { toast(e.message ?: "Could not save profile") } }
         }, onClose = { editProfile = false })
-        fileEditor?.let { editor -> FileEditorDialog(editor, fileBusy, { saveFileEditor(it) }, { fileEditor = null }) }
+        if (admin()) fileEditor?.let { editor -> FileEditorDialog(editor, fileBusy, { saveFileEditor(it) }, { fileEditor = null }) }
         LaunchedEffect(mode, hubTab, user.optLong("id")) {
             if (mode == "Hub" && admin()) lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
                 while (true) {
@@ -838,6 +881,10 @@ class MainActivity : ComponentActivity() {
             }
         }
         val name = user.optString("name").ifBlank { user.optString("username") }
+        val streamUser = remember(user, roleVerified) { if (admin()) user else JSONObject(user.toString()).put("role", "user") }
+        val movieTitles = remember(library?.titles) { library?.titles.orEmpty().filter { it.kind == "movie" } }
+        val seriesTitles = remember(library?.titles) { library?.titles.orEmpty().filter { it.kind == "series" } }
+        val savedKeys = remember(savedVideos) { savedVideos.map { it.key }.toSet() }
         val pageRoute = when {
             nativeSettings.isNotBlank() -> "preferences/$nativeSettings"
             updatesOpen -> "updates"
@@ -850,7 +897,7 @@ class MainActivity : ComponentActivity() {
         }
         Column(Modifier.fillMaxSize()) {
             PtsTopBar(
-                title = when (mode) { "Files" -> "PTSFiles"; else -> "PTS Library" },
+                title = sectionBrand(if (admin()) mode else "Stream"),
                 initial = name.take(1).uppercase(),
                 onAvatar = { profileOpen = true; downloadsOpen = false },
                 onTitle = {
@@ -861,16 +908,16 @@ class MainActivity : ComponentActivity() {
                 when {
                     nativeSettings == "downloads" -> DownloadSettingsScreen(NativePreferences(this@MainActivity), { nativeSettings = ""; profileOpen = true }, { downloads?.reconcile(); nativeSettings = ""; profileOpen = true })
                     nativeSettings == "playback" -> PlaybackPreferencesScreen(playbackPrefs, { key, value -> playerPreference(key, value) }, { nativeSettings = ""; profileOpen = true })
-                    nativeSettings == "sync" -> SyncAlertsScreen(user, api) { nativeSettings = ""; profileOpen = true; episodeProgressRevision++ }
+                    nativeSettings == "sync" -> SyncAlertsScreen(streamUser, api) { nativeSettings = ""; profileOpen = true; episodeProgressRevision++ }
                     updatesOpen -> NativeUpdateScreen(NativeUpdates.get(this@MainActivity), { NativeUpdates.get(this@MainActivity).install(this@MainActivity) }, { updatesOpen = false })
-                    profileOpen -> ProfileScreen(user, savedVideos.size, { profileOpen = false; downloadsOpen = true }, {
+                    profileOpen -> ProfileScreen(streamUser, savedVideos.size, { profileOpen = false; downloadsOpen = true }, {
                         openUpdates()
                     }, { enterMode(it) }, { signOut() }, avatar = api.imageUrl(user.optString("avatar")), imageLoader = images,
                         theme = device.theme, onTheme = { device.theme(it) }, onEdit = { editProfile = true },
                         onPhoto = { selectPhoto.launch("image/*") }, onRemovePhoto = {
                             scope.launch { try { account = api.json("/auth/avatar", "DELETE").getJSONObject("user"); device.account(account!!); toast("Photo removed", true) }
                                 catch (e: Exception) { toast(e.message ?: "Could not remove photo") } }
-                        }, onPlayback = { nativeSettings = "playback"; profileOpen = false }, onDownloadSettings = { nativeSettings = "downloads"; profileOpen = false }, onAbout = { about = true }, onSync = { nativeSettings = "sync"; profileOpen = false })
+                        }, onPlayback = { nativeSettings = "playback"; profileOpen = false }, onDownloadSettings = { nativeSettings = "downloads"; profileOpen = false }, onAbout = { about = true }, onSync = { nativeSettings = "sync"; profileOpen = false }, onPassword = { passwordOpen = true })
                     downloadsOpen -> DownloadsScreen(savedVideos, { item ->
                         val title = library?.titles?.firstOrNull { it.id == item.titleId }
                         val stored = title ?: item.titleMetadata()
@@ -910,9 +957,9 @@ class MainActivity : ComponentActivity() {
                             }
                         })
                     } else {
-                        LaunchedEffect(filesDevice, filesPath) { loadFiles() }
+                        LaunchedEffect(filesDevice, filesPath) { loadFiles(force = false) }
                         LaunchedEffect(Unit) { lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) { while (true) { loadOps(); delay(4000) } } }
-                        FilesScreen(filesDevice, filesPath, filesEntries, filesLoading,
+                        FilesScreen(filesDevice, filesPath, if (filesEntriesKey == "$filesDevice/$filesPath") filesEntries else emptyList(), filesLoading,
                             onDevice = { filesDevice = it; filesPath = "" },
                             onPath = { filesPath = it },
                             onRefresh = { loadFiles() },
@@ -946,12 +993,12 @@ class MainActivity : ComponentActivity() {
                                     ?: title.episodes.minWithOrNull(compareBy({ it.season }, { it.episode })) else null
                                 play(title, next)
                             }, { toggleWatch(it) }, onSeeAll = { streamTab = it }, onMarkPlayed = { markPlayed(it) }, initialSort = device.sort("Home"), onSortChange = { device.sort("Home", it) }, completed = completed, saved = savedVideos.map { it.key }.toSet())
-                            "Movies" -> BrowseScreen("Movies", lib.titles.filter { it.kind == "movie" }, lib.progress, lib.watch,
-                                    browseQueries["Movies"].orEmpty(), { browseQueries["Movies"] = it }, { selected = it }, { toggleWatch(it) }, device.view("Movies"), { device.view("Movies", it) }, episodeProgress()?.completed().orEmpty(), savedVideos.map { it.key }.toSet(), device.sort("Movies"), { device.sort("Movies", it) })
-                            "Series" -> BrowseScreen("Series", lib.titles.filter { it.kind == "series" }, lib.progress, lib.watch,
-                                    browseQueries["Series"].orEmpty(), { browseQueries["Series"] = it }, { selected = it }, { toggleWatch(it) }, device.view("Series"), { device.view("Series", it) }, episodeProgress()?.completed().orEmpty(), savedVideos.map { it.key }.toSet(), device.sort("Series"), { device.sort("Series", it) })
+                            "Movies" -> BrowseScreen("Movies", movieTitles, lib.progress, lib.watch,
+                                    browseQueries["Movies"].orEmpty(), { browseQueries["Movies"] = it }, { selected = it }, { toggleWatch(it) }, device.view("Movies"), { device.view("Movies", it) }, completed, savedKeys, device.sort("Movies"), { device.sort("Movies", it) })
+                            "Series" -> BrowseScreen("Series", seriesTitles, lib.progress, lib.watch,
+                                    browseQueries["Series"].orEmpty(), { browseQueries["Series"] = it }, { selected = it }, { toggleWatch(it) }, device.view("Series"), { device.view("Series", it) }, completed, savedKeys, device.sort("Series"), { device.sort("Series", it) })
                             else -> BrowseScreen("Watchlist", lib.titles, lib.progress, lib.watch,
-                                    browseQueries["Watchlist"].orEmpty(), { browseQueries["Watchlist"] = it }, { selected = it }, { toggleWatch(it) }, device.view("Watchlist"), { device.view("Watchlist", it) }, episodeProgress()?.completed().orEmpty(), savedVideos.map { it.key }.toSet(), device.sort("Watchlist"), { device.sort("Watchlist", it) })
+                                    browseQueries["Watchlist"].orEmpty(), { browseQueries["Watchlist"] = it }, { selected = it }, { toggleWatch(it) }, device.view("Watchlist"), { device.view("Watchlist", it) }, completed, savedKeys, device.sort("Watchlist"), { device.sort("Watchlist", it) })
                         }
                     }
                 }
@@ -966,7 +1013,7 @@ class MainActivity : ComponentActivity() {
             }
             if (playing && miniPlayer && !inPip) Spacer(Modifier.height(84.dp))
             if (!profileOpen && !updatesOpen && !downloadsOpen && nativeSettings.isBlank() && WindowInsets.ime.getBottom(LocalDensity.current) == 0) {
-                val pages = when (mode) {
+                val pages = when (if (admin()) mode else "Stream") {
                     "Hub" -> listOf(DockItem("Dashboard", PtsIcons.Home), DockItem("Ingest", PtsIcons.Download, "Download"), DockItem("Queue", PtsIcons.Queue), DockItem("Settings", PtsIcons.Settings))
                     "Files" -> listOf(DockItem("Browse", PtsIcons.Browse), DockItem("Transfers", PtsIcons.Transfers))
                     else -> listOf(
@@ -1322,7 +1369,7 @@ class MainActivity : ComponentActivity() {
           }
         }
         if (showSleep) androidx.compose.ui.window.Dialog(onDismissRequest = { showSleep = false }) {
-            PtsCard(Modifier.fillMaxWidth()) {
+            PtsCard(Modifier.fillMaxWidth().heightIn(max = 560.dp).verticalScroll(rememberScrollState())) {
                 Text("Sleep timer", style = MaterialTheme.typography.titleLarge, color = Pts.text)
                 listOf(0, 15, 30, 60).forEach { minutes ->
                     PtsSecondaryButton(if (minutes == 0) "Off" else "$minutes minutes", Modifier.fillMaxWidth()) {
@@ -1378,8 +1425,8 @@ class MainActivity : ComponentActivity() {
                     audioGroups.forEach { group ->
                         (0 until group.length).forEach { index ->
                             val format = group.getTrackFormat(index)
-                            val label = format.label?.takeIf { it.isNotBlank() } ?: format.language?.let { Locale.forLanguageTag(it).displayLanguage } ?: "Track ${index + 1}"
-                            PtsSecondaryButton(listOfNotNull(label, format.sampleMimeType?.substringAfter('/'), format.channelCount.takeIf { it > 0 }?.let { "${it}ch" }).joinToString(" · "), Modifier.fillMaxWidth(),
+                            val label = trackLanguageName(format.language)
+                            PtsSecondaryButton(label, Modifier.fillMaxWidth(),
                                 icon = if (group.isTrackSelected(index)) PtsIcons.Check else null, enabled = group.isTrackSupported(index)) {
                                 exo.trackSelectionParameters = exo.trackSelectionParameters.buildUpon()
                                     .setPreferredAudioLanguage(format.language)
@@ -1399,7 +1446,7 @@ class MainActivity : ComponentActivity() {
                     textGroups.forEach { group ->
                         (0 until group.length).forEach { index ->
                             val format = group.getTrackFormat(index)
-                            val label = format.label?.takeIf { it.isNotBlank() } ?: format.language?.let { Locale.forLanguageTag(it).displayLanguage } ?: "Subtitle ${index + 1}"
+                            val label = trackLanguageName(format.language)
                             PtsSecondaryButton(label.replaceFirstChar { it.uppercase() }, Modifier.fillMaxWidth(), icon = if (group.isTrackSelected(index)) PtsIcons.Check else null, enabled = group.isTrackSupported(index)) {
                                 exo.trackSelectionParameters = exo.trackSelectionParameters.buildUpon()
                                     .setPreferredTextLanguage(format.language)
@@ -1472,9 +1519,10 @@ class MainActivity : ComponentActivity() {
         if (navigationRestored) return
         val nav = device.navigation()
         if (nav.optLong("owner") == account?.optLong("id")) {
-            mode = if (admin()) nav.optString("mode", "Hub") else "Stream"
-            hubTab = nav.optString("hub", "Dashboard"); filesTab = nav.optString("files", "Browse")
-            streamTab = nav.optString("stream", "Home").takeUnless { it == "Downloads" } ?: "Home"
+            mode = streamOnlyMode(if (admin()) "admin" else "user", nav.optString("mode", "Stream"))
+            hubTab = nav.optString("hub").takeIf { it in setOf("Dashboard", "Queue", "Download", "Settings") } ?: "Dashboard"
+            filesTab = nav.optString("files").takeIf { it in setOf("Browse", "Transfers") } ?: "Browse"
+            streamTab = nav.optString("stream").takeIf { it in setOf("Home", "Movies", "Series", "Watchlist") } ?: "Home"
             filesPath = nav.optString("path"); filesDevice = nav.optString("device", "vps")
             selected = library?.titles?.firstOrNull { it.id == nav.optLong("title") }
                 ?: nav.optJSONObject("selected")?.let { runCatching { parseTitle(it) }.getOrNull() }
@@ -1482,15 +1530,15 @@ class MainActivity : ComponentActivity() {
             miniPlayer = nav.optBoolean("mini_player")
             episode = playbackTitle?.episodes?.firstOrNull { it.id == nav.optLong("episode") }
             downloadsOpen = nav.optBoolean("downloads")
-            if (intent?.getBooleanExtra("open_downloads", false) == true) { downloadsOpen = false; profileOpen = true }
             profileOpen = nav.optBoolean("profile"); updatesOpen = nav.optBoolean("updates")
             playing = nav.optBoolean("playing") && playbackTitle != null && (miniPlayer || (!downloadsOpen && !updatesOpen && !profileOpen))
             restoredPosition = nav.optLong("position", -1L); restoredAutoplay = nav.optBoolean("autoplay", true)
-            nativeSettings = nav.optString("native_settings")
+            nativeSettings = nav.optString("native_settings").takeIf { it in setOf("downloads", "playback", "sync") }.orEmpty()
             sleepDeadline = nav.optLong("sleep_deadline"); sleepAtEnd = nav.optBoolean("sleep_at_end")
             val queries = nav.optJSONObject("queries")
             queries?.keys()?.forEach { browseQueries[it] = queries.optString(it) }
         }
+        if (intent?.getBooleanExtra("open_downloads", false) == true) { if (playing) miniPlayer = true; downloadsOpen = false; profileOpen = true; updatesOpen = false; nativeSettings = ""; mode = "Stream" }
         if (intent?.getBooleanExtra("open_jobs", false) == true && admin()) {
             playing = false; mode = "Hub"; hubTab = "Queue"; profileOpen = false; downloadsOpen = false; updatesOpen = false; nativeSettings = ""
         }
@@ -1510,7 +1558,7 @@ class MainActivity : ComponentActivity() {
             .put("playing", playing).put("position", pos).put("autoplay", resumeAfterBackground || exo?.isPlaying == true)
             .put("native_settings", nativeSettings).put("sleep_deadline", sleepDeadline).put("sleep_at_end", sleepAtEnd)
             .put("queries", queries))
-        library?.let { device.library(user.optLong("id"), it) }
+        // The library is cached when it changes, never re-serialized on section taps.
     }
 
     override fun onNewIntent(intent: Intent) {
@@ -1535,7 +1583,9 @@ class MainActivity : ComponentActivity() {
                         try {
                             val user = api.me()
                             if (user.optLong("id") != account?.optLong("id")) { downloads?.pauseAll(); device.clearSession(); account = null; library = null; playing = false; continue }
-                            account = user; device.account(user); if (!admin() && mode != "Stream") enterMode("Stream")
+                            val wasAdmin = admin()
+                            account = user; roleVerified = true; device.account(user)
+                            if (!admin() && (wasAdmin || mode != "Stream")) restrictToStream()
                             refreshLibrary(); loadPlaybackPrefs(); downloads?.refresh()
                         } catch (e: CancellationException) { throw e }
                         catch (e: ApiException) { if (e.status == 401) { downloads?.pauseAll(); device.clearSession(); account = null; library = null; playing = false } }

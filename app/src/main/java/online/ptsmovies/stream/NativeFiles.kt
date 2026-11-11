@@ -78,8 +78,7 @@ fun NativeFilesScreen(
             }, onDismiss = { pending = null }
         ) { if (input) PtsField(name, { name = it }, "Name", Modifier.fillMaxWidth()) }
     }
-    LazyColumn(Modifier.testTag("files-list"), contentPadding = PaddingValues(start = 16.dp, end = 16.dp, bottom = 20.dp), verticalArrangement = Arrangement.spacedBy(0.dp)) {
-        item { PtsPage("Browse") }
+    LazyColumn(Modifier.testTag("files-list"), contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 12.dp, bottom = 20.dp), verticalArrangement = Arrangement.spacedBy(0.dp)) {
         item { PtsSegmented(listOf("vps" to "VPS", "pi" to "Raspberry Pi"), device, onDevice) }
         item {
                 Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {

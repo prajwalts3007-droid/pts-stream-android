@@ -107,7 +107,8 @@ private fun DownloadPoster(model: Any?, imageLoader: coil.ImageLoader?, compact:
     Box(Modifier.width(if (compact) 40.dp else 54.dp).height(if (compact) 58.dp else 78.dp).clip(RoundedCornerShape(7.dp)).background(Pts.soft), contentAlignment = Alignment.Center) {
         Icon(PtsIcons.Film, null, tint = Pts.muted)
         if (model != null && model != "") {
-            if (imageLoader == null) AsyncImage(model, "Download poster", Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
+            if (model is String && model.startsWith("https://")) PtsPosterImage(model, "Download poster", Modifier.fillMaxSize())
+            else if (imageLoader == null) AsyncImage(model, "Download poster", Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
             else AsyncImage(model, "Download poster", imageLoader, Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
         }
     }

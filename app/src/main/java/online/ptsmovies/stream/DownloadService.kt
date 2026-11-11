@@ -72,7 +72,8 @@ class DownloadRepository internal constructor(private val context: Context, priv
     fun enqueue(title: Title, episode: Episode?, smart: Boolean = false) {
         if (episode?.container == "hls" || (episode == null && title.container == "hls")) {
             val user = DeviceState(context).account()
-            require(user?.optLong("id") == owner && user.optString("role") == "admin") { "Pi MP4 preparation is currently verified only for administrator accounts" }
+            require(!smart) { "Smart downloads do not automatically prepare HLS media" }
+            require(canRequestOfflinePreparation(owner, user?.optLong("id") ?: 0, user?.optString("role"))) { "Sign in to prepare an offline download" }
         }
         val t = DownloadTask(title, episode)
         if (!smart) prefs.edit().putStringSet("smart_blocked", prefs.getStringSet("smart_blocked", emptySet())!! - t.key).apply()
@@ -138,8 +139,8 @@ class DownloadRepository internal constructor(private val context: Context, priv
                 val worker = scope.launch(start = CoroutineStart.LAZY) {
                     try {
                         val prepared = if (next.episode?.container == "hls" || (next.episode == null && next.title.container == "hls")) {
-                            val user = DeviceState(context).account()
-                            require(user?.optLong("id") == owner && user.optString("role") == "admin") { "Administrator authorization is required for Pi MP4 preparation" }
+                            val user = api.me()
+                            require(canRequestOfflinePreparation(owner, user.optLong("id"), user.optString("role"))) { "The signed-in account changed or cannot prepare this download" }
                             task(next.key) { it.copy(status = "preparing") }
                             statusCallback?.invoke(mutable.value.tasks.firstOrNull { it.key == next.key })
                             prepareOfflineMp4(api, next.title, next.episode)

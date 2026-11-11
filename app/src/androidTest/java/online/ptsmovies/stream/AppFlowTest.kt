@@ -166,7 +166,7 @@ class AppFlowTest {
     private fun launchLoggedIn() {
         signedIn.set(true)
         scenario = ActivityScenario.launch(MainActivity::class.java)
-        waitForText("Stream")
+        waitForText("PTS Stream")
         if (role == "admin") {
             ui.onNodeWithContentDescription("Open profile").performClick()
             ui.onNodeWithText("Hub").performScrollTo().performClick()
@@ -253,7 +253,7 @@ class AppFlowTest {
         ui.onAllNodes(hasSetTextAction())[0].performTextInput("viewer")
         ui.onAllNodes(hasSetTextAction())[1].performTextInput("synthetic-password")
         ui.onNodeWithText("Sign in").performScrollTo().performClick()
-        waitForText("Stream")
+        waitForText("PTS Stream")
         ui.onNodeWithText("TV Shows").performClick()
         waitForText("No matching titles")
         scenario!!.recreate()

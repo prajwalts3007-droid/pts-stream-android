@@ -20,7 +20,7 @@ fun PtsTitleListRow(title: Title, marked: Boolean, onOpen: () -> Unit, onToggle:
     PtsCard(modifier.fillMaxWidth().testTag("poster-list-${title.id}"), padding = 12.dp, onClick = onOpen) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Box(Modifier.width(64.dp).height(92.dp).testTag("poster-list-art-${title.id}").clip(RoundedCornerShape(8.dp)).background(Pts.soft)) {
-                if (title.poster.startsWith("https://")) AsyncImage(title.poster, null, Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
+                if (title.poster.startsWith("https://")) PtsPosterImage(title.poster, null, Modifier.fillMaxSize())
             }
             Column(Modifier.weight(1f).padding(horizontal = 12.dp), verticalArrangement = Arrangement.spacedBy(5.dp)) {
                 Text(title.title, style = MaterialTheme.typography.titleMedium, color = Pts.text, maxLines = 2, overflow = TextOverflow.Ellipsis)

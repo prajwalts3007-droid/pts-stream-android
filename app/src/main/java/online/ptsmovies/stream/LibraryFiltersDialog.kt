@@ -11,7 +11,7 @@ import androidx.compose.ui.window.Dialog
 
 @Composable
 fun LibraryFiltersDialog(titles: List<Title>, value: LibraryFilter, onChange: (LibraryFilter) -> Unit, onClose: () -> Unit,
-    sort: LibrarySort = LibrarySort.RELEVANCE, onSortChange: (LibrarySort) -> Unit = {}) {
+    sort: LibrarySort = LibrarySort.RELEVANCE, onSortChange: (LibrarySort) -> Unit = {}, onReset: () -> Unit = {}) {
     Dialog(onClose) {
         PtsCard(Modifier.fillMaxWidth().heightIn(max = 580.dp).ptsPageMotion("library-filters").verticalScroll(rememberScrollState())) {
             Text("Library filters", style = MaterialTheme.typography.titleLarge, color = Pts.text)
@@ -21,7 +21,7 @@ fun LibraryFiltersDialog(titles: List<Title>, value: LibraryFilter, onChange: (L
             Text("Languages use available audio-track metadata; missing languages are not guessed.", color = Pts.muted, style = MaterialTheme.typography.bodySmall)
             PreferenceSwitch("Unwatched only", value.unwatched) { onChange(value.copy(unwatched = it)) }
             PreferenceSwitch("Downloaded on this device", value.downloaded) { onChange(value.copy(downloaded = it)) }
-            PtsButtonPair(first = { PtsSecondaryButton("Reset", it) { onChange(LibraryFilter()); onSortChange(LibrarySort.RELEVANCE) } },
+            PtsButtonPair(first = { PtsSecondaryButton("Reset", it) { onChange(LibraryFilter()); onSortChange(LibrarySort.RELEVANCE); onReset() } },
                 second = { PtsPrimaryButton("Done", it, onClick = onClose) })
         }
     }

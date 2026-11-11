@@ -505,7 +505,7 @@ fun PtsPosterCard(
                 Text(title.title.take(1).uppercase(), fontFamily = Nunito, fontWeight = FontWeight.Black, fontSize = 34.sp, color = Pts.accent)
             }
             if (title.poster.startsWith("https://")) {
-                AsyncImage(title.poster, "Poster for ${title.title}", Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
+                PtsPosterImage(title.poster, "Poster for ${title.title}", Modifier.fillMaxSize())
             }
             val seconds = resume?.seconds ?: 0L
             val total = resume?.duration ?: 0L
@@ -552,12 +552,12 @@ fun PtsPosterShelf(label: String, titles: List<Title>, progress: Map<Long, Resum
 @Composable
 fun PtsHero(title: Title, marked: Boolean, onOpen: () -> Unit, onPlay: () -> Unit, onToggleWatch: () -> Unit) {
     BoxWithConstraints(
-        Modifier.fillMaxWidth().heightIn(min = 310.dp).clip(RoundedCornerShape(26.dp)).background(Color(0xFF201944))
+        Modifier.fillMaxWidth().heightIn(min = 310.dp).clip(RoundedCornerShape(26.dp)).background(Color(0xFF201944)).clickable(onClick = onOpen)
             .border(2.dp, Pts.line, RoundedCornerShape(26.dp))
     ) {
         val wide = maxWidth >= 540.dp
         if (title.poster.startsWith("https://")) {
-            AsyncImage(title.poster, null, Modifier.matchParentSize(), contentScale = ContentScale.Crop, alpha = 0.6f)
+            PtsPosterImage(title.poster, null, Modifier.matchParentSize(), hero = true, alpha = .6f)
         }
         Box(Modifier.matchParentSize().background(Brush.horizontalGradient(
             listOf(Color(0xF2141434), Color(0xCC141434), Color(0x66141434))
@@ -570,7 +570,7 @@ fun PtsHero(title: Title, marked: Boolean, onOpen: () -> Unit, onPlay: () -> Uni
                 Modifier.width(96.dp).aspectRatio(2f / 3f).clip(PosterShape).background(Pts.soft)
                     .border(2.dp, Color.White.copy(alpha = .46f), PosterShape)
             ) {
-                if (title.poster.startsWith("https://")) AsyncImage(title.poster, null, Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
+                if (title.poster.startsWith("https://")) PtsPosterImage(title.poster, null, Modifier.fillMaxSize())
             }
             Column(Modifier.weight(1f).padding(start = if (wide) 14.dp else 0.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 Text("FEATURED · ${if (title.kind == "series") "SERIES" else "MOVIE"}", style = MaterialTheme.typography.labelSmall, color = Pts.spark, letterSpacing = 1.sp)
@@ -584,7 +584,7 @@ fun PtsHero(title: Title, marked: Boolean, onOpen: () -> Unit, onPlay: () -> Uni
             }
         }
         Box(Modifier.align(Alignment.TopEnd).padding(12.dp)) {
-            PtsIconAction(PtsIcons.ChevronRight, "Open details", onOpen, tint = Color.White)
+            PtsIconAction(PtsIcons.ChevronRight, "Open watch page", onOpen, tint = Color.White)
         }
     }
 }

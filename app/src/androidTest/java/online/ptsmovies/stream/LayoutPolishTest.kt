@@ -18,6 +18,43 @@ import java.util.concurrent.atomic.AtomicInteger
 class LayoutPolishTest {
     @get:Rule val ui = createComposeRule()
 
+    @Test fun activeFilterDotIsAccessibleAndDoesNotMoveToolbarActions() {
+        val active=mutableStateOf(false)
+        ui.setContent { PtsTheme("dark") { Box(Modifier.width(288.dp)) { LibrarySearchBar("",{}, {},"grid",{},active.value) } } }
+        val before=ui.onNodeWithTag("library-filter-action").fetchSemanticsNode().boundsInRoot
+        ui.onNodeWithTag("active-filter-dot",useUnmergedTree=true).assertDoesNotExist()
+        ui.runOnIdle { active.value=true }
+        ui.onNodeWithTag("active-filter-dot",useUnmergedTree=true).assertIsDisplayed()
+        val after=ui.onNodeWithTag("library-filter-action").fetchSemanticsNode().boundsInRoot
+        assertEquals(before,after)
+        ui.runOnIdle { active.value=false }
+        ui.onNodeWithTag("active-filter-dot",useUnmergedTree=true).assertDoesNotExist()
+    }
+
+    @Test fun browseStartsWithSearchAndHasNoDuplicatePageHeading() {
+        ui.setContent { PtsTheme("dark") { BrowseScreen("Movies",emptyList(),emptyMap(),emptySet(),"",{}, {},{}) } }
+        ui.onNodeWithTag("library-search-row").assertIsDisplayed()
+        ui.onNodeWithText("Movies").assertDoesNotExist()
+        ui.onNodeWithContentDescription("Library filters").performClick()
+        ui.onNodeWithContentDescription("Sort").assertExists()
+    }
+
+    @Test fun filesStartsWithDeviceToggleRatherThanBrowseHeading() {
+        ui.setContent { PtsTheme("dark") { FilesScreen("vps","",emptyList(),false,{}, {}, {}, {}, {}, {}) } }
+        ui.onNodeWithText("Browse").assertDoesNotExist()
+        ui.onNodeWithText("VPS").assertIsDisplayed(); ui.onNodeWithText("Raspberry Pi").assertIsDisplayed()
+    }
+
+    @Test fun featuredCardAndPlayHaveSameDestinationButMyListRemainsIndependent() {
+        val title=Title(9,"movie","Featured example",2026,"","",emptyList(),emptyList(),"hevc","mp4")
+        var opened=0; var marked=0
+        ui.setContent { PtsTheme("dark") { PtsHero(title,false,{opened++},{opened++},{marked++}) } }
+        ui.onNodeWithText("Featured example").performClick()
+        ui.onNodeWithText("Play").performClick()
+        ui.onNodeWithText("My list").performClick()
+        ui.runOnIdle { assertEquals(2,opened); assertEquals(1,marked) }
+    }
+
     @Test fun libraryIconsStayBesideSearchWithoutVisibleLabels() {
         val query = mutableStateOf("")
         val view = mutableStateOf("grid")
