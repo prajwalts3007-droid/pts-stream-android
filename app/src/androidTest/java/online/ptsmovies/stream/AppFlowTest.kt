@@ -724,6 +724,7 @@ class AppFlowTest {
             }
             entered.get() && moving.get()
         }
+        ui.waitUntil(3000) { ui.onAllNodesWithTag("cinema-controls").fetchSemanticsNodes().isEmpty() }
         saveAuditCapture("automatic-home-pip", checkNotNull(InstrumentationRegistry.getInstrumentation().uiAutomation.takeScreenshot()))
         val context = InstrumentationRegistry.getInstrumentation().targetContext
         // Use the real launcher action/category. ActivityScenario filters lifecycle
@@ -751,6 +752,14 @@ class AppFlowTest {
         saveAuditCapture("paused-home-no-pip", checkNotNull(InstrumentationRegistry.getInstrumentation().uiAutomation.takeScreenshot()))
         val context = InstrumentationRegistry.getInstrumentation().targetContext
         context.startActivity(checkNotNull(context.packageManager.getLaunchIntentForPackage(context.packageName)).addFlags(android.content.Intent.FLAG_ACTIVITY_REORDER_TO_FRONT))
+        ui.waitUntil(10000) {
+            var resumed = false
+            InstrumentationRegistry.getInstrumentation().runOnMainSync {
+                resumed = activity in androidx.test.runner.lifecycle.ActivityLifecycleMonitorRegistry.getInstance()
+                    .getActivitiesInStage(androidx.test.runner.lifecycle.Stage.RESUMED)
+            }
+            resumed
+        }
         ui.waitUntil(10000) { ui.onAllNodesWithContentDescription("Play playback").fetchSemanticsNodes().isNotEmpty() }
         scenario!!.onActivity { assertSame(activity, it); assertFalse(nativePlayer(it.window.decorView)!!.playWhenReady) }
     }

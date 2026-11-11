@@ -2,6 +2,7 @@ package online.ptsmovies.stream
 
 import android.graphics.Bitmap
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.background
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
@@ -357,7 +358,7 @@ class ScreenAuditTest {
         var playing by mutableStateOf(true)
         ui.setContent { PtsTheme("watch") { val density = LocalDensity.current
             CompositionLocalProvider(LocalDensity provides Density(1.5f.coerceAtMost(density.density), font)) {
-                Box(Modifier.requiredSize(width.dp, height.dp)) {
+                Box(Modifier.requiredSize(width.dp, height.dp).background(androidx.compose.ui.graphics.Color.Black)) {
                     CinemaControls("A long generated title with several episode words", playing, 20000, 60000, 35000, false,
                         {}, { playing = !playing }, {}, {}, {}, {}, {}, {})
                 }
@@ -386,7 +387,7 @@ class ScreenAuditTest {
         val b = series.copy(id = 82, title = "A very long series title that must wrap and then ellipsize consistently")
         ui.setContent { PtsTheme { val density = LocalDensity.current
             CompositionLocalProvider(LocalDensity provides Density(density.density, font)) {
-                Column(Modifier.width(width.dp)) {
+                Column(Modifier.width(width.dp).background(Pts.bg)) {
                     Row { PtsPosterCard(a, null, false, Modifier.weight(1f), width = null, onOpen = {}, onToggleWatch = {}); PtsPosterCard(b, null, false, Modifier.weight(1f), width = null, onOpen = {}, onToggleWatch = {}) }
                     PtsTitleListRow(a, false, {}, {}); PtsTitleListRow(b, false, {}, {})
                 }
@@ -408,7 +409,7 @@ class ScreenAuditTest {
         var width by mutableIntStateOf(280); var font by mutableFloatStateOf(1f); var reboot = ""
         ui.setContent { PtsTheme { val density = LocalDensity.current
             CompositionLocalProvider(LocalDensity provides Density(density.density, font)) {
-                Column(Modifier.width(width.dp).padding(16.dp)) {
+                Column(Modifier.width(width.dp).background(Pts.bg).padding(16.dp)) {
                     PowerDeviceRow("vps", "VPS", true) { reboot = "vps" }
                     PowerDeviceRow("pi", "Raspberry Pi", true) { reboot = "pi" }
                 }

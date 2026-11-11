@@ -115,6 +115,7 @@ function fixture(path, request) {
       assert.ok(await page.locator('#st-player').evaluate(n => n.classList.contains('controls-off')));
       await page.evaluate(() => plToggleControls());
       await page.waitForFunction(() => document.querySelector('#st-player').classList.contains('controls-off'), null, { timeout: 6500 });
+      await page.waitForFunction(() => ['.st-player-top', '.st-player-bottom'].every(selector => getComputedStyle(document.querySelector(selector)).opacity === '0'));
       await page.screenshot({ path: `${output}/${width}x${height}-player-autohidden.png`, fullPage: true });
       await page.evaluate(() => { document.querySelector('#st-video').pause(); plShowControls(); });
       await page.screenshot({ path: `${output}/${width}x${height}-player-paused.png`, fullPage: true });
