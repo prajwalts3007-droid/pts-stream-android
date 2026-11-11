@@ -66,12 +66,27 @@ function fixture(path, request) {
     await page.evaluate(() => { document.documentElement.dataset.theme = 'dark'; return document.fonts.ready; });
     for (const [width, height] of [[320, 740], [390, 844], [412, 915], [740, 390]]) {
       await page.setViewportSize({ width, height });
-      for (const name of ['dashboard', 'queue', 'files', 'transfers', 'download', 'settings', 'stream-home', 'stream-series']) {
+      for (const name of ['dashboard', 'queue', 'files', 'transfers', 'download', 'settings', 'stream-home', 'stream-movies', 'stream-series', 'stream-watchlist']) {
         await page.evaluate(name => switchPage(name), name);
         await page.locator('#page-' + name).waitFor({ state: 'visible' });
         if (name === 'queue') await page.locator('#queue-list .q-title').first().waitFor({ state: 'visible' });
         if (name === 'settings') await page.locator('#pipeline-runners').waitFor({ state: 'visible' });
         await page.screenshot({ path: `${output}/${width}x${height}-${name}.png`, fullPage: true });
+        if (name === 'settings') {
+          for (const category of ['playback', 'devices', 'users']) {
+            await page.locator('#settings-tab-' + category).click();
+            await page.screenshot({ path: `${output}/${width}x${height}-settings-${category}.png`, fullPage: true });
+            if (category === 'devices') {
+              const power = await page.locator('.power-row').evaluateAll(nodes => nodes.map(node => {
+                const label = node.querySelector('.power-id').getBoundingClientRect();
+                const action = node.querySelector('button').getBoundingClientRect();
+                return { name: node.querySelector('.power-id').textContent, labelRight: label.right, actionLeft: action.left, actionRight: action.right };
+              }));
+              assert.ok(power.every(row => row.labelRight <= row.actionLeft && row.actionRight <= width));
+              geometry.push({ width, height, power });
+            }
+          }
+        }
       }
       await page.evaluate(() => switchPage('queue'));
       const boxes = await page.locator('.q-stage-tab').evaluateAll(nodes => nodes.map(n => { const r = n.getBoundingClientRect(); return { label: n.getAttribute('aria-label'), left: r.left, right: r.right, top: r.top }; }));

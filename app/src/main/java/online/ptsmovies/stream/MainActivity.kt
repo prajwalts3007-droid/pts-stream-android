@@ -958,6 +958,12 @@ class MainActivity : ComponentActivity() {
             nextEpisode(title, ep, savedVideos.map { it.key }.toSet(), appearance.nextDownloadedOnly)
         }
         fun touchControls() { controls = true; interaction++ }
+        LaunchedEffect(inPip) {
+            if (inPip) {
+                controls = false; showSettings = false; showTracks = false; showEpisodes = false; showSleep = false
+                seekPreview = null; touching = false; gestureFeedback = ""
+            } else touchControls()
+        }
         fun leavePlayer() { if (playerFullscreen) fullscreen(false) else onBack() }
         fun selectEpisode(next: Episode) { clearedProgress.remove(title.id); journal()?.begin(title.id); episode = next; showEpisodes = false }
         var resumeAt by remember(title.id, ep?.id) {

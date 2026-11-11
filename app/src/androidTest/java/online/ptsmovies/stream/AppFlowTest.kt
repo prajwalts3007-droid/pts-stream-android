@@ -718,9 +718,49 @@ class AppFlowTest {
         saveAuditCapture("automatic-home-pip", checkNotNull(InstrumentationRegistry.getInstrumentation().uiAutomation.takeScreenshot()))
         val context = InstrumentationRegistry.getInstrumentation().targetContext
         context.startActivity(android.content.Intent(context, MainActivity::class.java).addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK or android.content.Intent.FLAG_ACTIVITY_REORDER_TO_FRONT))
-        ui.waitUntil(10000) { ui.onAllNodesWithTag("player-surface").fetchSemanticsNodes().isNotEmpty() }
+        ui.waitUntil(10000) {
+            InstrumentationRegistry.getInstrumentation().runOnMainSync {
+                val activity = androidx.test.runner.lifecycle.ActivityLifecycleMonitorRegistry.getInstance()
+                    .getActivitiesInStage(androidx.test.runner.lifecycle.Stage.RESUMED).filterIsInstance<MainActivity>().firstOrNull()
+                if (activity != null) entered.set(activity.isInPictureInPictureMode)
+            }
+            !entered.get()
+        }
         scenario!!.onActivity { activity -> assertFalse(activity.isInPictureInPictureMode); nativePlayer(activity.window.decorView)?.pause() }
         capture("returned-from-automatic-pip")
+    }
+
+    @Test fun pausedVideoDoesNotAutomaticallyEnterPipWhenHomeIsPressed() {
+        launchLoggedIn(); openMovie(); ui.onNodeWithText("Play").performClick(); waitForMovingPlayback(); pauseIfPlaying()
+        lateinit var activity: MainActivity
+        scenario!!.onActivity { activity = it; assertFalse(nativePlayer(it.window.decorView)!!.playWhenReady) }
+        val device = androidx.test.uiautomator.UiDevice.getInstance(InstrumentationRegistry.getInstrumentation())
+        device.pressHome(); device.waitForIdle()
+        InstrumentationRegistry.getInstrumentation().runOnMainSync { assertFalse(activity.isInPictureInPictureMode) }
+        saveAuditCapture("paused-home-no-pip", checkNotNull(InstrumentationRegistry.getInstrumentation().uiAutomation.takeScreenshot()))
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        context.startActivity(android.content.Intent(context, MainActivity::class.java).addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK or android.content.Intent.FLAG_ACTIVITY_REORDER_TO_FRONT))
+        ui.waitUntil(10000) { ui.onAllNodesWithContentDescription("Play playback").fetchSemanticsNodes().isNotEmpty() }
+        scenario!!.onActivity { assertFalse(nativePlayer(it.window.decorView)!!.playWhenReady) }
+    }
+
+    @Test fun powerButtonsRequirePhraseAndPasswordAndCancelNeverReboots() {
+        role = "admin"; launchLoggedIn()
+        ui.onNodeWithContentDescription("Settings").performClick(); waitForText("Pipeline limits")
+        ui.onNodeWithContentDescription("Devices").performScrollTo().performClick(); waitForText("Power")
+        for (target in listOf("vps", "pi")) {
+            ui.onNodeWithTag("power-reboot-$target").performScrollTo().performClick()
+            ui.onNodeWithText("Confirm change").assertIsDisplayed()
+            ui.onNode(hasText("Confirm") and hasClickAction()).assertIsNotEnabled()
+            val fields = ui.onAllNodes(hasSetTextAction() and hasAnyAncestor(isDialog()))
+            fields[0].performTextReplacement("CONFIRM")
+            ui.onNode(hasText("Confirm") and hasClickAction()).assertIsNotEnabled()
+            fields[1].performTextReplacement("synthetic-password")
+            ui.onNode(hasText("Confirm") and hasClickAction()).assertIsEnabled()
+            capture("power-confirm-$target")
+            ui.onNodeWithText("Cancel").performClick()
+        }
+        assertTrue(adminWrites.isEmpty()); capture("power-aligned-real-page")
     }
 
     @Test fun darkWatchDetailsHaveNoSynopsisBadgesOrMetadataEditor() {
