@@ -16,6 +16,11 @@ private val numberedEpisodes = listOf(
     Regex("(?:^|[^\\d])(\\d{1,3})x(\\d{1,3})(?!\\d)", RegexOption.IGNORE_CASE),
     Regex("(?:^|[^a-z0-9])season[ ._\\-]*(\\d{1,3})[ ._\\-]*episode[ ._\\-]*(\\d{1,3})(?!\\d)", RegexOption.IGNORE_CASE))
 
+fun hasNumberedLinkHints(links: List<String>): Boolean = links.any { link -> runCatching {
+    val path = URLDecoder.decode(URI(link).rawPath.replace("+", "%2B"), "UTF-8")
+    numberedEpisodes.any { it.containsMatchIn(path) } || Regex("(?i)/(?:season[ ._\\-]*|s)\\d{1,3}/").containsMatchIn(path)
+}.getOrDefault(false) }
+
 /** Same bounds/conflict rules as the deployed web episodeFromPath. Never guess order. */
 fun episodeNumbers(path: String): Pair<Int, Int> {
     val label = path.substringAfterLast('/').substringBeforeLast('.', path.substringAfterLast('/'))

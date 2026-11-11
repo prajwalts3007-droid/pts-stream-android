@@ -545,7 +545,8 @@ fun DashboardScreen(
     onRefresh: () -> Unit,
     queue: List<JSONObject>,
     completed: List<JSONObject>,
-    onQueue: () -> Unit
+    onQueue: () -> Unit,
+    refreshing: Boolean = false
 ) {
     val host = metrics?.optJSONObject(target)
     val online = host?.optBoolean("online") == true
@@ -555,7 +556,7 @@ fun DashboardScreen(
     ) {
         item {
             PtsPage("Dashboard") {
-                PtsIconAction(PtsIcons.Refresh, "Refresh metrics", onRefresh, tint = Pts.muted)
+                PtsRefreshAction("Refresh metrics", refreshing, onRefresh)
             }
         }
         item {
@@ -614,7 +615,8 @@ fun QueueScreen(
     onCancelStage: (String, List<String>) -> Unit,
     onRetry: (String?) -> Unit = {},
     onEdit: (JSONObject, String) -> Unit = { _, _ -> },
-    busy: Boolean = false
+    busy: Boolean = false,
+    refreshing: Boolean = false
 ) {
     var confirmStage by remember { mutableStateOf<String?>(null) }
     var snapshot by remember { mutableStateOf<List<String>>(emptyList()) }
@@ -668,7 +670,7 @@ fun QueueScreen(
     ) {
         item {
             PtsPage("Queue") {
-                PtsIconAction(PtsIcons.Refresh, "Refresh queue", onRefresh, tint = Pts.muted)
+                PtsRefreshAction("Refresh queue", refreshing, onRefresh)
             }
         }
         item {

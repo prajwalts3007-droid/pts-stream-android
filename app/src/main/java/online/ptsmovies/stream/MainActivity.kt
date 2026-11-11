@@ -152,6 +152,9 @@ class MainActivity : ComponentActivity() {
     private var metricsTarget by mutableStateOf("vps")
     private var queueJobs by mutableStateOf(emptyList<JSONObject>())
     private var queueBusy by mutableStateOf(false)
+    private var queueRefreshing by mutableStateOf(false)
+    private var metricsRefreshing by mutableStateOf(false)
+    private var queueReloadPending = false
     private var googleClientId by mutableStateOf("")
     private val episodeNames by lazy { EpisodeMetadata(this) }
     private var queueDone by mutableStateOf(emptyList<JSONObject>())
@@ -469,12 +472,17 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun loadMetrics() {
+        if (metricsRefreshing) return
+        metricsRefreshing = true
         scope.launch {
             try { metrics = api.json("/system/metrics") } catch (e: Exception) { toast("Metrics: ${e.message}") }
+            finally { metricsRefreshing = false }
         }
     }
 
     private fun loadQueue() {
+        if (queueRefreshing) { queueReloadPending = true; return }
+        queueRefreshing = true
         val owner = account?.optLong("id")
         val generation = sessionGeneration
         scope.launch {
@@ -483,7 +491,11 @@ class MainActivity : ComponentActivity() {
                 if (generation != sessionGeneration || owner != account?.optLong("id") || !admin()) return@launch
                 queueJobs = data.optJSONArray("jobs").objects()
                 queueDone = data.optJSONArray("completed").objects()
-            } catch (e: Exception) { toast("Queue: ${e.message}") }
+            } catch (e: Exception) { if (generation == sessionGeneration && owner == account?.optLong("id")) toast("Queue: ${e.message}") }
+            finally {
+                queueRefreshing = false
+                if (queueReloadPending) { queueReloadPending = false; if (admin()) loadQueue() }
+            }
         }
     }
 
@@ -782,11 +794,12 @@ class MainActivity : ComponentActivity() {
                     }, tasks = downloadTasks, onPause = { downloads?.pause(it) }, onResume = { downloads?.resume(it) }, onCancel = { downloads?.cancel(it) },
                         titles = library?.titles.orEmpty(), imageLoader = images, onBack = { downloadsOpen = false; profileOpen = true })
                     mode == "Hub" && admin() -> when (hubTab) {
-                        "Dashboard" -> DashboardScreen(name, metrics, metricsTarget, { metricsTarget = it }, { loadMetrics() }, queueJobs, queueDone) { hubTab = "Queue" }
+                        "Dashboard" -> DashboardScreen(name, metrics, metricsTarget, { metricsTarget = it }, { loadMetrics() }, queueJobs, queueDone,
+                            onQueue = { hubTab = "Queue" }, refreshing = metricsRefreshing)
                         "Queue" -> QueueScreen(queueJobs, queueDone, queueStage, { queueStage = it }, { loadQueue() }, { id ->
                             scope.launch { try { api.json("/queue/${java.net.URLEncoder.encode(id, "UTF-8")}", "DELETE"); loadQueue() } catch (e: Exception) { toast(e.message ?: "Delete failed") } }
                         }, onCancelStage = { stage, ids -> cancelStage(stage, ids) }, onRetry = { id -> changeQueue(id) },
-                            onEdit = { job, link -> changeQueue(job.optString("job_id"), link) }, busy = queueBusy)
+                            onEdit = { job, link -> changeQueue(job.optString("job_id"), link) }, busy = queueBusy, refreshing = queueRefreshing)
                         "Download" -> NativeIngest(api, searchQuery, { search(it) }, searchResults, searchLoading, { loadQueue() })
                         else -> NativeAdminSettings(user, api, { openUpdates() }, { signOut() }, playbackPrefs, { key, value -> playerPreference(key, value) })
                     }

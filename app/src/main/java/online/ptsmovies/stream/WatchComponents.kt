@@ -1,6 +1,9 @@
 package online.ptsmovies.stream
 
 import androidx.compose.animation.animateContentSize
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
@@ -75,7 +78,7 @@ fun ShortSynopsis(text: String, modifier: Modifier = Modifier) {
     var expanded by rememberSaveable(text) { mutableStateOf(false) }
     var overflow by remember(text) { mutableStateOf(false) }
     if (text.isBlank()) return
-    Column(modifier.animateContentSize(), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+    Column(modifier.animateContentSize(tween(motionMillis(ptsMotionEnabled(), 180))), verticalArrangement = Arrangement.spacedBy(4.dp)) {
         Text(text, Modifier.testTag("watch-synopsis"), style = MaterialTheme.typography.bodyMedium,
             color = Pts.muted, maxLines = if (expanded) Int.MAX_VALUE else 3,
             overflow = TextOverflow.Ellipsis, onTextLayout = { if (!expanded) overflow = it.hasVisualOverflow })
@@ -123,10 +126,11 @@ fun SeasonEpisodes(
 @Composable
 fun SeasonDropdown(seasons: List<Int>, selected: Int, onSelect: (Int) -> Unit, tag: String = "season-selector") {
     var expanded by remember { mutableStateOf(false) }
+    val angle by animateFloatAsState(if (expanded) 180f else 0f, tween(motionMillis(ptsMotionEnabled(), 150)), label = "season-chevron")
     Box {
         OutlinedButton({ expanded = true }, Modifier.heightIn(min = 48.dp).testTag(tag), enabled = seasons.isNotEmpty()) {
             Text("Season $selected", maxLines = 1)
-            Icon(PtsIcons.ChevronDown, null, Modifier.padding(start = 8.dp).size(20.dp))
+            Icon(PtsIcons.ChevronDown, null, Modifier.padding(start = 8.dp).size(20.dp).graphicsLayer { rotationZ = angle })
         }
         DropdownMenu(expanded, { expanded = false }, Modifier.heightIn(max = 280.dp)) {
             seasons.forEach { season -> DropdownMenuItem(text = { Text("Season $season") },

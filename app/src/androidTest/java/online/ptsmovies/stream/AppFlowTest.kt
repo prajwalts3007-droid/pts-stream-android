@@ -181,7 +181,11 @@ class AppFlowTest {
     }
 
     private fun pressBack() {
-        InstrumentationRegistry.getInstrumentation().sendKeyDownUpSync(android.view.KeyEvent.KEYCODE_BACK)
+        // Android 10 can show its one-time immersive-mode tutorial in System UI.
+        // Acknowledge that test-emulator hint before sending Back to the actual app.
+        val device = androidx.test.uiautomator.UiDevice.getInstance(InstrumentationRegistry.getInstrumentation())
+        device.wait(androidx.test.uiautomator.Until.findObject(androidx.test.uiautomator.By.pkg("com.android.systemui").text(java.util.regex.Pattern.compile("got it", java.util.regex.Pattern.CASE_INSENSITIVE))), 500)?.click()
+        androidx.test.espresso.Espresso.pressBack()
         ui.waitForIdle()
     }
 
@@ -366,7 +370,10 @@ class AppFlowTest {
     @Test fun filesArchiveEditorClipboardAndTransferClearReachApis() {
         role = "admin"; launchLoggedIn()
         ui.onNodeWithTag("section-dock").performTouchInput { swipeRight() }; waitForText("PTSFiles"); waitForText("sample.zip")
-        fun openMenu(name: String) { ui.onNode(hasContentDescription("More") and hasAnyAncestor(hasTestTag("file-row-$name"))).performClick() }
+        fun openMenu(name: String) {
+            ui.onNodeWithTag("files-list").performScrollToNode(hasTestTag("file-row-$name"))
+            ui.onNode(hasContentDescription("More") and hasAnyAncestor(hasTestTag("file-row-$name"))).performClick()
+        }
         openMenu("sample.zip"); ui.onNodeWithText("Unzip").performClick()
         ui.onNode(hasText("Unzip") and hasClickAction()).performClick()
         ui.waitUntil(10000) { fileCommands.any { it.first.endsWith("/unzip") } }
@@ -596,6 +603,8 @@ class AppFlowTest {
         ui.onNodeWithContentDescription("Settings").performClick()
         waitForText("GitHub jobs at once")
         ui.onNode(hasSetTextAction() and hasAnyAncestor(hasTestTag("pipeline-max_runners"))).performScrollTo().performTextReplacement("3")
+        ui.onNodeWithText("Refresh status").performScrollTo().performClick()
+        ui.onNode(hasSetTextAction() and hasAnyAncestor(hasTestTag("pipeline-max_runners"))).performScrollTo().assertTextEquals("3")
         ui.onNodeWithText("Save limits").performScrollTo().performClick()
         ui.onNodeWithText("Confirm").assertIsNotEnabled()
         assertTrue(adminWrites.isEmpty())

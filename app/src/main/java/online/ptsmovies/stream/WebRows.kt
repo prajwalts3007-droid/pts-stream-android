@@ -1,6 +1,8 @@
 package online.ptsmovies.stream
 
 import androidx.compose.foundation.background
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
@@ -26,9 +28,11 @@ fun WebIconTabs(tabs: List<WebTab>, selected: String, onSelect: (String) -> Unit
     Row(Modifier.fillMaxWidth().testTag(tag).then(if (fit) Modifier else Modifier.horizontalScroll(rememberScrollState())), horizontalArrangement = Arrangement.spacedBy(if (fit) 2.dp else 6.dp)) {
         tabs.forEach { tab ->
             val active = tab.key == selected
+            val background by animateColorAsState(if (active) Pts.accentSoft else Pts.card, tween(motionMillis(ptsMotionEnabled(), 150)), label = "web-tab-background")
+            val border by animateColorAsState(if (active) Pts.accent else Pts.line, tween(motionMillis(ptsMotionEnabled(), 150)), label = "web-tab-border")
             Column((if (fit) Modifier.weight(1f) else Modifier.widthIn(min = 48.dp)).heightIn(min = 48.dp)
-                .background(if (active) Pts.accentSoft else Pts.card, RoundedCornerShape(12.dp))
-                .border(1.dp, if (active) Pts.accent else Pts.line, RoundedCornerShape(12.dp))
+                .background(background, RoundedCornerShape(12.dp))
+                .border(1.dp, border, RoundedCornerShape(12.dp))
                 .semantics { contentDescription = tab.label; this.selected = active; role = Role.Tab; tab.count?.let { stateDescription = "$it jobs" }; if (!tab.enabled) disabled() }
                 .clickable(enabled = tab.enabled) { onSelect(tab.key) }.padding(horizontal = if (fit) 0.dp else 10.dp, vertical = 6.dp),
                 horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {

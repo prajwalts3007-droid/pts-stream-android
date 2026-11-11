@@ -58,6 +58,12 @@ An explicit player Connection comparison reads at most 1 MiB per route, with act
 
 No Wi-Fi credentials, channels, network-manager configuration, production streamer or relay service were modified. A real 5 GHz/Ethernet upgrade would need a deliberate network change and reachable hardware, not an app claim.
 
+## Interaction and motion revision
+
+Refresh icons/buttons reflect real request state, rotate only while active, announce Refreshing/Ready and prevent repeated in-flight taps. Queue reload requests are coalesced so a mutation during an existing poll still receives a fresh result afterward. There is no artificial network delay or permanent idle animation.
+
+Shared controls have ripple/press feedback without changing measured bounds. Clickable cards have a small press response; tabs transition selected colours; progress bars interpolate updates; season chevrons rotate; synopsis/provider sections expand smoothly. There are no new page decorations, autoplaying background effects, video-surface transitions or remote CPU work. One root motion observer respects Android's disabled/reduced animator setting and is inherited by nested player/dialog themes. Interaction tests check duplicate-tap suppression, stable bounds and reduced-motion inheritance.
+
 ## Release gate / limits
 
 Use GitHub Actions for builds, lint and generated-media emulator tests. Production is inspected read-only except the explicitly bounded synthetic Pi-self fixture, which is automatically removed. Keep app ID/signing key and publish an increasing signed test version only after reviewing final evidence.

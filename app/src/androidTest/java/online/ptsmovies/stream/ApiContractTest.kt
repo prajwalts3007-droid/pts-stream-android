@@ -333,6 +333,15 @@ class ApiContractTest {
         catch (e: IllegalStateException) { assertTrue(e.message.orEmpty().contains("checksum mismatch")) }
     }
 
+    @Test fun updateSignerComparisonNeverAcceptsMissingExtraOrDifferentCertificates() {
+        val first = android.content.pm.Signature(byteArrayOf(1, 2, 3)); val other = android.content.pm.Signature(byteArrayOf(4, 5, 6))
+        assertTrue(sameSigningCertificates(arrayOf(first), arrayOf(first)))
+        assertFalse(sameSigningCertificates(null, arrayOf(first)))
+        assertFalse(sameSigningCertificates(emptyArray(), arrayOf(first)))
+        assertFalse(sameSigningCertificates(arrayOf(other), arrayOf(first)))
+        assertFalse(sameSigningCertificates(arrayOf(first, other), arrayOf(first)))
+    }
+
     @Test fun nativeUpdaterFindsPrereleaseOnlyInExplicitTestChannel() = runBlocking {
         val context = InstrumentationRegistry.getInstrumentation().targetContext
         lateinit var controller: NativeUpdates

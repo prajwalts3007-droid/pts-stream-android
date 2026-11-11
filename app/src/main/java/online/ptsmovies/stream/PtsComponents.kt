@@ -3,6 +3,8 @@ package online.ptsmovies.stream
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
+import androidx.compose.foundation.LocalIndication
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInVertically
@@ -165,12 +167,15 @@ fun PtsCard(
     content: @Composable ColumnScope.() -> Unit
 ) {
     val shape = CardShape
+    val interaction = remember { MutableInteractionSource() }
+    val pressed by interaction.collectIsPressedAsState()
+    val scale by animateFloatAsState(if (pressed && onClick != null && ptsMotionEnabled()) .99f else 1f, tween(motionMillis(ptsMotionEnabled(), 120)), label = "card-press")
     Column(
-        modifier
+        modifier.graphicsLayer { scaleX = scale; scaleY = scale }
             .shadow(9.dp, shape, ambientColor = Color(0x22000000), spotColor = Color(0x33000000))
             .clip(shape).background(color)
             .border(2.dp, borderColor, shape)
-            .then(if (onClick != null) Modifier.clickable(onClick = onClick) else Modifier)
+            .then(if (onClick != null) Modifier.clickable(interactionSource = interaction, indication = LocalIndication.current, onClick = onClick) else Modifier)
             .padding(padding),
         verticalArrangement = Arrangement.spacedBy(8.dp),
         content = content
@@ -186,10 +191,11 @@ fun PtsPressable(
 ) {
     val source = remember { MutableInteractionSource() }
     val pressed by source.collectIsPressedAsState()
-    val scale by animateFloatAsState(if (pressed) 0.975f else 1f, label = "press")
+    val motion = ptsMotionEnabled()
+    val scale by animateFloatAsState(if (pressed && motion) 0.975f else 1f, tween(motionMillis(motion, 120)), label = "press")
     Box(
         modifier.graphicsLayer { scaleX = scale; scaleY = scale }
-            .clickable(interactionSource = source, indication = null, enabled = enabled, onClick = onClick),
+            .clickable(interactionSource = source, indication = LocalIndication.current, enabled = enabled, onClick = onClick),
         content = content
     )
 }
@@ -235,10 +241,9 @@ fun PtsSecondaryButton(label: String, modifier: Modifier = Modifier, icon: Image
 
 @Composable
 fun PtsIconAction(icon: ImageVector, description: String, onClick: () -> Unit, tint: Color = Pts.text, size: Dp = 38.dp) {
-    Box(
-        Modifier.size(size).clip(CircleShape).clickable(interactionSource = remember { MutableInteractionSource() }, indication = null, onClick = onClick),
-        contentAlignment = Alignment.Center
-    ) { Icon(icon, description, Modifier.size(20.dp), tint = tint) }
+    PtsPressable(onClick, Modifier.size(size).clip(CircleShape)) {
+        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { Icon(icon, description, Modifier.size(20.dp), tint = tint) }
+    }
 }
 
 @Composable
@@ -358,8 +363,9 @@ fun PtsPill(text: String, active: Boolean = false, danger: Boolean = false, tint
 @Composable
 fun PtsProgressBar(progress: Float, modifier: Modifier = Modifier, height: Dp = 7.dp, tint: Color = Pts.accent) {
     val safeProgress = if (progress.isFinite()) progress.coerceIn(0f, 1f) else 0f
+    val visual by animateFloatAsState(safeProgress, tween(motionMillis(ptsMotionEnabled(), 180)), label = "transfer-progress")
     Box(modifier.fillMaxWidth().height(height).clip(RoundedCornerShape(99.dp)).background(Pts.soft)) {
-        Box(Modifier.fillMaxHeight().fillMaxWidth(safeProgress).clip(RoundedCornerShape(99.dp)).background(tint))
+        Box(Modifier.fillMaxHeight().fillMaxWidth(visual).clip(RoundedCornerShape(99.dp)).background(tint))
     }
 }
 

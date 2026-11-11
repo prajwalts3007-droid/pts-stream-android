@@ -37,7 +37,7 @@ fun NativeIngest(api: PtsApi, query: String, onQuery: (String) -> Unit, results:
     fun import(text: String) {
         try {
             val plain = text.trim().split(Regex("\\s+")).filter { it.startsWith("http://") || it.startsWith("https://") }
-            val hasNumbers = text.contains('\t') || plain.any { runCatching { episodeNumbers(java.net.URI(it).path); true }.getOrDefault(false) }
+            val hasNumbers = text.contains('\t') || hasNumberedLinkHints(plain)
             if (hasNumbers) fill(parseEpisodeLinks(text))
             else {
                 require(text.toByteArray().size <= 2 * 1024 * 1024 && rows.isNotEmpty() && plain.isNotEmpty() && plain.all(::validSourceLink)) { "Generate rows first, or import links with S01E01 filenames" }
@@ -121,6 +121,7 @@ fun NativeIngest(api: PtsApi, query: String, onQuery: (String) -> Unit, results:
                     catch (e: Exception) { error = e.message.orEmpty() } finally { busy = false } }
                 } }
                 item { Text("ZIP inspection checks ranges from the VPS only; the host must also allow GitHub runners. Review selected members before adding.", color = Pts.muted, style = MaterialTheme.typography.bodySmall) }
+                item { Text("${rows.count { it.selected && it.link.isNotBlank() }} sources ready", Modifier.testTag("ingest-source-count"), color = Pts.muted, style = MaterialTheme.typography.labelMedium) }
                 itemsIndexed(rows, key = { _, r -> "${r.season}_${r.episode}" }) { index, row ->
                     Column {
                         Row(verticalAlignment = Alignment.CenterVertically) {

@@ -1,6 +1,8 @@
 package online.ptsmovies.stream
 
 import androidx.compose.foundation.clickable
+import androidx.compose.animation.animateContentSize
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.layout.*
@@ -48,6 +50,7 @@ fun NativeAdminSettings(user: JSONObject, api: PtsApi, onUpdate: () -> Unit, onS
     var busy by remember { mutableStateOf(false) }
     var pipeline by remember { mutableStateOf<JSONObject?>(null) }
     var formOriginal by remember { mutableStateOf<JSONObject?>(null) }
+    var pipelineRefreshing by remember { mutableStateOf(false) }
     var github by remember { mutableStateOf(JSONObject()) }
     var google by remember { mutableStateOf(JSONObject()) }
     var users by remember { mutableStateOf(emptyList<JSONObject>()) }
@@ -80,6 +83,8 @@ fun NativeAdminSettings(user: JSONObject, api: PtsApi, onUpdate: () -> Unit, onS
     }
     fun refreshUsers() { scope.launch { try { val a = api.json("/admin/users").optJSONArray("users"); users = (0 until (a?.length() ?: 0)).map { a!!.getJSONObject(it) } } catch (e: Exception) { error = e.message.orEmpty() } } }
     fun refreshPipeline(statusOnly: Boolean = false) {
+        if (pipelineRefreshing) return
+        pipelineRefreshing = true
         scope.launch { try {
             val value = api.json("/admin/pipeline-settings")
             val keys = listOf("pi_bwlimit_kbps", "max_runners", "max_pi_transfers", "min_free_gib", "max_staging_gib", "reserve_per_job_gib")
@@ -90,7 +95,7 @@ fun NativeAdminSettings(user: JSONObject, api: PtsApi, onUpdate: () -> Unit, onS
                 formOriginal = value
                 keys.forEach { fields[it] = if (it == "pi_bwlimit_kbps") "%.2f".format(java.util.Locale.US, value.getLong(it) * 8192.0 / 1000000) else value.getLong(it).toString() }
             }
-        } catch (e: Exception) { error = e.message.orEmpty() } }
+        } catch (e: Exception) { error = e.message.orEmpty() } finally { pipelineRefreshing = false } }
     }
     LaunchedEffect(category) {
         error = ""; notice = ""
@@ -147,7 +152,7 @@ fun NativeAdminSettings(user: JSONObject, api: PtsApi, onUpdate: () -> Unit, onS
         }
         sections.forEach { section ->
             item {
-                PtsCard(Modifier.fillMaxWidth(), padding = 14.dp) {
+                PtsCard(Modifier.fillMaxWidth().animateContentSize(tween(motionMillis(ptsMotionEnabled(), 180))), padding = 14.dp) {
                     Text(when (section) { "Pipeline settings" -> "Pipeline limits"; "Power options" -> "Power"; "API management" -> "API Management"; else -> section }, style = MaterialTheme.typography.titleMedium, color = Pts.text)
                     when (section) {
                         "Playback preferences" -> PlaybackPreferencesScreen(playbackPrefs, onPlayback, {}, embedded = true)
@@ -163,7 +168,7 @@ fun NativeAdminSettings(user: JSONObject, api: PtsApi, onUpdate: () -> Unit, onS
                             PtsPrimaryButton("Save limits", Modifier.weight(1f), enabled = pipeline != null && !busy) {
                                 try { confirm(AdminCommand("/admin/pipeline-settings", "PUT", pipelineBody(fields.toMap(), formOriginal ?: pipeline!!)), "Apply pipeline settings?") } catch (e: Exception) { error = e.message.orEmpty() }
                             }
-                            PtsSecondaryButton("Refresh status", Modifier.weight(1f)) { refreshPipeline(statusOnly = true) }
+                            PtsRefreshButton("Refresh status", pipelineRefreshing, Modifier.weight(1f)) { refreshPipeline(statusOnly = true) }
                             }
                         }
                         "API management" -> {

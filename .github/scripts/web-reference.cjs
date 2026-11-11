@@ -12,7 +12,7 @@ const jobs = [
   { job_id: 'fixture-failed', title: 'Generated failed job', year: 2026, type: 'movie', stage: 'failed', progress: 0, error: 'Synthetic source failure', download_url: 'https://example.invalid/fixture.mp4' },
 ];
 const title = { id: 90001, title: 'The Open Road', kind: 'series', year: 2025, synopsis: 'Synthetic audit fixture. No third-party media.', video_codec: 'hevc', container: 'mp4', genres: ['Adventure'], episodes: [{ id: 101, season: 1, episode: 1, title: 'A new beginning', duration: 2400, container: 'mp4' }] };
-const calls = [], errors = [], geometry = [];
+const calls = [], errors = [], geometry = [], blockedNetwork = [];
 function fixture(path, request) {
   if (path === '/auth/config') return { google_enabled: false, origin };
   if (path === '/auth/csrf') return { csrf_token: 'synthetic-only' };
@@ -44,7 +44,10 @@ function fixture(path, request) {
         calls.push({ path, method: request.method(), body: request.postData() });
         return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(fixture(path, request)) });
       }
-      if (!['GET', 'HEAD'].includes(request.method())) throw new Error('Non-read network request refused');
+      if (!['GET', 'HEAD'].includes(request.method())) {
+        blockedNetwork.push({ host: url.hostname, path: url.pathname, method: request.method() });
+        return route.abort(); // Includes analytics beacons; never permit a real network write.
+      }
       if (url.hostname === 'media.ptsmovies.online') return route.abort();
       return route.continue();
     });
@@ -83,7 +86,7 @@ function fixture(path, request) {
     assert.ok(calls.some(c => c.path === '/queue/fixture-failed/retry' && c.method === 'POST'));
     assert.ok(calls.some(c => c.path === '/queue/fixture-failed/edit' && JSON.parse(c.body).download_url === 'https://example.invalid/replacement.mp4'));
     assert.ok(calls.some(c => c.path === '/queue/retry-all' && c.method === 'POST'));
-    fs.writeFileSync(`${output}/report.json`, JSON.stringify({ geometry, mockedCalls: calls, browserErrors: errors }, null, 2));
+    fs.writeFileSync(`${output}/report.json`, JSON.stringify({ geometry, mockedCalls: calls, browserErrors: errors, blockedNetwork }, null, 2));
     assert.equal(errors.length, 0, 'Deployed web failed against synthetic fixture APIs');
   } finally { await browser.close(); }
-})().catch(error => { fs.writeFileSync(`${output}/failure.txt`, error.stack); fs.writeFileSync(`${output}/report.json`, JSON.stringify({ geometry, mockedCalls: calls, browserErrors: errors }, null, 2)); process.exitCode = 1; });
+})().catch(error => { fs.writeFileSync(`${output}/failure.txt`, error.stack); fs.writeFileSync(`${output}/report.json`, JSON.stringify({ geometry, mockedCalls: calls, browserErrors: errors, blockedNetwork }, null, 2)); process.exitCode = 1; });

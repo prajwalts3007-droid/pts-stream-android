@@ -15,6 +15,9 @@ class WebParityContractTest {
         assertEquals(2 to 5, episodeNumbers("/Show.2x05.mp4"))
         rejects { episodeNumbers("/Season 1/Show.S02E05.mkv") }
         rejects { episodeNumbers("/Show.S01E01.S01E02.mp4") }
+        assertTrue(hasNumberedLinkHints(listOf("https://example.invalid/Season1/Show.S02E05.mp4")))
+        assertTrue(hasNumberedLinkHints(listOf("https://example.invalid/Show.S01E01.S01E02.mp4")))
+        assertFalse(hasNumberedLinkHints(listOf("https://example.invalid/opaque-source")))
         rejects { episodeNumbers("/Show.mp4") }
         rejects { parseEpisodeLinks("https://example.invalid/Show.S01E01.mp4\nhttps://example.invalid/Other.S01E01.mkv") }
         rejects { parseEpisodeLinks("a".repeat(2 * 1024 * 1024 + 1)) }

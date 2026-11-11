@@ -36,15 +36,26 @@ internal fun verifyUpdate(context: Context, file: File, expected: ReleaseUpdate)
         check(actual == expected.digest.removePrefix("sha256:")) { "APK checksum mismatch" }
     }
     val pm = context.packageManager
-    val flags = if (Build.VERSION.SDK_INT >= 28) PackageManager.GET_SIGNING_CERTIFICATES else PackageManager.GET_SIGNATURES
+    val flags = if (Build.VERSION.SDK_INT >= 28) PackageManager.GET_SIGNING_CERTIFICATES or PackageManager.GET_SIGNATURES else PackageManager.GET_SIGNATURES
     val archive = pm.getPackageArchiveInfo(file.absolutePath, flags) ?: error("Invalid APK")
     val installed = pm.getPackageInfo(context.packageName, flags)
     check(archive.packageName == context.packageName) { "APK package mismatch" }
     val code = if (Build.VERSION.SDK_INT >= 28) archive.longVersionCode else archive.versionCode.toLong()
     check(code == expected.code.toLong()) { "APK version mismatch" }
-    val incoming = if (Build.VERSION.SDK_INT >= 28) archive.signingInfo?.apkContentsSigners else archive.signatures
-    val current = if (Build.VERSION.SDK_INT >= 28) installed.signingInfo?.apkContentsSigners else installed.signatures
-    check(!incoming.isNullOrEmpty() && !current.isNullOrEmpty() && incoming.toSet() == current.toSet()) {
-        "Signing key differs. Debug installs cannot receive release updates in place."
+    // Older PackageManager archive parsers can leave signingInfo empty even though
+    // verified legacy certificate bytes are available. Never fall back to trusting
+    // release metadata or an empty signer: both nonempty certificate sets must match.
+    val incoming = (if (Build.VERSION.SDK_INT >= 28) archive.signingInfo?.apkContentsSigners else null)?.takeIf { it.isNotEmpty() } ?: archive.signatures
+    val current = (if (Build.VERSION.SDK_INT >= 28) installed.signingInfo?.apkContentsSigners else null)?.takeIf { it.isNotEmpty() } ?: installed.signatures
+    check(sameSigningCertificates(incoming, current)) {
+        "Signing key differs or is unavailable (archive=${incoming?.size ?: 0}, installed=${current?.size ?: 0}). Debug installs cannot receive release updates in place."
     }
+}
+
+internal fun sameSigningCertificates(incoming: Array<android.content.pm.Signature>?, installed: Array<android.content.pm.Signature>?): Boolean {
+    if (incoming.isNullOrEmpty() || installed.isNullOrEmpty()) return false
+    fun digests(signers: Array<android.content.pm.Signature>) = signers.map { signer ->
+        MessageDigest.getInstance("SHA-256").digest(signer.toByteArray()).joinToString("") { "%02x".format(it) }
+    }.toSet()
+    return digests(incoming) == digests(installed)
 }

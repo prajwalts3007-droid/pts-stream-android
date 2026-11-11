@@ -77,7 +77,7 @@ fun NativeFilesScreen(
             }, onDismiss = { pending = null }
         ) { if (input) PtsField(name, { name = it }, "Name", Modifier.fillMaxWidth()) }
     }
-    LazyColumn(contentPadding = PaddingValues(start = 16.dp, end = 16.dp, bottom = 20.dp), verticalArrangement = Arrangement.spacedBy(0.dp)) {
+    LazyColumn(Modifier.testTag("files-list"), contentPadding = PaddingValues(start = 16.dp, end = 16.dp, bottom = 20.dp), verticalArrangement = Arrangement.spacedBy(0.dp)) {
         item { PtsPage("Browse") }
         item { PtsSegmented(listOf("vps" to "VPS", "pi" to "Raspberry Pi"), device, onDevice) }
         item {
@@ -155,6 +155,8 @@ fun NativeFilesScreen(
 
 @Composable
 fun FileEditorDialog(editor: FileEditor, busy: Boolean, onSave: (String) -> Unit, onClose: () -> Unit) {
+    val keyboard = androidx.compose.ui.platform.LocalSoftwareKeyboardController.current
+    val focus = androidx.compose.ui.platform.LocalFocusManager.current
     var content by remember(editor) { mutableStateOf(editor.content) }
     var discard by remember { mutableStateOf(false) }
     fun close() { if (content != editor.content) discard = true else onClose() }
@@ -168,7 +170,7 @@ fun FileEditorDialog(editor: FileEditor, busy: Boolean, onSave: (String) -> Unit
                 textStyle = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace), enabled = !busy)
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 PtsSecondaryButton("Cancel", Modifier.weight(1f), enabled = !busy) { close() }
-                PtsPrimaryButton("Save", Modifier.weight(1f), enabled = !busy && content.toByteArray(Charsets.UTF_8).size <= 1024 * 1024) { onSave(content) }
+                PtsPrimaryButton("Save", Modifier.weight(1f), enabled = !busy && content.toByteArray(Charsets.UTF_8).size <= 1024 * 1024) { focus.clearFocus(); keyboard?.hide(); onSave(content) }
             }
         }
     }

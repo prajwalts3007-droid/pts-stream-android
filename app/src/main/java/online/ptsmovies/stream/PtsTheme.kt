@@ -105,7 +105,8 @@ private fun ptsColors(light: Boolean) = (if (light) lightColorScheme() else dark
 @Composable
 fun PtsTheme(theme: String = "dark", content: @Composable () -> Unit) {
     val light = theme == "light" || (theme == "system" && !isSystemInDarkTheme())
-    CompositionLocalProvider(LocalLight provides light) {
+    val motion = LocalPtsMotion.current ?: rememberSystemMotion()
+    CompositionLocalProvider(LocalLight provides light, LocalPtsMotion provides motion) {
         MaterialTheme(colorScheme = ptsColors(light), typography = PtsType, shapes = PtsShapes, content = content)
     }
 }

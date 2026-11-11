@@ -15,7 +15,11 @@ import java.util.concurrent.ConcurrentLinkedQueue
 class NativeIngestTest {
     @get:Rule val ui = createComposeRule()
     private val server = MockWebServer()
-    @After fun close() { server.shutdown() }
+    @After fun close() {
+        val screenshot = androidx.test.platform.app.InstrumentationRegistry.getInstrumentation().uiAutomation.takeScreenshot()
+        if (screenshot != null) saveAuditCapture("native-ingest-final-state", screenshot)
+        server.shutdown()
+    }
 
     @Test fun zipInspectionSelectionAndDuplicateReplacementMatchWebWithoutBlindForce() {
         val writes = ConcurrentLinkedQueue<Pair<String, JSONObject>>()
@@ -43,8 +47,11 @@ class NativeIngestTest {
         ui.onNodeWithText("Generated ingest series").performScrollTo().performClick()
         ui.onNode(hasSetTextAction() and hasAnyAncestor(hasTestTag("ingest-zip-source"))).performScrollTo().performTextReplacement("https://example.invalid/generated.zip")
         ui.onNodeWithText("Inspect ZIP").performScrollTo().performClick()
-        ui.waitUntil(10000) { writes.size == 1 && ui.onAllNodesWithContentDescription("Select S01E02").fetchSemanticsNodes().isNotEmpty() }
+        ui.waitUntil(10000) { writes.size == 1 }
+        ui.onNodeWithTag("native-ingest").performScrollToNode(hasTestTag("ingest-source-count"))
+        ui.waitUntil(10000) { ui.onAllNodesWithText("2 sources ready").fetchSemanticsNodes().isNotEmpty() }
         assertFalse(queued)
+        ui.onNodeWithTag("native-ingest").performScrollToNode(hasContentDescription("Select S01E02"))
         ui.onNodeWithContentDescription("Select S01E02").performScrollTo().performClick()
         ui.onNodeWithText("Add selected to queue").performScrollTo().performClick()
         assertEquals(1, writes.size)
