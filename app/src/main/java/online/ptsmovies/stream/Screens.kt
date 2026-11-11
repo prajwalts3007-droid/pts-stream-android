@@ -319,8 +319,7 @@ fun TitleScreen(
     onPlay: (Episode?) -> Unit,
     onToggleWatch: () -> Unit,
     onDownload: (Episode?) -> Unit,
-    onMarkPlayed: () -> Unit = {},
-    metadataContent: @Composable () -> Unit = {}
+    onMarkPlayed: () -> Unit = {}
 ) {
     val episodes = remember(title) { title.episodes.sortedWith(compareBy({ it.season }, { it.episode })) }
     LazyColumn(
@@ -346,13 +345,6 @@ fun TitleScreen(
                     }
                     Column(Modifier.weight(1f).padding(start = 14.dp), verticalArrangement = Arrangement.spacedBy(7.dp)) {
                         Text(title.title, style = MaterialTheme.typography.headlineSmall, color = Pts.text, maxLines = 3, overflow = TextOverflow.Ellipsis)
-                        Text(
-                            listOfNotNull(title.year.takeIf { it > 0 }?.toString(), if (title.kind == "series") "TV Show" else "Movie", formatDuration(title.episodes.firstOrNull()?.duration?.toLong() ?: 0)).joinToString(" · "),
-                            style = MaterialTheme.typography.bodySmall, color = Pts.muted
-                        )
-                        Row(horizontalArrangement = Arrangement.spacedBy(5.dp)) {
-                            title.genres.take(2).forEach { g -> PtsPill(g) }
-                        }
                     }
                 }
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
@@ -366,18 +358,10 @@ fun TitleScreen(
                 }
                 if (resume != null && resume.seconds > 0) {
                     PtsProgressBar(if (resume.duration > 0) resume.seconds.toFloat() / resume.duration else 0f, tint = Pts.spark)
-                    Text("${formatDuration(resume.seconds)} watched", style = MaterialTheme.typography.labelSmall, color = Pts.muted)
                 }
             }
         }
-        if (title.synopsis.isNotBlank()) item {
-            PtsCard(Modifier.fillMaxWidth()) {
-                Text("About", style = MaterialTheme.typography.titleMedium, color = Pts.text)
-                ShortSynopsis(title.synopsis)
-            }
-        }
         if (title.kind == "series") {
-            item { metadataContent() }
             item { PtsSecondaryButton("Download episodes", Modifier.fillMaxWidth(), icon = PtsIcons.Download) { onDownload(null) } }
             item {
                 SeasonEpisodes(title, resume = resume, savedKeys = savedKeys, downloading = downloading,
@@ -419,10 +403,7 @@ internal fun EpisodeRow(
             ) { Icon(PtsIcons.Play, "Play episode", Modifier.size(22.dp), tint = Pts.accent) }
             Column(Modifier.weight(1f).padding(horizontal = 12.dp), verticalArrangement = Arrangement.spacedBy(3.dp)) {
                 Text("E${ep.episode} · ${ep.title.ifBlank { title.title }}", style = MaterialTheme.typography.titleSmall, color = Pts.text, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                Text(
-                    listOfNotNull(formatDuration(ep.duration.toLong()).takeIf { it.isNotBlank() }, if (saved) "On this device" else null).joinToString(" · ").ifBlank { "Ready to stream" },
-                    style = MaterialTheme.typography.labelSmall, color = if (saved) Pts.ok else Pts.muted
-                )
+                if (saved) Text("Downloaded", style = MaterialTheme.typography.labelSmall, color = Pts.muted)
                 if (resume != null && resume.seconds > 0) PtsProgressBar(
                     if (resume.duration > 0) resume.seconds.toFloat() / resume.duration else 0f, height = 4.dp, tint = Pts.spark
                 )
@@ -448,7 +429,7 @@ fun DownloadsScreen(saved: List<SavedVideo>, onPlay: (SavedVideo) -> Unit, onDel
 @Composable
 fun ProfileScreen(user: JSONObject, savedCount: Int, onDownloads: () -> Unit, onUpdate: () -> Unit, onSection: (String) -> Unit, onSignOut: () -> Unit,
     avatar: String? = null, imageLoader: coil.ImageLoader? = null, theme: String = "dark", onTheme: (String) -> Unit = {},
-    onEdit: () -> Unit = {}, onPhoto: () -> Unit = {}, onRemovePhoto: () -> Unit = {}, onPlayback: () -> Unit = {}, onDownloadSettings: () -> Unit = {}) {
+    onEdit: () -> Unit = {}, onPhoto: () -> Unit = {}, onRemovePhoto: () -> Unit = {}, onPlayback: () -> Unit = {}, onDownloadSettings: () -> Unit = {}, onAbout: () -> Unit = {}) {
     val name = user.optString("name").ifBlank { user.optString("username") }
     val role = user.optString("role")
     LazyColumn(
@@ -508,7 +489,7 @@ fun ProfileScreen(user: JSONObject, savedCount: Int, onDownloads: () -> Unit, on
                 MenuDivider()
                 MenuRow(PtsIcons.Shield, "Session", "Signed in · ${role.ifBlank { "user" }}") { }
                 MenuDivider()
-                MenuRow(PtsIcons.Info, "About", "PTS Library ${BuildConfig.VERSION_NAME}") { }
+                MenuRow(PtsIcons.Info, "About", "PTS Library ${BuildConfig.VERSION_NAME}", onAbout)
             }
         }
         item {

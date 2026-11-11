@@ -24,13 +24,14 @@ import androidx.compose.ui.window.DialogProperties
 import kotlinx.coroutines.launch
 
 data class PlayerAppearance(val subtitleSize: Float = 1f, val subtitleColor: String = "white", val outline: Boolean = true,
-    val subtitlePosition: String = "bottom", val controlsSeconds: Int = 12, val nextDownloadedOnly: Boolean = false)
+    val subtitlePosition: String = "bottom", val controlsSeconds: Int = 4, val nextDownloadedOnly: Boolean = false)
 
 fun loadPlayerAppearance(context: android.content.Context): PlayerAppearance {
     val p = context.getSharedPreferences("playback_local", android.content.Context.MODE_PRIVATE)
+    if (p.getInt("controls_policy", 0) < 8) p.edit().putInt("controls_policy", 8).putInt("controls_seconds", 4).apply()
     return PlayerAppearance(p.getFloat("subtitle_size", 1f).coerceIn(.8f, 1.3f), p.getString("subtitle_color", "white") ?: "white",
         p.getBoolean("subtitle_outline", true), p.getString("subtitle_position", "bottom") ?: "bottom",
-        p.getInt("controls_seconds", 12).takeIf { it in listOf(0, 8, 12, 20) } ?: 12, p.getBoolean("next_downloaded_only", false))
+        p.getInt("controls_seconds", 4).takeIf { it in listOf(4, 8, 12, 20) } ?: 4, p.getBoolean("next_downloaded_only", false))
 }
 fun savePlayerAppearance(context: android.content.Context, value: PlayerAppearance) {
     context.getSharedPreferences("playback_local", android.content.Context.MODE_PRIVATE).edit()
@@ -40,7 +41,9 @@ fun savePlayerAppearance(context: android.content.Context, value: PlayerAppearan
 }
 
 fun controlsShouldHide(playing: Boolean, buffering: Boolean, seeking: Boolean, menu: Boolean, seconds: Int) =
-    playing && !buffering && !seeking && !menu && seconds > 0
+    playing && !seeking && !menu && seconds > 0
+
+fun controlDelayMillis(seconds: Int) = if (seconds == 4) 3800L else seconds.coerceIn(4, 20) * 1000L
 
 @Composable
 fun CinemaIcon(icon: ImageVector, description: String, modifier: Modifier = Modifier, enabled: Boolean = true, onClick: () -> Unit) {
@@ -52,54 +55,39 @@ fun CinemaIcon(icon: ImageVector, description: String, modifier: Modifier = Modi
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun CinemaControls(title: String, playing: Boolean, position: Long, duration: Long, buffered: Long, fullscreen: Boolean,
-    muted: Boolean, route: String, episodes: Boolean,
     onBack: () -> Unit, onToggle: () -> Unit, onSeek: (Long) -> Unit, onPreview: (Long?) -> Unit,
-    onOptions: () -> Unit, onTracks: () -> Unit, onEpisodes: () -> Unit, onPip: () -> Unit, onLock: () -> Unit,
-    onMute: () -> Unit, onFullscreen: () -> Unit, onConnection: () -> Unit) {
-    Column(Modifier.fillMaxSize().testTag("cinema-controls").background(Brush.verticalGradient(listOf(Color(0xBB000000), Color.Transparent, Color(0xCC000000))))) {
-        Row(Modifier.fillMaxWidth().testTag("player-header").padding(horizontal = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+    onOptions: () -> Unit, onTracks: () -> Unit, onPip: () -> Unit, onFullscreen: () -> Unit, buffering: Boolean = false) {
+    BoxWithConstraints(Modifier.fillMaxSize().testTag("cinema-controls").background(Brush.verticalGradient(listOf(Color(0xB3000000), Color.Transparent, Color(0xE6000000))))) {
+        val centralSize = if (maxHeight < 240.dp) 48.dp else 64.dp
+        Row(Modifier.align(Alignment.TopCenter).fillMaxWidth().testTag("player-header").padding(horizontal = 4.dp), verticalAlignment = Alignment.CenterVertically) {
             CinemaIcon(PtsIcons.Back, "Back", onClick = onBack)
             Text(title, Modifier.weight(1f).padding(horizontal = 6.dp), color = Color.White, style = MaterialTheme.typography.titleSmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
             CinemaIcon(PtsIcons.Pip, "Picture in picture", onClick = onPip)
             CinemaIcon(PtsIcons.PlayerSettings, "Player options", onClick = onOptions)
         }
-        Box(Modifier.weight(1f).fillMaxWidth().testTag("player-transport"), contentAlignment = Alignment.Center) {
-        Row(horizontalArrangement = Arrangement.spacedBy(24.dp), verticalAlignment = Alignment.CenterVertically) {
-            Column(Modifier.size(64.dp).clickable { onSeek((position - 10000).coerceAtLeast(0)) }, horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
-                Icon(PtsIcons.Retry, "Back 10 seconds", Modifier.size(36.dp), tint = Color.White)
-                Text("10", style = MaterialTheme.typography.labelMedium, color = Color.White)
-            }
-            IconButton(onToggle, Modifier.size(72.dp).background(Color.White.copy(alpha = .16f), RoundedCornerShape(36.dp))) {
-                Icon(if (playing) PtsIcons.Pause else PtsIcons.Play, if (playing) "Pause playback" else "Play playback", Modifier.size(48.dp), tint = Color.White)
-            }
-            Column(Modifier.size(64.dp).clickable { onSeek((position + 10000).coerceAtMost(duration.coerceAtLeast(0))) }, horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
-                Icon(PtsIcons.Refresh, "Forward 10 seconds", Modifier.size(36.dp), tint = Color.White)
-                Text("10", style = MaterialTheme.typography.labelMedium, color = Color.White)
+        Box(Modifier.align(Alignment.Center).size(centralSize).testTag("player-transport"), contentAlignment = Alignment.Center) {
+            // Same web model: central Play only while paused; bottom Play/Pause always available.
+            if (!playing && !buffering) IconButton(onToggle, Modifier.fillMaxSize().background(Color.White, RoundedCornerShape(50))) {
+                Icon(PtsIcons.Play, "Resume playback", Modifier.size(centralSize * .58f), tint = Color.Black)
             }
         }
-        }
-        Column(Modifier.fillMaxWidth().testTag("player-footer").padding(horizontal = 8.dp)) {
-            Row(Modifier.fillMaxWidth().heightIn(min = 24.dp), verticalAlignment = Alignment.CenterVertically) {
-                Text("${playerClock(position)} / ${playerClock(duration)}", Modifier.weight(1f), color = Color.White, style = MaterialTheme.typography.labelMedium)
-                Text(route, Modifier.testTag("media-route").clickable(onClick = onConnection).padding(horizontal = 8.dp, vertical = 4.dp), maxLines = 1, color = Pts.accent, style = MaterialTheme.typography.labelSmall)
-            }
+        Column(Modifier.align(Alignment.BottomCenter).fillMaxWidth().testTag("player-footer").padding(horizontal = 8.dp)) {
             Box(Modifier.fillMaxWidth()) {
                 var target by remember { mutableLongStateOf(position) }
                 LinearProgressIndicator(progress = { (buffered.toFloat() / duration.coerceAtLeast(1)).coerceIn(0f, 1f) }, modifier = Modifier.fillMaxWidth().align(Alignment.Center), color = Color.White.copy(alpha = .5f), trackColor = Color.White.copy(alpha = .15f))
                 Slider(position.toFloat().coerceIn(0f, duration.coerceAtLeast(1).toFloat()), { target = it.toLong(); onPreview(target) },
-                    modifier = Modifier.fillMaxWidth().height(36.dp).testTag("player-seek-bar").semantics { contentDescription = "Seek position" }, onValueChangeFinished = { onSeek(target); onPreview(null) }, valueRange = 0f..duration.coerceAtLeast(1).toFloat(),
-                    thumb = { Box(Modifier.size(18.dp).background(Pts.accent, RoundedCornerShape(9.dp))) },
+                    modifier = Modifier.fillMaxWidth().height(28.dp).testTag("player-seek-bar").semantics { contentDescription = "Seek position" }, onValueChangeFinished = { onSeek(target); onPreview(null) }, valueRange = 0f..duration.coerceAtLeast(1).toFloat(),
+                    thumb = { Box(Modifier.size(14.dp).background(Color.White, RoundedCornerShape(7.dp))) },
                     track = {
                         Box(Modifier.fillMaxWidth().height(4.dp).background(Color.Transparent)) {
-                            Box(Modifier.fillMaxHeight().fillMaxWidth((position.toFloat() / duration.coerceAtLeast(1)).coerceIn(0f, 1f)).background(Pts.accent))
+                            Box(Modifier.fillMaxHeight().fillMaxWidth((position.toFloat() / duration.coerceAtLeast(1)).coerceIn(0f, 1f)).background(Color.White))
                         }
                     },
-                    colors = SliderDefaults.colors(thumbColor = Pts.accent, activeTrackColor = Pts.accent, inactiveTrackColor = Color.Transparent))
+                    colors = SliderDefaults.colors(thumbColor = Color.White, activeTrackColor = Color.White, inactiveTrackColor = Color.Transparent))
             }
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-                CinemaIcon(PtsIcons.Lock, "Lock player", onClick = onLock)
-                CinemaIcon(if (muted) PtsIcons.Muted else PtsIcons.Volume, "Mute audio", onClick = onMute)
-                if (episodes) CinemaIcon(PtsIcons.Series, "Choose episode", onClick = onEpisodes)
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                CinemaIcon(if (playing) PtsIcons.Pause else PtsIcons.Play, if (playing) "Pause playback" else "Play playback", onClick = onToggle)
+                Text("${playerClock(position)} / ${playerClock(duration)}", Modifier.weight(1f).padding(horizontal = 4.dp), color = Color.White, style = MaterialTheme.typography.labelSmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 CinemaIcon(PtsIcons.Subtitles, "Audio and subtitles", onClick = onTracks)
                 CinemaIcon(PtsIcons.Fit, if (fullscreen) "Exit fullscreen" else "Fullscreen", onClick = onFullscreen)
             }
@@ -112,7 +100,7 @@ fun PlayerOptions(appearance: PlayerAppearance, onAppearance: (PlayerAppearance)
     timing: PlaybackTiming, onTiming: (Int, Int) -> Unit, traffic: TrafficSnapshot, bufferMs: Long, fill: Boolean, autoplay: Boolean,
     onFit: () -> Unit, onZoomReset: () -> Unit, onAutoplay: () -> Unit, onTracks: () -> Unit, onSleep: () -> Unit,
     onLock: () -> Unit, onClose: () -> Unit, initialPage: String = "", timingRevision: Int = 0,
-    probe: (suspend () -> String)? = null) {
+    probe: (suspend () -> String)? = null, onEpisodes: (() -> Unit)? = null, muted: Boolean = false, onMute: () -> Unit = {}) {
     var page by remember { mutableStateOf(initialPage) }
     val scope = rememberCoroutineScope()
     var probing by remember { mutableStateOf(false) }; var probeResult by remember { mutableStateOf("") }
@@ -120,7 +108,7 @@ fun PlayerOptions(appearance: PlayerAppearance, onAppearance: (PlayerAppearance)
     Dialog(onDismissRequest = onClose, properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false)) {
         BoxWithConstraints(Modifier.fillMaxSize().background(Color.Black.copy(alpha = .25f))) {
             val wide = maxWidth > maxHeight
-            Surface(Modifier.align(if (wide) Alignment.CenterEnd else Alignment.BottomCenter).widthIn(max = 420.dp).fillMaxWidth().fillMaxHeight(if (wide) 1f else .84f), color = Color(0xFF171820), shape = RoundedCornerShape(topStart = 20.dp, topEnd = if (wide) 0.dp else 20.dp)) {
+            Surface(Modifier.align(if (wide) Alignment.CenterEnd else Alignment.BottomCenter).widthIn(max = 420.dp).fillMaxWidth().fillMaxHeight(if (wide) 1f else .84f), color = Color(0xFF141414), shape = RoundedCornerShape(topStart = 20.dp, topEnd = if (wide) 0.dp else 20.dp)) {
                 Column(Modifier.windowInsetsPadding(WindowInsets.safeDrawing).padding(16.dp)) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         if (page.isNotBlank()) CinemaIcon(PtsIcons.Back, "Back to player menu", onClick = { page = "" })
@@ -149,7 +137,7 @@ fun PlayerOptions(appearance: PlayerAppearance, onAppearance: (PlayerAppearance)
                             }
                             "Controls" -> {
                                 Text("Hide controls after", color = Color.White)
-                                listOf(8, 12, 20, 0).forEach { seconds -> PlayerMenuRow(PtsIcons.Clock, if (seconds == 0) "Never" else "$seconds seconds", if (appearance.controlsSeconds == seconds) "Selected" else "") { onAppearance(appearance.copy(controlsSeconds = seconds)) } }
+                                listOf(4, 8, 12, 20).forEach { seconds -> PlayerMenuRow(PtsIcons.Clock, if (seconds == 4) "Web default · 3.8 seconds" else "$seconds seconds", if (appearance.controlsSeconds == seconds) "Selected" else "") { onAppearance(appearance.copy(controlsSeconds = seconds)) } }
                                 PreferenceSwitch("Next downloaded episode only", appearance.nextDownloadedOnly) { onAppearance(appearance.copy(nextDownloadedOnly = it)) }
                             }
                             "Connection" -> {
@@ -168,7 +156,9 @@ fun PlayerOptions(appearance: PlayerAppearance, onAppearance: (PlayerAppearance)
                                 }
                             }
                             else -> {
+                                onEpisodes?.let { PlayerMenuRow(PtsIcons.Series, "Choose episode", action = it) }
                                 PlayerMenuRow(PtsIcons.Subtitles, "Audio and subtitles", "Tracks") { onTracks() }
+                                PlayerMenuRow(if (muted) PtsIcons.Muted else PtsIcons.Volume, if (muted) "Unmute audio" else "Mute audio", action = onMute)
                                 PlayerMenuRow(PtsIcons.Subtitles, "Subtitle appearance") { page = "Subtitles" }
                                 PlayerMenuRow(PtsIcons.Speed, "Speed", "${speed}×") { page = "Speed" }
                                 PlayerMenuRow(PtsIcons.Clock, "Synchronisation") { page = "Synchronisation" }

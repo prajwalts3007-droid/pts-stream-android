@@ -6,6 +6,8 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.style.TextOverflow
@@ -15,15 +17,13 @@ import org.json.JSONObject
 
 @Composable
 fun PtsTitleListRow(title: Title, marked: Boolean, onOpen: () -> Unit, onToggle: () -> Unit) {
-    PtsCard(Modifier.fillMaxWidth(), padding = 12.dp, onClick = onOpen) {
-        Row {
-            Box(Modifier.width(64.dp).height(92.dp).clip(RoundedCornerShape(8.dp)).background(Pts.soft)) {
+    PtsCard(Modifier.fillMaxWidth().testTag("poster-list-${title.id}"), padding = 12.dp, onClick = onOpen) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Box(Modifier.width(64.dp).height(92.dp).testTag("poster-list-art-${title.id}").clip(RoundedCornerShape(8.dp)).background(Pts.soft)) {
                 if (title.poster.startsWith("https://")) AsyncImage(title.poster, null, Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
             }
             Column(Modifier.weight(1f).padding(horizontal = 12.dp), verticalArrangement = Arrangement.spacedBy(5.dp)) {
                 Text(title.title, style = MaterialTheme.typography.titleMedium, color = Pts.text, maxLines = 2, overflow = TextOverflow.Ellipsis)
-                Text(listOfNotNull(title.year.takeIf { it > 0 }?.toString(), title.genres.take(2).joinToString(" · ").ifBlank { null }).joinToString(" · "), style = MaterialTheme.typography.bodySmall, color = Pts.muted)
-                Text(title.synopsis, style = MaterialTheme.typography.bodySmall, color = Pts.muted, maxLines = 2, overflow = TextOverflow.Ellipsis)
             }
             PtsIconAction(if (marked) PtsIcons.Check else PtsIcons.Plus, "Toggle My List", onToggle)
         }

@@ -337,7 +337,8 @@ class AppFlowTest {
         ui.onNodeWithText("E1 · Second season episode").performScrollTo().performClick()
         waitForMovingPlayback()
         pauseIfPlaying()
-        ui.onNodeWithContentDescription("Choose episode").performClick()
+        ui.onNodeWithContentDescription("Player options").performClick()
+        ui.onNodeWithText("Choose episode").performClick()
         ui.onAllNodesWithTag("season-selector").onLast().performClick()
         ui.onNodeWithText("Season 1").performClick()
         ui.onNode(hasText("E1 · First season episode") and hasAnyAncestor(isDialog())).performClick()
@@ -618,8 +619,9 @@ class AppFlowTest {
 
     @Test fun playerConnectionMenuUsesActualRouteAndTimingMenuUpdates() {
         launchLoggedIn(); openMovie(); ui.onNodeWithText("Play").performClick(); waitForMovingPlayback(); pauseIfPlaying()
-        ui.onNodeWithTag("media-route").assertTextContains("Server fallback", substring = true)
-        ui.onNodeWithTag("media-route").performClick()
+        ui.onNodeWithTag("media-route").assertDoesNotExist()
+        ui.onNodeWithContentDescription("Player options").performClick()
+        ui.onNodeWithText("Connection").performScrollTo().performClick()
         ui.onNode(hasText("Server fallback") and hasAnyAncestor(isDialog())).assertExists()
         capture("cinema-connection-menu")
         ui.onNodeWithContentDescription("Back to player menu").performClick()
@@ -681,19 +683,55 @@ class AppFlowTest {
         assertTrue(deletedJobs.isEmpty())
     }
 
-    @Test fun aTapShowsControlsAndRestartsTheWholeTimeoutRatherThanTogglingThemAway() {
-        InstrumentationRegistry.getInstrumentation().targetContext.getSharedPreferences("playback_local", 0).edit().putInt("controls_seconds", 8).commit()
+    @Test fun tapsToggleControlsAndPlaybackAutoHidesAtTheWebTimeout() {
         launchLoggedIn(); openMovie(); ui.onNodeWithText("Play").performClick(); waitForMovingPlayback()
+        scenario!!.onActivity { activity -> nativePlayer(activity.window.decorView)!!.repeatMode = androidx.media3.common.Player.REPEAT_MODE_ONE }
         // The generated fixture is eight seconds. Slow it down so an end/rebuffer event
         // cannot legitimately reveal controls while testing the independent hide timer.
         scenario!!.onActivity { activity -> nativePlayer(activity.window.decorView)!!.setPlaybackSpeed(.1f) }
         fun tapBlankVideo() { ui.onNodeWithTag("player-gesture-zone").performTouchInput { click(androidx.compose.ui.geometry.Offset(4f, height * .45f)) } }
-        tapBlankVideo(); ui.onNodeWithContentDescription("Pause playback").assertIsDisplayed()
-        Thread.sleep(4500); tapBlankVideo(); Thread.sleep(4500)
-        ui.onNodeWithContentDescription("Pause playback").assertIsDisplayed()
-        ui.waitUntil(10000) { ui.onAllNodesWithContentDescription("Pause playback").fetchSemanticsNodes().isEmpty() }
+        tapBlankVideo()
+        ui.waitUntil(2000) { ui.onAllNodesWithTag("cinema-controls").fetchSemanticsNodes().isEmpty() }
+        tapBlankVideo(); ui.waitUntil(2000) { ui.onAllNodesWithContentDescription("Pause playback").fetchSemanticsNodes().isNotEmpty() }
+        ui.waitUntil(6500) { ui.onAllNodesWithTag("cinema-controls").fetchSemanticsNodes().isEmpty() }
         tapBlankVideo(); ui.waitUntil(2000) { ui.onAllNodesWithContentDescription("Pause playback").fetchSemanticsNodes().isNotEmpty() }
         ui.onNodeWithContentDescription("Pause playback").performClick()
-        capture("simple-player-resettable-controls")
+        tapBlankVideo(); ui.waitUntil(2000) { ui.onAllNodesWithTag("cinema-controls").fetchSemanticsNodes().isEmpty() }
+        tapBlankVideo(); ui.waitUntil(2000) { ui.onAllNodesWithContentDescription("Play playback").fetchSemanticsNodes().isNotEmpty() }
+        capture("web-player-toggle-and-timeout")
+    }
+
+    @Test fun homeAutomaticallyEntersPipAndKeepsTheDecoderPlaying() {
+        launchLoggedIn(); openMovie(); ui.onNodeWithText("Play").performClick(); waitForMovingPlayback()
+        val entered = AtomicBoolean(false); val moving = AtomicBoolean(false)
+        scenario!!.onActivity { activity -> nativePlayer(activity.window.decorView)!!.repeatMode = androidx.media3.common.Player.REPEAT_MODE_ONE }
+        val device = androidx.test.uiautomator.UiDevice.getInstance(InstrumentationRegistry.getInstrumentation())
+        device.pressHome()
+        ui.waitUntil(10000) {
+            InstrumentationRegistry.getInstrumentation().runOnMainSync {
+                val activity = androidx.test.runner.lifecycle.ActivityLifecycleMonitorRegistry.getInstance()
+                    .getActivitiesInStage(androidx.test.runner.lifecycle.Stage.PAUSED).filterIsInstance<MainActivity>().firstOrNull()
+                if (activity != null) { entered.set(activity.isInPictureInPictureMode); moving.set(nativePlayer(activity.window.decorView)?.isPlaying == true) }
+            }
+            entered.get() && moving.get()
+        }
+        saveAuditCapture("automatic-home-pip", checkNotNull(InstrumentationRegistry.getInstrumentation().uiAutomation.takeScreenshot()))
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        context.startActivity(android.content.Intent(context, MainActivity::class.java).addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK or android.content.Intent.FLAG_ACTIVITY_REORDER_TO_FRONT))
+        ui.waitUntil(10000) { ui.onAllNodesWithTag("player-surface").fetchSemanticsNodes().isNotEmpty() }
+        scenario!!.onActivity { activity -> assertFalse(activity.isInPictureInPictureMode); nativePlayer(activity.window.decorView)?.pause() }
+        capture("returned-from-automatic-pip")
+    }
+
+    @Test fun darkWatchDetailsHaveNoSynopsisBadgesOrMetadataEditor() {
+        launchLoggedIn(); openMovie()
+        ui.onNodeWithText("Generated test pattern and tone. No third-party media.").assertDoesNotExist()
+        ui.onNodeWithText("Episode names").assertDoesNotExist()
+        ui.onNodeWithText("2026").assertDoesNotExist()
+        capture("clean-black-watch-details")
+        ui.onNodeWithText("Play").performClick(); waitForMovingPlayback(); pauseIfPlaying()
+        ui.onNodeWithText("Generated test pattern and tone. No third-party media.").assertDoesNotExist()
+        ui.onNodeWithTag("media-route").assertDoesNotExist()
+        capture("clean-black-watch-playing")
     }
 }

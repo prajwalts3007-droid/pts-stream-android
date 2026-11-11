@@ -351,14 +351,14 @@ class ScreenAuditTest {
         }
     }
 
-    @Test fun simplePlayerRegionsNeverOverlapAndTransportOnlySeeksTenSeconds() {
+    @Test fun webStylePlayerRegionsNeverOverlapAndHaveNoMetadataClutter() {
         var width by mutableIntStateOf(320); var height by mutableIntStateOf(260); var font by mutableFloatStateOf(1f)
-        var seek = -1L
-        ui.setContent { PtsTheme("dark") { val density = LocalDensity.current
+        var playing by mutableStateOf(true)
+        ui.setContent { PtsTheme("watch") { val density = LocalDensity.current
             CompositionLocalProvider(LocalDensity provides Density(1.5f.coerceAtMost(density.density), font)) {
                 Box(Modifier.requiredSize(width.dp, height.dp)) {
-                    CinemaControls("A long generated title with several episode words", true, 20000, 60000, 35000, false, false, "Local Pi", true,
-                        {}, {}, { seek = it }, {}, {}, {}, {}, {}, {}, {}, {}, {})
+                    CinemaControls("A long generated title with several episode words", playing, 20000, 60000, 35000, false,
+                        {}, { playing = !playing }, {}, {}, {}, {}, {}, {})
                 }
             }
         } }
@@ -368,12 +368,74 @@ class ScreenAuditTest {
             val transport = ui.onNodeWithTag("player-transport").fetchSemanticsNode().boundsInRoot
             val footer = ui.onNodeWithTag("player-footer").fetchSemanticsNode().boundsInRoot
             assertTrue(header.bottom <= transport.top + 1); assertTrue(transport.bottom <= footer.top + 1)
-            ui.onNodeWithContentDescription("Back 10 seconds").performClick(); ui.runOnIdle { assertEquals(10000L, seek) }
-            ui.onNodeWithContentDescription("Forward 10 seconds").performClick(); ui.runOnIdle { assertEquals(30000L, seek) }
             ui.onNodeWithContentDescription("Next episode").assertDoesNotExist(); ui.onNodeWithContentDescription("Previous episode").assertDoesNotExist()
-            ui.onNodeWithContentDescription("Pause playback").assertIsDisplayed(); ui.onNodeWithContentDescription("Choose episode").assertIsDisplayed()
-            capture("simple-player-${w}-${h}-${scale}")
+            ui.onNodeWithContentDescription("Pause playback").assertIsDisplayed()
+            ui.onNodeWithTag("media-route").assertDoesNotExist()
+            capture("web-player-playing-${w}-${h}-${scale}")
+            ui.onNodeWithContentDescription("Pause playback").performClick()
+            ui.onNodeWithContentDescription("Resume playback").assertIsDisplayed()
+            capture("web-player-paused-${w}-${h}-${scale}")
+            ui.onNodeWithContentDescription("Resume playback").performClick()
         }
+    }
+
+    @Test fun posterCardsHaveEqualBoundsWithShortAndLongTitlesAndLargeFonts() {
+        var width by mutableIntStateOf(320); var font by mutableFloatStateOf(1f)
+        val a = movie.copy(id = 81, title = "Up")
+        val b = series.copy(id = 82, title = "A very long series title that must wrap and then ellipsize consistently")
+        ui.setContent { PtsTheme { val density = LocalDensity.current
+            CompositionLocalProvider(LocalDensity provides Density(density.density, font)) {
+                Column(Modifier.width(width.dp)) {
+                    Row { PtsPosterCard(a, null, false, Modifier.weight(1f), width = null, onOpen = {}, onToggleWatch = {}); PtsPosterCard(b, null, false, Modifier.weight(1f), width = null, onOpen = {}, onToggleWatch = {}) }
+                    PtsTitleListRow(a, false, {}, {}); PtsTitleListRow(b, false, {}, {})
+                }
+            }
+        } }
+        for ((w, scale) in listOf(280 to 1f, 320 to 1.3f, 390 to 1f, 390 to 1.3f)) {
+            ui.runOnIdle { width = w; font = scale }
+            for (prefix in listOf("poster-card", "poster-art", "poster-list", "poster-list-art")) {
+                val first = ui.onNodeWithTag("$prefix-81", useUnmergedTree = true).fetchSemanticsNode().boundsInRoot
+                val second = ui.onNodeWithTag("$prefix-82", useUnmergedTree = true).fetchSemanticsNode().boundsInRoot
+                assertEquals("$prefix width at $w/$scale", first.width, second.width, 1f)
+                assertEquals("$prefix height at $w/$scale", first.height, second.height, 1f)
+            }
+            capture("uniform-posters-$w-$scale")
+        }
+    }
+
+    @Test fun powerDeviceRowsKeepNamesAndActionsAlignedAtLargeFontSizes() {
+        var width by mutableIntStateOf(280); var font by mutableFloatStateOf(1f); var reboot = ""
+        ui.setContent { PtsTheme { val density = LocalDensity.current
+            CompositionLocalProvider(LocalDensity provides Density(density.density, font)) {
+                Column(Modifier.width(width.dp).padding(16.dp)) {
+                    PowerDeviceRow("vps", "VPS", true) { reboot = "vps" }
+                    PowerDeviceRow("pi", "Raspberry Pi", true) { reboot = "pi" }
+                }
+            }
+        } }
+        for ((w, scale) in listOf(280 to 1f, 320 to 1.3f, 390 to 1.3f)) {
+            ui.runOnIdle { width = w; font = scale }
+            val actions = listOf("vps", "pi").map { target ->
+                val row = ui.onNodeWithTag("power-row-$target").fetchSemanticsNode().boundsInRoot
+                val name = ui.onNodeWithTag("power-name-$target").assertIsDisplayed().fetchSemanticsNode().boundsInRoot
+                val action = ui.onNodeWithTag("power-reboot-$target").assertIsDisplayed().fetchSemanticsNode().boundsInRoot
+                assertTrue(name.right <= action.left); assertTrue(action.right <= row.right + 1)
+                ui.onNodeWithTag("power-reboot-$target").performClick(); ui.runOnIdle { assertEquals(target, reboot) }
+                action
+            }
+            assertEquals(actions[0].left, actions[1].left, 1f)
+            assertEquals(actions[0].width, actions[1].width, 1f)
+            capture("aligned-power-$w-$scale")
+        }
+    }
+
+    @Test fun watchThemeIsPitchBlackAndHasNoDecorativeGradient() {
+        ui.setContent { PtsTheme("watch") { PtsBackground(decorative = false) { Spacer(Modifier.fillMaxSize()) } } }
+        val image = ui.onRoot().captureToImage().asAndroidBitmap()
+        for (x in listOf(1, image.width / 2, image.width - 2)) for (y in listOf(1, image.height / 2, image.height - 2)) {
+            assertEquals(android.graphics.Color.BLACK, image.getPixel(x, y))
+        }
+        image.recycle()
     }
 
     @Test fun movieDetailsHaveNoCodecOrContainerBadges() {

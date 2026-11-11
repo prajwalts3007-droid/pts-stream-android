@@ -223,10 +223,7 @@ fun NativeAdminSettings(user: JSONObject, api: PtsApi, onUpdate: () -> Unit, onS
                             }
                         }
                         "Power options" -> listOf("vps" to "VPS", "pi" to "Raspberry Pi").forEach { (target, label) ->
-                            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                                Text(label, Modifier.weight(1f), color = Pts.text, style = MaterialTheme.typography.titleSmall)
-                                PtsSecondaryButton("Reboot", danger = true, enabled = !busy) { confirm(AdminCommand("/admin/power", "POST", JSONObject().put("target", target)), "Reboot $label now? Active connections will be interrupted.") }
-                            }
+                            PowerDeviceRow(target, label, !busy) { confirm(AdminCommand("/admin/power", "POST", JSONObject().put("target", target)), "Reboot $label now? Active connections will be interrupted.") }
                         }
                         "User management" -> {
                             PtsPrimaryButton("+ Add user", enabled = !busy) { username = ""; name = ""; email = ""; newPassword = ""; role = "user"; newUser = true }

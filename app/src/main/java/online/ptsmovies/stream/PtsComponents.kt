@@ -71,11 +71,12 @@ val ButtonShape = RoundedCornerShape(14.dp)
 val PosterShape = RoundedCornerShape(12.dp)
 
 @Composable
-fun PtsBackground(modifier: Modifier = Modifier, content: @Composable BoxScope.() -> Unit) {
+fun PtsBackground(modifier: Modifier = Modifier, decorative: Boolean = true, content: @Composable BoxScope.() -> Unit) {
     val accent = Pts.accent
     val spark = Pts.spark
     Box(
         Modifier.fillMaxSize().background(Pts.bg).then(modifier).drawBehind {
+            if (!decorative) return@drawBehind
             drawRect(Brush.radialGradient(
                 colors = listOf(accent.copy(alpha = 0.12f), Color.Transparent),
                 center = Offset(size.width * 0.92f, size.height * 0.03f),
@@ -487,11 +488,11 @@ fun PtsPosterCard(
 ) {
     Column(
         modifier.then(if (width != null) Modifier.width(width) else Modifier.fillMaxWidth())
-            .clip(RoundedCornerShape(19.dp)).background(Pts.card)
+            .testTag("poster-card-${title.id}").clip(RoundedCornerShape(19.dp)).background(Pts.card)
             .border(2.dp, Pts.line, RoundedCornerShape(19.dp)).clickable(onClick = onOpen).padding(7.dp),
         verticalArrangement = Arrangement.spacedBy(5.dp)
     ) {
-        Box(Modifier.fillMaxWidth().aspectRatio(2f / 3f).clip(PosterShape).background(Pts.soft)) {
+        Box(Modifier.fillMaxWidth().aspectRatio(2f / 3f).testTag("poster-art-${title.id}").clip(PosterShape).background(Pts.soft)) {
             Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                 Text(title.title.take(1).uppercase(), fontFamily = Nunito, fontWeight = FontWeight.Black, fontSize = 34.sp, color = Pts.accent)
             }
@@ -520,11 +521,7 @@ fun PtsPosterCard(
                 PtsIconAction(PtsIcons.Close, "Remove from Continue watching", onClearProgress, tint = Pts.text, size = 32.dp)
             }
         }
-        Text(title.title, style = MaterialTheme.typography.titleSmall, color = Pts.text, maxLines = 2, overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(horizontal = 2.dp))
-        Text(
-            listOfNotNull(title.year.takeIf { it > 0 }?.toString(), if (title.kind == "series") "TV Show" else "Movie").joinToString(" · "),
-            style = MaterialTheme.typography.labelSmall, color = Pts.muted, modifier = Modifier.padding(horizontal = 2.dp, vertical = 0.dp)
-        )
+        Text(title.title, style = MaterialTheme.typography.titleSmall, color = Pts.text, minLines = 2, maxLines = 2, overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(horizontal = 2.dp))
     }
 }
 

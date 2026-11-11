@@ -23,16 +23,16 @@ import androidx.compose.ui.unit.sp
 
 // Tokens taken from the live PTS Learning Studio stylesheet (education.css).
 object Pts {
-    val bg: Color @Composable @ReadOnlyComposable get() = if (LocalLight.current) Color(0xFFEEF2FF) else Color(0xFF11132D)
-    val card: Color @Composable @ReadOnlyComposable get() = if (LocalLight.current) Color.White else Color(0xFF202343)
-    val soft: Color @Composable @ReadOnlyComposable get() = if (LocalLight.current) Color(0xFFF3F4FF) else Color(0xFF2B2F57)
+    val bg: Color @Composable @ReadOnlyComposable get() = if (LocalWatch.current) Color.Black else if (LocalLight.current) Color(0xFFEEF2FF) else Color(0xFF11132D)
+    val card: Color @Composable @ReadOnlyComposable get() = if (LocalWatch.current) Color(0xFF141414) else if (LocalLight.current) Color.White else Color(0xFF202343)
+    val soft: Color @Composable @ReadOnlyComposable get() = if (LocalWatch.current) Color(0xFF202020) else if (LocalLight.current) Color(0xFFF3F4FF) else Color(0xFF2B2F57)
     val text: Color @Composable @ReadOnlyComposable get() = if (LocalLight.current) Color(0xFF1E1B4B) else Color(0xFFF7F7FF)
-    val muted: Color @Composable @ReadOnlyComposable get() = if (LocalLight.current) Color(0xFF575578) else Color(0xFFC4C9E4)
+    val muted: Color @Composable @ReadOnlyComposable get() = if (LocalWatch.current) Color(0xFFB0B0B0) else if (LocalLight.current) Color(0xFF575578) else Color(0xFFC4C9E4)
     val muted2: Color @Composable @ReadOnlyComposable get() = muted
-    val line: Color @Composable @ReadOnlyComposable get() = if (LocalLight.current) Color(0xFFD2D5EC) else Color(0xFF414671)
-    val line2: Color @Composable @ReadOnlyComposable get() = if (LocalLight.current) Color(0xFF8E94BD) else Color(0xFF7075A2)
-    val accent: Color @Composable @ReadOnlyComposable get() = if (LocalLight.current) Color(0xFF4338CA) else Color(0xFFAAA6FF)
-    val onAccent: Color @Composable @ReadOnlyComposable get() = if (LocalLight.current) Color.White else Color(0xFF16163F)
+    val line: Color @Composable @ReadOnlyComposable get() = if (LocalWatch.current) Color(0xFF303030) else if (LocalLight.current) Color(0xFFD2D5EC) else Color(0xFF414671)
+    val line2: Color @Composable @ReadOnlyComposable get() = if (LocalWatch.current) Color(0xFF606060) else if (LocalLight.current) Color(0xFF8E94BD) else Color(0xFF7075A2)
+    val accent: Color @Composable @ReadOnlyComposable get() = if (LocalWatch.current) Color.White else if (LocalLight.current) Color(0xFF4338CA) else Color(0xFFAAA6FF)
+    val onAccent: Color @Composable @ReadOnlyComposable get() = if (LocalWatch.current) Color.Black else if (LocalLight.current) Color.White else Color(0xFF16163F)
     val spark: Color @Composable @ReadOnlyComposable get() = if (LocalLight.current) Color(0xFFC2410C) else Color(0xFFFFB46E)
     val ok: Color @Composable @ReadOnlyComposable get() = if (LocalLight.current) Color(0xFF137453) else Color(0xFF79DFB8)
     val danger: Color @Composable @ReadOnlyComposable get() = if (LocalLight.current) Color(0xFFB42339) else Color(0xFFFF969E)
@@ -42,6 +42,7 @@ object Pts {
     val dangerSoft: Color @Composable @ReadOnlyComposable get() = danger.copy(alpha = .14f)
 }
 private val LocalLight = staticCompositionLocalOf { false }
+private val LocalWatch = staticCompositionLocalOf { false }
 
 val DmSans = FontFamily(
     Font(R.font.dm_sans, FontWeight.Normal, variationSettings = FontVariation.Settings(FontVariation.weight(400), FontVariation.opticalSizing(14.sp))),
@@ -106,7 +107,7 @@ private fun ptsColors(light: Boolean) = (if (light) lightColorScheme() else dark
 fun PtsTheme(theme: String = "dark", content: @Composable () -> Unit) {
     val light = theme == "light" || (theme == "system" && !isSystemInDarkTheme())
     val motion = LocalPtsMotion.current ?: rememberSystemMotion()
-    CompositionLocalProvider(LocalLight provides light, LocalPtsMotion provides motion) {
+    CompositionLocalProvider(LocalLight provides light, LocalWatch provides (theme == "watch"), LocalPtsMotion provides motion) {
         MaterialTheme(colorScheme = ptsColors(light), typography = PtsType, shapes = PtsShapes, content = content)
     }
 }

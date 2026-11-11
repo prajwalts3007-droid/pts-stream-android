@@ -33,14 +33,25 @@ class PlayerRedesignTest {
         assertEquals(listOf(1100000L, 1100000L), received)
     }
 
-    @Test fun controlsNeverExpireWhenPausedSeekingBufferingOrInMenus() {
+    @Test fun controlsFollowWebTimeoutAndBufferingDoesNotKeepThemOpenForever() {
         assertFalse(controlsShouldHide(false, false, false, false, 12))
-        assertFalse(controlsShouldHide(true, true, false, false, 12))
+        assertTrue(controlsShouldHide(true, true, false, false, 12))
         assertFalse(controlsShouldHide(true, false, true, false, 12))
         assertFalse(controlsShouldHide(true, false, false, true, 12))
         assertFalse(controlsShouldHide(true, false, false, false, 0))
         assertTrue(controlsShouldHide(true, false, false, false, 12))
-        assertEquals(12, PlayerAppearance().controlsSeconds)
+        assertEquals(4, PlayerAppearance().controlsSeconds)
+        assertEquals(3800L, controlDelayMillis(4))
+    }
+
+    @Test fun autoPipOnlyRunsForActivePlaybackIncludingBuffering() {
+        assertTrue(shouldAutoEnterPip(true, true, androidx.media3.common.Player.STATE_READY, false))
+        assertTrue(shouldAutoEnterPip(true, true, androidx.media3.common.Player.STATE_BUFFERING, false))
+        assertFalse(shouldAutoEnterPip(true, false, androidx.media3.common.Player.STATE_READY, false))
+        assertFalse(shouldAutoEnterPip(false, true, androidx.media3.common.Player.STATE_READY, false))
+        assertFalse(shouldAutoEnterPip(true, true, androidx.media3.common.Player.STATE_ENDED, false))
+        assertFalse(shouldAutoEnterPip(true, true, androidx.media3.common.Player.STATE_IDLE, false))
+        assertFalse(shouldAutoEnterPip(true, true, androidx.media3.common.Player.STATE_READY, true))
     }
 
     @Test fun downloadedOnlyEpisodeNavigationSkipsUnsavedEpisodesAcrossSeasons() {

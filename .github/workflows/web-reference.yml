@@ -17,6 +17,11 @@ jobs:
           node-version: '22'
       - run: npm install --no-save --package-lock=false playwright@1.56.1
       - run: npx playwright install --with-deps chromium
+      - name: Generate rights-cleared browser playback fixture
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq ffmpeg
+          ffmpeg -loglevel error -f lavfi -i testsrc2=size=320x180:rate=15 -t 30 -an -c:v libx264 -preset ultrafast -crf 32 -pix_fmt yuv420p -movflags +faststart /tmp/pts-web-fixture.mp4
       - name: Capture deployed web with synthetic intercepted APIs only
         run: node .github/scripts/web-reference.cjs
       - uses: actions/upload-artifact@v4

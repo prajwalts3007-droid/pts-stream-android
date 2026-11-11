@@ -117,7 +117,6 @@ fun SeasonEpisodes(
                     style = MaterialTheme.typography.labelSmall, color = Pts.accent)
                 EpisodeRow(title, ep, resume?.takeIf { it.episodeId == ep.id }, "${title.id}_${ep.id}" in savedKeys,
                     downloading, { onPlay(ep) }, { onDownload(ep) })
-                if (ep.description.isNotBlank()) ShortSynopsis(ep.description, Modifier.padding(horizontal = 12.dp, vertical = 6.dp))
             }
         }
     }

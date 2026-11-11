@@ -11,7 +11,8 @@ const jobs = [
   { job_id: 'fixture-queued', title: 'The Open Road', year: 2025, type: 'series', season: 1, episode: 1, stage: 'queued', progress: 0, download_url: 'https://example.invalid/fixture.mp4' },
   { job_id: 'fixture-failed', title: 'Generated failed job', year: 2026, type: 'movie', stage: 'failed', progress: 0, error: 'Synthetic source failure', download_url: 'https://example.invalid/fixture.mp4' },
 ];
-const title = { id: 90001, title: 'The Open Road', kind: 'series', year: 2025, synopsis: 'Synthetic audit fixture. No third-party media.', video_codec: 'hevc', container: 'mp4', genres: ['Adventure'], episodes: [{ id: 101, season: 1, episode: 1, title: 'A new beginning', duration: 2400, container: 'mp4' }] };
+const title = { id: 90001, title: 'The Open Road', kind: 'series', year: 2025, synopsis: 'Synthetic audit fixture. No third-party media.', video_codec: 'h264', container: 'mp4', genres: ['Adventure'], episodes: [{ id: 101, season: 1, episode: 1, title: 'A new beginning', video_codec: 'h264', duration: 30, container: 'mp4' }] };
+const media = fs.readFileSync('/tmp/pts-web-fixture.mp4');
 const calls = [], errors = [], geometry = [], blockedNetwork = [];
 function fixture(path, request) {
   if (path === '/auth/config') return { google_enabled: false, origin };
@@ -42,6 +43,13 @@ function fixture(path, request) {
       if (url.pathname.startsWith('/api/')) {
         const path = url.pathname.replace('/api/v1', '');
         calls.push({ path, method: request.method(), body: request.postData() });
+        if (path === '/stream/file/episode/101') {
+          const range = /^bytes=(\d+)-(\d*)$/.exec(request.headers().range || '');
+          const start = range ? Number(range[1]) : 0;
+          const end = range && range[2] ? Math.min(Number(range[2]), media.length - 1) : media.length - 1;
+          return route.fulfill({ status: range ? 206 : 200, contentType: 'video/mp4',
+            headers: { 'Accept-Ranges': 'bytes', ...(range ? { 'Content-Range': `bytes ${start}-${end}/${media.length}` } : {}) }, body: media.subarray(start, end + 1) });
+        }
         return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(fixture(path, request)) });
       }
       if (!['GET', 'HEAD'].includes(request.method())) {
@@ -70,8 +78,32 @@ function fixture(path, request) {
       assert.equal(boxes.length, 9);
       assert.ok(boxes.every(b => Math.abs(b.top - boxes[0].top) < 2 && b.left >= 0 && b.right <= width + 1));
       geometry.push({ width, height, queue: boxes });
+      await page.evaluate(() => stOpenWatch(90001, 101));
+      await page.locator('#st-player').waitFor({ state: 'visible' });
+      await page.waitForFunction(() => document.querySelector('#st-video').readyState >= 2);
+      await page.evaluate(() => { const video = document.querySelector('#st-video'); video.loop = true; video.muted = true; return video.play(); });
+      await page.waitForFunction(() => document.querySelector('#st-video').currentTime > 0);
+      await page.evaluate(() => plShowControls());
+      await page.screenshot({ path: `${output}/${width}x${height}-player-playing.png`, fullPage: true });
+      const regions = await page.evaluate(() => ['.st-player-top', '.st-player-bottom', '#st-player'].map(selector => {
+        const r = document.querySelector(selector).getBoundingClientRect(); return { selector, x: r.x, y: r.y, width: r.width, height: r.height };
+      }));
+      geometry.push({ width, height, player: regions });
+      await page.evaluate(() => plToggleControls());
+      assert.ok(await page.locator('#st-player').evaluate(n => n.classList.contains('controls-off')));
+      await page.evaluate(() => plToggleControls());
+      await page.waitForFunction(() => document.querySelector('#st-player').classList.contains('controls-off'), null, { timeout: 6500 });
+      await page.screenshot({ path: `${output}/${width}x${height}-player-autohidden.png`, fullPage: true });
+      await page.evaluate(() => { document.querySelector('#st-video').pause(); plShowControls(); });
+      await page.screenshot({ path: `${output}/${width}x${height}-player-paused.png`, fullPage: true });
+      await page.evaluate(() => plToggleControls());
+      assert.ok(await page.locator('#st-player').evaluate(n => n.classList.contains('controls-off')));
+      await page.evaluate(() => plToggleControls());
+      assert.ok(await page.locator('#st-player').evaluate(n => !n.classList.contains('controls-off')));
     }
     await page.setViewportSize({ width: 390, height: 844 });
+    await page.evaluate(() => switchPage('queue'));
+    await page.locator('#queue-list .q-title').first().waitFor({ state: 'visible' });
     await page.locator('[data-q-stage="failed"]').click();
     const retried = page.waitForResponse(response => new URL(response.url()).pathname === '/api/v1/queue/fixture-failed/retry' && response.request().method() === 'POST');
     await page.locator('[data-retry="fixture-failed"]').click();

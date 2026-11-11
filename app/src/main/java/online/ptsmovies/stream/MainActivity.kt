@@ -141,6 +141,7 @@ class MainActivity : ComponentActivity() {
     private var episode by mutableStateOf<Episode?>(null)
     private var playing by mutableStateOf(false)
     private var player: ExoPlayer? = null
+    private var pipVideoView: android.view.View? = null
     private var inPip by mutableStateOf(false)
     private var downloading by mutableStateOf("")
     private var downloadPercent by mutableIntStateOf(0)
@@ -216,7 +217,9 @@ class MainActivity : ComponentActivity() {
         scope.launch { try { val cfg = api.json("/auth/config"); googleClientId = if (cfg.optBoolean("google_enabled")) cfg.optString("google_client_id") else "" } catch (_: Exception) { } }
         startAccountSync()
         setContent {
-            PtsTheme(device.theme) {
+            val dark = device.theme == "dark" || (device.theme == "system" && androidx.compose.foundation.isSystemInDarkTheme())
+            val watching = playing || (dark && selected != null && mode == "Stream" && !profileOpen && !downloadsOpen && !updatesOpen)
+            PtsTheme(if (watching) "watch" else device.theme) {
                 val bar = if (playing) Color.Black else Pts.bg
                 val light = !playing && MaterialTheme.colorScheme.background.luminance() > .5f
                 SideEffect {
@@ -227,7 +230,7 @@ class MainActivity : ComponentActivity() {
                     }
                     WindowCompat.getInsetsController(window, window.decorView).apply { isAppearanceLightStatusBars = light; isAppearanceLightNavigationBars = light }
                 }
-                PtsBackground(if (playing) Modifier else Modifier.windowInsetsPadding(WindowInsets.safeDrawing)) {
+                PtsBackground(if (playing) Modifier else Modifier.windowInsetsPadding(WindowInsets.safeDrawing), decorative = !watching) {
                     episodeDownloadTitle?.let { title ->
                         EpisodeDownloadDialog(title, savedVideos.map { it.key }.toSet(), journal()?.completed().orEmpty(),
                             onStart = { episodes -> episodeDownloadTitle = null; try { downloads?.enqueueSeason(title, episodes); toast("Downloads queued", true) } catch (e: Exception) { toast(e.message ?: "Cannot queue downloads") } },
@@ -745,6 +748,8 @@ class MainActivity : ComponentActivity() {
     private fun AppShell() {
         BackHandler { routeBack() }
         val user = account ?: return
+        var about by remember { mutableStateOf(false) }
+        if (about && profileOpen) SourceCreditsDialog(library?.titles.orEmpty().mapNotNull { episodeNames.cached(it)?.source }.distinct(), { about = false })
         if (editProfile) EditProfileDialog(user, onSave = { name, email ->
             scope.launch { try {
                 account = api.json("/auth/me", "PUT", JSONObject().put("name", name).put("email", email)).getJSONObject("user")
@@ -783,7 +788,7 @@ class MainActivity : ComponentActivity() {
                         onPhoto = { selectPhoto.launch("image/*") }, onRemovePhoto = {
                             scope.launch { try { account = api.json("/auth/avatar", "DELETE").getJSONObject("user"); device.account(account!!); toast("Photo removed", true) }
                                 catch (e: Exception) { toast(e.message ?: "Could not remove photo") } }
-                        }, onPlayback = { nativeSettings = "playback"; profileOpen = false }, onDownloadSettings = { nativeSettings = "downloads"; profileOpen = false })
+                        }, onPlayback = { nativeSettings = "playback"; profileOpen = false }, onDownloadSettings = { nativeSettings = "downloads"; profileOpen = false }, onAbout = { about = true })
                     downloadsOpen -> DownloadsScreen(savedVideos, { item ->
                         val title = library?.titles?.firstOrNull { it.id == item.titleId }
                         val stored = title ?: item.titleMetadata()
@@ -851,8 +856,7 @@ class MainActivity : ComponentActivity() {
                                 onBack = { selected = null },
                                 onPlay = { ep -> play(t, ep) },
                                 onToggleWatch = { toggleWatch(t) },
-                                onDownload = { ep -> startDownload(t, ep) }, onMarkPlayed = { markPlayed(t) },
-                                metadataContent = { EpisodeNamesControl(t, episodeNames, { applyMetadataTitle(it) }) })
+                                onDownload = { ep -> startDownload(t, ep) }, onMarkPlayed = { markPlayed(t) })
                         } else when (streamTab) {
                             "Home" -> StreamHomeScreen(lib, { selected = it }, { title ->
                                 val resume = lib.progress[title.id]
@@ -996,8 +1000,9 @@ class MainActivity : ComponentActivity() {
             player = exo
             val originalBrightness = window.attributes.screenBrightness
             val listener = object : Player.Listener {
-                override fun onRenderedFirstFrame() { firstFrame = true }
+                override fun onRenderedFirstFrame() { firstFrame = true; updatePipParameters() }
                 override fun onPlayerError(exception: PlaybackException) {
+                    updatePipParameters()
                     if (saved == null && !fallback && exception.errorCode in 2000..2999) {
                         resumeAt = if (firstFrame) exo.currentPosition.coerceAtLeast(0) else maxOf(resumeAt, exo.currentPosition.coerceAtLeast(0))
                         fallback = true
@@ -1018,9 +1023,14 @@ class MainActivity : ComponentActivity() {
                         completedOffline[0] = true
                         if (sleepAtEnd) { exo.pause(); cancelNext = true; sleepAtEnd = false }
                     }
+                    updatePipParameters()
                 }
-                override fun onIsPlayingChanged(isPlaying: Boolean) { playingNow = isPlaying; if (!isPlaying) controls = true }
-                override fun onPlayWhenReadyChanged(playWhenReady: Boolean, reason: Int) { desiredPlay = playWhenReady }
+                override fun onIsPlayingChanged(isPlaying: Boolean) { playingNow = isPlaying; updatePipParameters() }
+                override fun onPlayWhenReadyChanged(playWhenReady: Boolean, reason: Int) {
+                    desiredPlay = playWhenReady
+                    if (!playWhenReady) { controls = true; interaction++ }
+                    updatePipParameters()
+                }
             }
             exo.addListener(listener)
             firstFrame = false
@@ -1038,6 +1048,7 @@ class MainActivity : ComponentActivity() {
                     runCatching { downloads?.remove(saved) }
                 window.attributes = window.attributes.apply { screenBrightness = originalBrightness }
                 if (player === exo) player = null
+                pipVideoView = null; updatePipParameters()
             }
         }
         LaunchedEffect(source) {
@@ -1086,9 +1097,9 @@ class MainActivity : ComponentActivity() {
                 if (exo.isPlaying && title.id !in clearedProgress) recordProgress(title.id, ep?.id, exo.currentPosition / 1000, exo.duration.coerceAtLeast(0) / 1000)
             }
         }
-        LaunchedEffect(controls, playingNow, interaction, touching, seekPreview != null, showTracks, showEpisodes, showSettings, showSleep, appearance.controlsSeconds, buffering) {
-            if (controls && !touching && controlsShouldHide(playingNow, buffering, seekPreview != null, showTracks || showEpisodes || showSettings || showSleep, appearance.controlsSeconds)) {
-                delay(appearance.controlsSeconds * 1000L); controls = false
+        LaunchedEffect(controls, desiredPlay, interaction, touching, seekPreview != null, showTracks, showEpisodes, showSettings, showSleep, appearance.controlsSeconds, ended, error) {
+            if (controls && !touching && !ended && error.isBlank() && controlsShouldHide(desiredPlay, buffering, seekPreview != null, showTracks || showEpisodes || showSettings || showSleep, appearance.controlsSeconds)) {
+                delay(controlDelayMillis(appearance.controlsSeconds)); controls = false
             }
         }
         LaunchedEffect(ended, autoplay, cancelNext) {
@@ -1110,7 +1121,7 @@ class MainActivity : ComponentActivity() {
           }
           Column(Modifier.fillMaxSize()) {
               val frame = if (landscape) Modifier.weight(1f).fillMaxWidth() else Modifier.fillMaxWidth().height(portraitHeight)
-             PtsTheme("dark") { Box(frame.testTag("player-surface").clipToBounds().background(Color.Black)) {
+              PtsTheme("watch") { Box(frame.testTag("player-surface").clipToBounds().background(Color.Black)) {
                   Box(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.displayCutout).clipToBounds()) {
                   key(exo) { AndroidView(factory = { ctx -> (android.view.LayoutInflater.from(ctx).inflate(R.layout.native_player, FrameLayout(ctx), false) as PlayerView).apply {
                      useController = false
@@ -1119,7 +1130,8 @@ class MainActivity : ComponentActivity() {
                      setShutterBackgroundColor(android.graphics.Color.TRANSPARENT)
                      layoutParams = FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
                  } }, onRelease = { view -> view.player = null }, update = { view ->
-                     nativeView[0] = view
+                      nativeView[0] = view
+                      pipVideoView = view.videoSurfaceView ?: view
                      if (view.player !== exo) view.player = exo
                      view.keepScreenOn = playingNow || buffering
                       view.resizeMode = if (fill) AspectRatioFrameLayout.RESIZE_MODE_ZOOM else AspectRatioFrameLayout.RESIZE_MODE_FIT
@@ -1136,12 +1148,12 @@ class MainActivity : ComponentActivity() {
                          view.tag = exo
                          // Decode only after the native surface has dimensions. A new source
                          // gets its own view; the old surface is explicitly detached on release.
-                         view.doOnLayout { if (view.player === exo) { exo.prepare(); exo.playWhenReady = startPlaying } }
+                          view.doOnLayout { if (view.player === exo) { exo.prepare(); exo.playWhenReady = startPlaying; updatePipParameters() } }
                      }
                    }, modifier = Modifier.fillMaxSize().graphicsLayer { scaleX = zoom; scaleY = zoom }) }
                    }
                    PlayerGestures(this@MainActivity, exo.currentPosition, duration,
-                       onTap = { touchControls() },
+                        onTap = { controls = !controls; interaction++ },
                      onSeekPreview = { seekPreview = it; touchControls() },
                      onSeek = { exo.seekTo(it); touchControls() },
                       onFeedback = { gestureFeedback = it; touchControls() }, zoom = zoom,
@@ -1151,14 +1163,11 @@ class MainActivity : ComponentActivity() {
                  androidx.compose.animation.AnimatedVisibility(visible = controls && !inPip && !locked, enter = fadeIn(), exit = fadeOut(), modifier = Modifier.fillMaxSize()) {
                        Box(Modifier.fillMaxSize().windowInsetsPadding(if (landscape) WindowInsets.safeDrawing else WindowInsets.statusBars.union(WindowInsets.displayCutout))) {
                           CinemaControls(ep?.let { "${title.title} · S${it.season}E${it.episode}" } ?: title.title,
-                              playingNow, seekPreview ?: position, duration, buffered, playerFullscreen, muted, traffic.route.label,
-                               ep != null,
-                              onBack = { leavePlayer() }, onToggle = { if (exo.isPlaying) exo.pause() else { if (ended) exo.seekTo(0); exo.play() }; touchControls() },
+                               desiredPlay && !ended, seekPreview ?: position, duration, buffered, playerFullscreen,
+                               onBack = { leavePlayer() }, onToggle = { if (exo.playWhenReady && !ended) exo.pause() else { if (ended) exo.seekTo(0); exo.play() }; touchControls() },
                               onSeek = { exo.seekTo(it); touchControls() }, onPreview = { seekPreview = it; touchControls() },
                               onOptions = { optionsPage = ""; showSettings = true; touchControls() }, onTracks = { showTracks = true; touchControls() },
-                              onEpisodes = { showEpisodes = true; touchControls() }, onPip = { try { enterPictureInPictureMode(PictureInPictureParams.Builder().setAspectRatio(Rational(16, 9)).build()) } catch (_: Exception) { toast("Picture in picture unavailable") } },
-                              onLock = { locked = true }, onMute = { muted = !muted; exo.volume = if (muted) 0f else 1f; touchControls() },
-                               onFullscreen = { fullscreen(!playerFullscreen); touchControls() }, onConnection = { optionsPage = "Connection"; showSettings = true; touchControls() })
+                               onPip = { requestPip(true) }, onFullscreen = { fullscreen(!playerFullscreen); touchControls() }, buffering = buffering || !firstFrame)
                       }
                  }
                   if (locked && !inPip) Box(Modifier.align(Alignment.TopEnd).padding(12.dp).background(Color.Black.copy(alpha = .7f), androidx.compose.foundation.shape.CircleShape)) {
@@ -1185,23 +1194,12 @@ class MainActivity : ComponentActivity() {
              if (!hevcAvailable) PtsErrorBanner("This device may not support HEVC playback", modifier = Modifier.padding(12.dp))
               Column(Modifier.weight(1f).windowInsetsPadding(WindowInsets.navigationBars).background(Pts.bg).verticalScroll(rememberScrollState()).padding(16.dp), verticalArrangement = Arrangement.spacedBy(9.dp)) {
                  Text(title.title, style = MaterialTheme.typography.titleLarge, color = Pts.text)
-                Text(
-                    listOfNotNull(
-                        ep?.let { "S${it.season}E${it.episode} · ${it.title.ifBlank { "Episode ${it.episode}" }}" },
-                        formatDuration(ep?.duration?.toLong() ?: 0).takeIf { it.isNotBlank() }
-                    ).joinToString(" · "),
-                     style = MaterialTheme.typography.bodySmall, color = Pts.muted
-                )
-                 ShortSynopsis(title.synopsis)
-                 if (title.kind == "series") EpisodeNamesControl(title, episodeNames, { applyMetadataTitle(it) })
+                 ep?.let { Text("S${it.season}E${it.episode} · ${it.title.ifBlank { "Episode ${it.episode}" }}", style = MaterialTheme.typography.bodySmall, color = Pts.muted) }
                 if (ended && nextEpisode != null && !cancelNext) UpNextCard(nextEpisode, if (autoplay) nextCountdown else null, { selectEpisode(nextEpisode) }, { cancelNext = true })
                  WatchActionBar(downloaded, "${title.id}_${ep?.id ?: 0}" in journal()?.completed().orEmpty(), title.kind == "series",
                      onComplete = { markPlayed(title) }, onSave = { startDownload(title, ep) }, onSeasonDownload = { episodeDownloadTitle = title })
                 if (title.kind == "series") SeasonEpisodes(title, ep, library?.progress?.get(title.id), savedVideos.map { it.key }.toSet(), downloading,
                     onPlay = { selectEpisode(it) }, onDownload = { startDownload(title, it) })
-                val related = library?.titles.orEmpty().filter { it.id != title.id && it.genres.any { g -> g in title.genres } }.take(8)
-                if (related.isNotEmpty()) PtsPosterShelf("Related", related, library?.progress.orEmpty(), library?.watch.orEmpty(),
-                    { play(it, if (it.kind == "series") it.episodes.firstOrNull() else null) }, { toggleWatch(it) })
              }
             }
           }
@@ -1229,7 +1227,7 @@ class MainActivity : ComponentActivity() {
                 PtsSecondaryButton("Close", Modifier.fillMaxWidth()) { showEpisodes = false }
             }
         }
-        if (showSettings) PtsTheme("dark") {
+        if (showSettings) PtsTheme("watch") {
             PlayerOptions(appearance, { value ->
                 val reposition = appearance.subtitlePosition != value.subtitlePosition
                 appearance = value; savePlayerAppearance(context, value); timing.subtitlePosition = value.subtitlePosition
@@ -1247,7 +1245,8 @@ class MainActivity : ComponentActivity() {
                     val local = probeMediaRoute(api.http, api.streamUrl(title, ep), true)
                     val internet = probeMediaRoute(api.http, api.streamUrl(title, ep), false)
                     "LAN preference: ${local.route.label} · ${formatBytes(local.bytesPerSecond)}/s\nInternet only: ${internet.route.label} · ${formatBytes(internet.bytesPerSecond)}/s"
-                }))
+                }), onEpisodes = if (ep == null) null else ({ showSettings = false; showEpisodes = true; touchControls() }),
+                muted = muted, onMute = { muted = !muted; exo.volume = if (muted) 0f else 1f; touchControls() })
         }
         if (showTracks) {
             val audioGroups = exo.currentTracks.groups.filter { it.type == androidx.media3.common.C.TRACK_TYPE_AUDIO }
@@ -1309,10 +1308,39 @@ class MainActivity : ComponentActivity() {
     }
 
     override fun onUserLeaveHint() {
+        updatePipParameters()
+        if (Build.VERSION.SDK_INT < 31 && autoPipEligible()) requestPip(false)
         super.onUserLeaveHint()
-        if (Build.VERSION.SDK_INT >= 26 && playing && player?.isPlaying == true) {
-            try { enterPictureInPictureMode(PictureInPictureParams.Builder().setAspectRatio(Rational(16, 9)).build()) } catch (_: Exception) { }
-        }
+    }
+
+    private fun autoPipEligible(): Boolean {
+        val exo = player ?: return false
+        return shouldAutoEnterPip(playing, exo.playWhenReady, exo.playbackState, exo.playerError != null)
+    }
+
+    private fun pipAvailable(): Boolean {
+        if (!packageManager.hasSystemFeature(PackageManager.FEATURE_PICTURE_IN_PICTURE)) return false
+        val ops = getSystemService(android.app.AppOpsManager::class.java)
+        val mode = if (Build.VERSION.SDK_INT >= 29) ops.unsafeCheckOpNoThrow(android.app.AppOpsManager.OPSTR_PICTURE_IN_PICTURE, android.os.Process.myUid(), packageName)
+            else ops.checkOpNoThrow(android.app.AppOpsManager.OPSTR_PICTURE_IN_PICTURE, android.os.Process.myUid(), packageName)
+        return mode != android.app.AppOpsManager.MODE_IGNORED && mode != android.app.AppOpsManager.MODE_ERRORED
+    }
+
+    private fun pipParameters(): PictureInPictureParams {
+        val rect = android.graphics.Rect()
+        val visible = pipVideoView?.getGlobalVisibleRect(rect) == true && rect.width() > 0 && rect.height() > 0
+        val ratio = if (visible && rect.width().toFloat() / rect.height() in (1f / 2.39f)..2.39f) Rational(rect.width(), rect.height()) else Rational(16, 9)
+        return PictureInPictureParams.Builder().setAspectRatio(ratio).apply {
+            if (visible) setSourceRectHint(rect)
+            if (Build.VERSION.SDK_INT >= 31) { setAutoEnterEnabled(autoPipEligible() && pipAvailable()); setSeamlessResizeEnabled(true) }
+        }.build()
+    }
+
+    private fun updatePipParameters() { runCatching { setPictureInPictureParams(pipParameters()) } }
+
+    private fun requestPip(manual: Boolean) {
+        val entered = runCatching { playing && player != null && pipAvailable() && enterPictureInPictureMode(pipParameters()) }.getOrDefault(false)
+        if (!entered && manual) toast("Picture-in-picture is unavailable or disabled in Android settings")
     }
 
     override fun onDestroy() { downloadWatch?.cancel(); super.onDestroy() }
