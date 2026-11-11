@@ -1201,6 +1201,7 @@ class MainActivity : ComponentActivity() {
         }
         BoxWithConstraints(Modifier.fillMaxSize().background(Color.Black)) {
           val landscape = compact || maxWidth > maxHeight || inPip || playerFullscreen
+          val miniPreviewWidth = if (maxWidth < 340.dp) 88.dp else 108.dp
           val portraitHeight = (maxWidth * .58f).coerceIn(300.dp, 560.dp).coerceAtMost(maxHeight * .65f)
           DisposableEffect(landscape, compact) {
               val bars = WindowCompat.getInsetsController(window, window.decorView)
@@ -1211,7 +1212,7 @@ class MainActivity : ComponentActivity() {
               onDispose { bars.show(androidx.core.view.WindowInsetsCompat.Type.systemBars()) }
           }
           Column(Modifier.fillMaxSize()) {
-              val frame = if (compact) Modifier.width(if (maxWidth < 340.dp) 88.dp else 108.dp).fillMaxHeight() else if (landscape) Modifier.weight(1f).fillMaxWidth() else Modifier.fillMaxWidth().height(portraitHeight)
+              val frame = if (compact) Modifier.width(miniPreviewWidth).fillMaxHeight() else if (landscape) Modifier.weight(1f).fillMaxWidth() else Modifier.fillMaxWidth().height(portraitHeight)
               PtsTheme("watch") { Box(frame.testTag("player-surface").clipToBounds().background(Color.Black)) {
                   Box(Modifier.fillMaxSize().then(if (compact) Modifier else Modifier.windowInsetsPadding(WindowInsets.displayCutout)).clipToBounds()) {
                   key(exo) { AndroidView(factory = { ctx -> (android.view.LayoutInflater.from(ctx).inflate(R.layout.native_player, FrameLayout(ctx), false) as PlayerView).apply {

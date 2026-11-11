@@ -70,6 +70,7 @@ class DownloadNotifications(private val context: Context, private val owner: Lon
     }
 
     fun publish(snapshot: DownloadSnapshot) {
+        if (android.os.Build.VERSION.SDK_INT >= 33 && androidx.core.content.ContextCompat.checkSelfPermission(context, android.Manifest.permission.POST_NOTIFICATIONS) != android.content.pm.PackageManager.PERMISSION_GRANTED) return
         seed(snapshot.tasks)
         val visible = visibleDownloadTasks(snapshot.tasks, tracked)
         val present = visible.map { it.key }.toSet()
