@@ -48,7 +48,7 @@ Tests cover compact widths (including 280dp), larger fonts, landscape-shaped reg
 
 ## LAN findings and changes
 
-Read-only Pi network inspection found SSID `Prajwal_5g` was actually associated on **2437 MHz / channel 6 / 20 MHz (2.4 GHz)**. One sample reported approximately 57.7 Mbit/s TX and 26.0 Mbit/s RX. SSID names are not proof of a 5 GHz connection; wireless PHY rates are not application throughput and may vary.
+Read-only Pi network inspection found the connection was actually associated on **2437 MHz / channel 6 / 20 MHz (2.4 GHz)** despite its 5G-labelled SSID. One sample reported approximately 57.7 Mbit/s TX and 26.0 Mbit/s RX. SSID names are not proof of a 5 GHz connection; wireless PHY rates are not application throughput and may vary.
 
 One bounded, automatically removed 4 MiB synthetic fixture measured Pi-self reads of **62.75 MiB/s** directly from the loopback origin and **19.65 MiB/s** through the certificate-verified TLS relay. This measures neither the phone nor the radio path; it does not prove home-phone performance or compare to the user's internet route.
 

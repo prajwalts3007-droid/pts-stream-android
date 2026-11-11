@@ -185,7 +185,7 @@ class AppFlowTest {
         // Acknowledge that test-emulator hint before sending Back to the actual app.
         val device = androidx.test.uiautomator.UiDevice.getInstance(InstrumentationRegistry.getInstrumentation())
         device.wait(androidx.test.uiautomator.Until.findObject(androidx.test.uiautomator.By.pkg("com.android.systemui").text(java.util.regex.Pattern.compile("got it", java.util.regex.Pattern.CASE_INSENSITIVE))), 500)?.click()
-        androidx.test.espresso.Espresso.pressBack()
+        device.pressBack()
         ui.waitForIdle()
     }
 

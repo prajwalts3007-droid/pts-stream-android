@@ -73,9 +73,9 @@ function fixture(path, request) {
     }
     await page.setViewportSize({ width: 390, height: 844 });
     await page.locator('[data-q-stage="failed"]').click();
+    const retried = page.waitForResponse(response => new URL(response.url()).pathname === '/api/v1/queue/fixture-failed/retry' && response.request().method() === 'POST');
     await page.locator('[data-retry="fixture-failed"]').click();
-    await page.locator('#dlg-ok').click();
-    await page.waitForFunction(() => document.querySelector('#dialog').hidden);
+    await retried; // Web per-job Retry is immediate; native intentionally adds confirmation.
     await page.locator('[data-edit="fixture-failed"]').click();
     await page.locator('#dlg-input').fill('https://example.invalid/replacement.mp4');
     await page.screenshot({ path: `${output}/390x844-queue-edit-dialog.png`, fullPage: true });

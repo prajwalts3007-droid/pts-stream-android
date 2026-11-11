@@ -317,6 +317,15 @@ class ScreenAuditTest {
         capture("web-queue-single-row")
     }
 
+    @Test fun failedQueueJobReasonCanBeExpandedInsteadOfBeingPermanentlyTruncated() {
+        val reason = "The generated source failed validation. Review its authorized source link before retrying. ".repeat(12)
+        val failed = JSONObject(job.toString()).put("stage", "failed").put("error", reason)
+        ui.setContent { PtsTheme { QueueScreen(listOf(failed), emptyList(), "failed", {}, {}, {}, { _, _ -> }) } }
+        ui.onNodeWithText("More").performScrollTo().performClick()
+        ui.onNodeWithText(reason).assertExists()
+        capture("queue-expanded-failure-reason")
+    }
+
     @Test fun queueAllNineActionsFitWithoutScrollingAtCompactWidthsAndLargerFonts() {
         var width by mutableIntStateOf(320); var font by mutableFloatStateOf(1f)
         var selected by mutableStateOf("queued")

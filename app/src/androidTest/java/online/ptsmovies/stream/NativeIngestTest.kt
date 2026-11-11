@@ -53,7 +53,8 @@ class NativeIngestTest {
         assertFalse(queued)
         ui.onNodeWithTag("native-ingest").performScrollToNode(hasContentDescription("Select S01E02"))
         ui.onNodeWithContentDescription("Select S01E02").performScrollTo().performClick()
-        ui.onNodeWithText("Add selected to queue").performScrollTo().performClick()
+        ui.onNodeWithTag("native-ingest").performScrollToNode(hasText("Add selected to queue"))
+        ui.onNodeWithText("Add selected to queue").performClick()
         assertEquals(1, writes.size)
         ui.onNode(hasText("Add") and hasAnyAncestor(isDialog())).performClick()
         ui.waitUntil(10000) { ui.onAllNodesWithText("Already added").fetchSemanticsNodes().isNotEmpty() }

@@ -754,15 +754,10 @@ private fun QueueJobRow(job: JSONObject, onDelete: () -> Unit, onRetry: () -> Un
         PtsProgressBar(if (done) 1f else progress, tint = when { failed -> Pts.danger; done -> Pts.ok; stage == "downloading" -> Pts.spark; else -> Pts.accent })
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text(stageLabel(stage), style = MaterialTheme.typography.labelMedium, color = when { failed -> Pts.danger; done -> Pts.ok; else -> Pts.text })
-            Text(
-                " · " + listOfNotNull(
-                    job.optString("message").takeIf { it.isNotBlank() },
-                    job.optString("error").takeIf { it.isNotBlank() },
-                    if (progress > 0) "${(progress * 100).toInt()}%" else null
-                ).joinToString(" · "),
-                style = MaterialTheme.typography.labelSmall, color = Pts.muted, maxLines = 1, overflow = TextOverflow.Ellipsis
-            )
+            Spacer(Modifier.weight(1f))
+            if (progress > 0) Text("${(progress * 100).toInt()}%", style = MaterialTheme.typography.labelSmall, color = Pts.muted)
         }
+        ShortSynopsis(listOf(job.optString("message"), job.optString("error")).filter { it.isNotBlank() }.distinct().joinToString("\n"))
     }
 }
 
