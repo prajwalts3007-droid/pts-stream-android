@@ -1149,7 +1149,7 @@ class MainActivity : ComponentActivity() {
                         onZoomEnd = { if (abs(zoom - 1f) <= .04f) zoom = 1f; if (playbackPrefs.optString("zoom_mode") == "remember") playerPreference("zoom", zoom) }, enabled = !inPip && !locked,
                         onTouch = { touching = it; if (!it) interaction++ }) {
                  androidx.compose.animation.AnimatedVisibility(visible = controls && !inPip && !locked, enter = fadeIn(), exit = fadeOut(), modifier = Modifier.fillMaxSize()) {
-                      Box(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.safeDrawing)) {
+                       Box(Modifier.fillMaxSize().windowInsetsPadding(if (landscape) WindowInsets.safeDrawing else WindowInsets.statusBars.union(WindowInsets.displayCutout))) {
                           CinemaControls(ep?.let { "${title.title} · S${it.season}E${it.episode}" } ?: title.title,
                               playingNow, seekPreview ?: position, duration, buffered, playerFullscreen, muted, traffic.route.label,
                                ep != null,

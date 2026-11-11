@@ -44,6 +44,8 @@ Removed episode-switching transport buttons. The center has only **back 10s / pl
 
 Header, center transport and footer occupy separate measured layout regions, rather than independently overlaid absolute positions. All existing seek/brightness/volume/double-tap/pinch/lock gestures remain. Tap shows/refreshes controls instead of immediately toggling them away. One resettable timeout waits until touch/seek/menu/buffering ends; pause keeps controls visible. A held finger cannot lose the controls underneath it.
 
+Portrait controls reserve the status/cutout insets, not the phone's bottom navigation inset inside a top-of-screen video frame. Fullscreen controls still use all safe insets. This prevents the portrait footer from floating above an unnecessary navigation-bar-sized gap; an actual Activity bounds assertion covers it.
+
 Tests cover compact widths (including 280dp), larger fonts, landscape-shaped regions, visibility/hit-testing of all nine Queue cells, non-overlapping player regions, exact ±10s actions, and actual Activity timer resetting in addition to screenshots. The short generated playback fixture is slowed for the timeout test so legitimate clip-end/rebuffer events cannot invalidate it.
 
 ## LAN findings and changes

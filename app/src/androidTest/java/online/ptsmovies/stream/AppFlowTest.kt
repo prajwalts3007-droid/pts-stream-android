@@ -468,6 +468,9 @@ class AppFlowTest {
             restored
         }
         ui.onNodeWithContentDescription("Play playback").assertExists()
+        val frameBounds = ui.onNodeWithTag("player-surface").fetchSemanticsNode().boundsInRoot
+        val footerBounds = ui.onNodeWithTag("player-footer").fetchSemanticsNode().boundsInRoot
+        assertTrue("Portrait controls must not reserve a bottom navigation bar inside the video frame", kotlin.math.abs(frameBounds.bottom - footerBounds.bottom) < 3f)
         assertDecodedTestPattern()
         capture("native-player-restored")
     }
