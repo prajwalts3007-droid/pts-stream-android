@@ -79,9 +79,13 @@ function fixture(path, request) {
     await page.locator('[data-edit="fixture-failed"]').click();
     await page.locator('#dlg-input').fill('https://example.invalid/replacement.mp4');
     await page.screenshot({ path: `${output}/390x844-queue-edit-dialog.png`, fullPage: true });
+    const edited = page.waitForResponse(response => new URL(response.url()).pathname === '/api/v1/queue/fixture-failed/edit' && response.request().method() === 'POST');
     await page.locator('#dlg-ok').click();
+    await edited;
     await page.locator('#q-retry-all').click();
+    const retriedAll = page.waitForResponse(response => new URL(response.url()).pathname === '/api/v1/queue/retry-all' && response.request().method() === 'POST');
     await page.locator('#dlg-ok').click();
+    await retriedAll;
     await page.waitForFunction(() => document.querySelector('#dialog').hidden);
     assert.ok(calls.some(c => c.path === '/queue/fixture-failed/retry' && c.method === 'POST'));
     assert.ok(calls.some(c => c.path === '/queue/fixture-failed/edit' && JSON.parse(c.body).download_url === 'https://example.invalid/replacement.mp4'));

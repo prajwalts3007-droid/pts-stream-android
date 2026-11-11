@@ -68,4 +68,6 @@ Shared controls have ripple/press feedback without changing measured bounds. Cli
 
 Use GitHub Actions for builds, lint and generated-media emulator tests. Production is inspected read-only except the explicitly bounded synthetic Pi-self fixture, which is automatically removed. Keep app ID/signing key and publish an increasing signed test version only after reviewing final evidence.
 
+The disposable emulator acknowledges Android's one-time immersive tutorial before app navigation tests; that non-focusable System UI overlay is not part of the app layout. No such setting is changed in the APK or on a user's phone, and installer/Google consent is not bypassed. Browser mutation assertions await the actual intercepted POST response, not just dismissal of a confirmation dialog.
+
 This is a tracked parity audit, **not a claim that every browser feature is natively implemented or that software is bug-free**. Google OAuth setup, native remote push, normal-user HLS preparation, provider-locked historical cleanup, real phone/Pi Wi-Fi speed, OEM codecs/PiP/cutouts/background restrictions and installer consent remain explicit external/device boundaries.
