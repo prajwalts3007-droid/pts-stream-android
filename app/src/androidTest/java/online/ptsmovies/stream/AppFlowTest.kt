@@ -636,6 +636,11 @@ class AppFlowTest {
             assertTrue(activity.window.navigationBarColor in listOf(android.graphics.Color.BLACK, android.graphics.Color.TRANSPARENT))
             assertEquals(android.view.WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES, activity.window.attributes.layoutInDisplayCutoutMode)
         }
+        ui.waitUntil(3000) {
+            val frame = checkNotNull(InstrumentationRegistry.getInstrumentation().uiAutomation.takeScreenshot())
+            val black = frame.getPixel(frame.width / 2, 3) == android.graphics.Color.BLACK && frame.getPixel(frame.width / 2, frame.height - 3) == android.graphics.Color.BLACK
+            frame.recycle(); black
+        }
         val image = checkNotNull(InstrumentationRegistry.getInstrumentation().uiAutomation.takeScreenshot())
         assertEquals(android.graphics.Color.BLACK, image.getPixel(image.width / 2, 3))
         assertEquals(android.graphics.Color.BLACK, image.getPixel(image.width / 2, image.height - 3))
@@ -704,7 +709,8 @@ class AppFlowTest {
     @Test fun homeAutomaticallyEntersPipAndKeepsTheDecoderPlaying() {
         launchLoggedIn(); openMovie(); ui.onNodeWithText("Play").performClick(); waitForMovingPlayback()
         val entered = AtomicBoolean(false); val moving = AtomicBoolean(false)
-        scenario!!.onActivity { activity -> nativePlayer(activity.window.decorView)!!.repeatMode = androidx.media3.common.Player.REPEAT_MODE_ONE }
+        lateinit var original: MainActivity
+        scenario!!.onActivity { activity -> original = activity; nativePlayer(activity.window.decorView)!!.repeatMode = androidx.media3.common.Player.REPEAT_MODE_ONE }
         val device = androidx.test.uiautomator.UiDevice.getInstance(InstrumentationRegistry.getInstrumentation())
         device.pressHome()
         ui.waitUntil(10000) {
@@ -729,7 +735,7 @@ class AppFlowTest {
             }
             !entered.get()
         }
-        scenario!!.onActivity { activity -> assertFalse(activity.isInPictureInPictureMode); nativePlayer(activity.window.decorView)?.pause() }
+        scenario!!.onActivity { activity -> assertSame(original, activity); assertFalse(activity.isInPictureInPictureMode); nativePlayer(activity.window.decorView)?.pause() }
         capture("returned-from-automatic-pip")
     }
 
@@ -744,7 +750,7 @@ class AppFlowTest {
         val context = InstrumentationRegistry.getInstrumentation().targetContext
         context.startActivity(android.content.Intent(context, MainActivity::class.java).addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK or android.content.Intent.FLAG_ACTIVITY_REORDER_TO_FRONT))
         ui.waitUntil(10000) { ui.onAllNodesWithContentDescription("Play playback").fetchSemanticsNodes().isNotEmpty() }
-        scenario!!.onActivity { assertFalse(nativePlayer(it.window.decorView)!!.playWhenReady) }
+        scenario!!.onActivity { assertSame(activity, it); assertFalse(nativePlayer(it.window.decorView)!!.playWhenReady) }
     }
 
     @Test fun powerButtonsRequirePhraseAndPasswordAndCancelNeverReboots() {

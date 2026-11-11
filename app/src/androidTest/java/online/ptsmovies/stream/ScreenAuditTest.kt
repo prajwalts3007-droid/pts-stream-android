@@ -6,6 +6,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.graphics.asAndroidBitmap
 import androidx.compose.ui.test.*
 import androidx.compose.ui.test.junit4.createComposeRule
@@ -431,6 +432,13 @@ class ScreenAuditTest {
 
     @Test fun watchThemeIsPitchBlackAndHasNoDecorativeGradient() {
         ui.setContent { PtsTheme("watch") { PtsBackground(Modifier.testTag("black-watch-background"), decorative = false) { Spacer(Modifier.fillMaxSize()) } } }
+        ui.waitUntil(3000) {
+            val frame = ui.onNodeWithTag("black-watch-background").captureToImage().asAndroidBitmap()
+            val black = listOf(1, frame.width / 2, frame.width - 2).all { x ->
+                listOf(1, frame.height / 2, frame.height - 2).all { y -> frame.getPixel(x, y) == android.graphics.Color.BLACK }
+            }
+            frame.recycle(); black
+        }
         val image = ui.onNodeWithTag("black-watch-background").captureToImage().asAndroidBitmap()
         for (x in listOf(1, image.width / 2, image.width - 2)) for (y in listOf(1, image.height / 2, image.height - 2)) {
             assertEquals(android.graphics.Color.BLACK, image.getPixel(x, y))

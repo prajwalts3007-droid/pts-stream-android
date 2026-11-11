@@ -82,10 +82,11 @@ function fixture(path, request) {
               const power = await page.locator('.power-row').evaluateAll(nodes => nodes.map(node => {
                 const label = node.querySelector('.power-id').getBoundingClientRect();
                 const action = node.querySelector('button').getBoundingClientRect();
-                return { name: node.querySelector('.power-id').textContent, labelRight: label.right, actionLeft: action.left, actionRight: action.right };
+                return { name: node.querySelector('.power-id').textContent, labelRight: label.right, labelBottom: label.bottom, actionLeft: action.left, actionTop: action.top, actionRight: action.right };
               }));
-              assert.ok(power.every(row => row.labelRight <= row.actionLeft && row.actionRight <= width));
               geometry.push({ width, height, power });
+              // The deployed web stacks device names above their actions at some widths.
+              assert.ok(power.every(row => (row.labelRight <= row.actionLeft || row.labelBottom <= row.actionTop) && row.actionRight <= width));
             }
           }
         }
