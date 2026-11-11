@@ -66,10 +66,7 @@ fun UpNextCard(episode: Episode, countdown: Int?, onPlay: () -> Unit, onCancel: 
         Text("Up next · S${episode.season}E${episode.episode}", color = Pts.accent, style = MaterialTheme.typography.titleMedium)
         Text(episode.title, maxLines = 1, overflow = TextOverflow.Ellipsis, color = Pts.text)
         if (countdown != null) Text("Playing in $countdown seconds", style = MaterialTheme.typography.bodySmall, color = Pts.muted)
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            PtsPrimaryButton("Play next", Modifier.weight(1f), onClick = onPlay)
-            PtsSecondaryButton("Cancel", Modifier.weight(1f), onClick = onCancel)
-        }
+        PtsButtonPair(first = { PtsPrimaryButton("Play next", it, onClick = onPlay) }, second = { PtsSecondaryButton("Cancel", it, onClick = onCancel) })
     }
 }
 
@@ -104,21 +101,21 @@ fun SeasonEpisodes(
     LaunchedEffect(active?.id) { active?.let { season = it.season } }
     LaunchedEffect(seasons) { if (season !in seasons) season = seasons.firstOrNull() ?: 1 }
     val episodes = title.episodes.filter { it.season == season }.sortedBy { it.episode }
-    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
+    Column(Modifier.fillMaxWidth().ptsPageMotion("${title.id}/$season"), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             Text("Episodes", Modifier.weight(1f), style = MaterialTheme.typography.titleMedium, color = Pts.text)
             SeasonDropdown(seasons, season, { season = it })
         }
         Text("${episodes.size} episodes", style = MaterialTheme.typography.bodySmall, color = Pts.muted)
         if (episodes.isEmpty()) PtsEmpty("No episodes available", icon = PtsIcons.Series)
         episodes.forEach { ep ->
-            Column {
+            key(ep.id) { Column {
                 if (ep.id == active?.id) Text("NOW PLAYING", Modifier.padding(bottom = 4.dp),
                     style = MaterialTheme.typography.labelSmall, color = Pts.accent)
                 EpisodeRow(title, ep, resume?.takeIf { it.episodeId == ep.id }, "${title.id}_${ep.id}" in savedKeys,
                     downloading, { onPlay(ep) }, { onDownload(ep) }, "${title.id}_${ep.id}" in completed,
                     onCompleted?.let { action -> { action(ep, "${title.id}_${ep.id}" !in completed) } })
-            }
+            } }
         }
     }
 }

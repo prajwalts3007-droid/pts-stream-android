@@ -16,8 +16,8 @@ import coil.compose.AsyncImage
 import org.json.JSONObject
 
 @Composable
-fun PtsTitleListRow(title: Title, marked: Boolean, onOpen: () -> Unit, onToggle: () -> Unit) {
-    PtsCard(Modifier.fillMaxWidth().testTag("poster-list-${title.id}"), padding = 12.dp, onClick = onOpen) {
+fun PtsTitleListRow(title: Title, marked: Boolean, onOpen: () -> Unit, onToggle: () -> Unit, modifier: Modifier = Modifier) {
+    PtsCard(modifier.fillMaxWidth().testTag("poster-list-${title.id}"), padding = 12.dp, onClick = onOpen) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Box(Modifier.width(64.dp).height(92.dp).testTag("poster-list-art-${title.id}").clip(RoundedCornerShape(8.dp)).background(Pts.soft)) {
                 if (title.poster.startsWith("https://")) AsyncImage(title.poster, null, Modifier.fillMaxSize(), contentScale = ContentScale.Crop)

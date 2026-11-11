@@ -3,6 +3,7 @@ package online.ptsmovies.stream
 import androidx.compose.foundation.background
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.tween
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
@@ -19,6 +20,8 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.*
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.text.style.TextOverflow
 
 data class WebTab(val key: String, val label: String, val icon: ImageVector, val count: Int? = null, val enabled: Boolean = true)
 
@@ -46,9 +49,17 @@ fun WebIconTabs(tabs: List<WebTab>, selected: String, onSelect: (String) -> Unit
 @Composable
 fun WebSelect(label: String, options: List<Pair<String, String>>, value: String, onSelect: (String) -> Unit) {
     var expanded by remember { mutableStateOf(false) }
-    Text(label, style = MaterialTheme.typography.labelMedium, color = Pts.muted)
-    Box {
-        OutlinedButton({ expanded = true }, Modifier.fillMaxWidth()) { Text(options.firstOrNull { it.first == value }?.second ?: value, Modifier.weight(1f)); Icon(PtsIcons.ChevronDown, null) }
-        DropdownMenu(expanded, { expanded = false }) { options.forEach { (key, text) -> DropdownMenuItem(text = { Text(text) }, onClick = { expanded = false; onSelect(key) }) } }
+    val angle by animateFloatAsState(if (expanded) 180f else 0f, tween(motionMillis(ptsMotionEnabled(), 150)), label = "select-chevron")
+    Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        Text(label, style = MaterialTheme.typography.labelMedium, color = Pts.muted)
+        Box(Modifier.fillMaxWidth()) {
+            OutlinedButton({ expanded = true }, Modifier.fillMaxWidth().heightIn(min = 52.dp).semantics { contentDescription = label }, shape = FieldShape) {
+                Text(options.firstOrNull { it.first == value }?.second ?: value, Modifier.weight(1f), maxLines = 2, overflow = TextOverflow.Ellipsis)
+                Icon(PtsIcons.ChevronDown, null, Modifier.padding(start = 8.dp).size(20.dp).graphicsLayer { rotationZ = angle })
+            }
+            DropdownMenu(expanded, { expanded = false }, Modifier.heightIn(max = 320.dp)) { options.forEach { (key, text) ->
+                DropdownMenuItem(text = { Text(text) }, leadingIcon = { if (key == value) Icon(PtsIcons.Check, "Selected") }, onClick = { expanded = false; onSelect(key) })
+            } }
+        }
     }
 }

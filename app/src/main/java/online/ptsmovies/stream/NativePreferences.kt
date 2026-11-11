@@ -6,9 +6,11 @@ import android.net.NetworkCapabilities
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.selection.toggleable
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.unit.dp
 
 data class DownloadOptions(val wifiOnly: Boolean = true, val concurrent: Int = 1, val limitGiB: Int = 0, val removeWatched: Boolean = false,
@@ -61,9 +63,10 @@ fun DownloadSettingsScreen(preferences: NativePreferences, onBack: () -> Unit, o
 
 @Composable
 fun PreferenceSwitch(label: String, checked: Boolean, onChange: (Boolean) -> Unit) {
-    Row(Modifier.fillMaxWidth(), verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
-        Text(label, Modifier.weight(1f), color = Pts.text, style = MaterialTheme.typography.bodyMedium)
-        Switch(checked, onChange)
+    Row(Modifier.fillMaxWidth().heightIn(min = 56.dp).toggleable(checked, role = Role.Switch, onValueChange = onChange), verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+        Text(label, Modifier.weight(1f).padding(vertical = 8.dp), color = Pts.text, style = MaterialTheme.typography.bodyMedium)
+        Switch(checked, null)
     }
 }
 

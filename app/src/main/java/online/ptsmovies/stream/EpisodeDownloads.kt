@@ -26,7 +26,7 @@ fun EpisodeDownloadDialog(title: Title, savedKeys: Set<String>, watched: Set<Str
     Dialog(onDismissRequest = onClose, properties = DialogProperties(usePlatformDefaultWidth = false)) {
         BoxWithConstraints(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.safeDrawing).padding(16.dp), contentAlignment = Alignment.Center) {
             val limit = maxHeight * .92f
-            Surface(Modifier.widthIn(max = 480.dp).fillMaxWidth().heightIn(max = limit), shape = CardShape, color = Pts.card) {
+            Surface(Modifier.widthIn(max = 480.dp).fillMaxWidth().heightIn(max = limit).ptsPageMotion(title.id), shape = CardShape, color = Pts.card) {
                 Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Text("Download episodes", Modifier.weight(1f), style = MaterialTheme.typography.titleLarge, color = Pts.text)
@@ -54,10 +54,8 @@ fun EpisodeDownloadDialog(title: Title, savedKeys: Set<String>, watched: Set<Str
                     }
                     val estimate = chosen.sumOf { if (it.size > 0) it.size else (it.duration * 250000).toLong() }
                     Text("${chosen.size} selected · ${if (chosen.any { it.size <= 0 }) "~" else ""}${formatBytes(estimate)}", color = Pts.muted, style = MaterialTheme.typography.bodySmall)
-                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                        OutlinedButton(onClose, Modifier.weight(1f).heightIn(min = 48.dp)) { Text("Cancel") }
-                        Button({ onStart(chosen) }, Modifier.weight(1f).heightIn(min = 48.dp), enabled = chosen.isNotEmpty()) { Text("Download") }
-                    }
+                    PtsButtonPair(first = { PtsSecondaryButton("Cancel", it, onClick = onClose) },
+                        second = { PtsPrimaryButton("Download", it, enabled = chosen.isNotEmpty()) { onStart(chosen) } })
                 }
             }
         }

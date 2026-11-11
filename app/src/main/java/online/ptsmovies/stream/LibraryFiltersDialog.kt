@@ -10,19 +10,19 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 
 @Composable
-fun LibraryFiltersDialog(titles: List<Title>, value: LibraryFilter, onChange: (LibraryFilter) -> Unit, onClose: () -> Unit) {
+fun LibraryFiltersDialog(titles: List<Title>, value: LibraryFilter, onChange: (LibraryFilter) -> Unit, onClose: () -> Unit,
+    sort: LibrarySort = LibrarySort.RELEVANCE, onSortChange: (LibrarySort) -> Unit = {}) {
     Dialog(onClose) {
-        PtsCard(Modifier.fillMaxWidth().heightIn(max = 580.dp).verticalScroll(rememberScrollState())) {
+        PtsCard(Modifier.fillMaxWidth().heightIn(max = 580.dp).ptsPageMotion("library-filters").verticalScroll(rememberScrollState())) {
             Text("Library filters", style = MaterialTheme.typography.titleLarge, color = Pts.text)
+            WebSelect("Sort", LibrarySort.entries.map { it.name to it.label }, sort.name) { name -> onSortChange(LibrarySort.valueOf(name)) }
             WebSelect("Year", listOf("0" to "All years") + titles.map { it.year }.filter { it > 0 }.distinct().sortedDescending().map { it.toString() to it.toString() }, value.year.toString()) { onChange(value.copy(year = it.toInt())) }
             WebSelect("Audio language", listOf("" to "All languages") + titles.flatMap { it.languages }.distinct().sorted().map { code -> code to java.util.Locale.forLanguageTag(code).displayLanguage.ifBlank { code } }, value.language) { onChange(value.copy(language = it)) }
             Text("Languages use available audio-track metadata; missing languages are not guessed.", color = Pts.muted, style = MaterialTheme.typography.bodySmall)
             PreferenceSwitch("Unwatched only", value.unwatched) { onChange(value.copy(unwatched = it)) }
             PreferenceSwitch("Downloaded on this device", value.downloaded) { onChange(value.copy(downloaded = it)) }
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                PtsSecondaryButton("Reset", Modifier.weight(1f)) { onChange(LibraryFilter()) }
-                PtsPrimaryButton("Done", Modifier.weight(1f), onClick = onClose)
-            }
+            PtsButtonPair(first = { PtsSecondaryButton("Reset", it) { onChange(LibraryFilter()); onSortChange(LibrarySort.RELEVANCE) } },
+                second = { PtsPrimaryButton("Done", it, onClick = onClose) })
         }
     }
 }

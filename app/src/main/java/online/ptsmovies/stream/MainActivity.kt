@@ -838,6 +838,16 @@ class MainActivity : ComponentActivity() {
             }
         }
         val name = user.optString("name").ifBlank { user.optString("username") }
+        val pageRoute = when {
+            nativeSettings.isNotBlank() -> "preferences/$nativeSettings"
+            updatesOpen -> "updates"
+            profileOpen -> "profile"
+            downloadsOpen -> "downloads"
+            mode == "Hub" -> "hub/$hubTab"
+            mode == "Files" -> "files/$filesTab/$filesDevice/$filesPath"
+            selected != null -> "title/${selected!!.id}"
+            else -> "stream/$streamTab"
+        }
         Column(Modifier.fillMaxSize()) {
             PtsTopBar(
                 title = when (mode) { "Files" -> "PTSFiles"; else -> "PTS Library" },
@@ -847,7 +857,7 @@ class MainActivity : ComponentActivity() {
                     if (admin() && mode != "Hub") enterMode("Hub") else if (selected != null) selected = null
                 }, avatar = api.imageUrl(user.optString("avatar")), imageLoader = images
             )
-            Box(Modifier.weight(1f)) {
+            Box(Modifier.weight(1f).ptsPageMotion(pageRoute)) {
                 when {
                     nativeSettings == "downloads" -> DownloadSettingsScreen(NativePreferences(this@MainActivity), { nativeSettings = ""; profileOpen = true }, { downloads?.reconcile(); nativeSettings = ""; profileOpen = true })
                     nativeSettings == "playback" -> PlaybackPreferencesScreen(playbackPrefs, { key, value -> playerPreference(key, value) }, { nativeSettings = ""; profileOpen = true })
@@ -935,7 +945,7 @@ class MainActivity : ComponentActivity() {
                                 val next = if (title.kind == "series") title.episodes.firstOrNull { it.id == resume?.episodeId }
                                     ?: title.episodes.minWithOrNull(compareBy({ it.season }, { it.episode })) else null
                                 play(title, next)
-                            }, { toggleWatch(it) }, onSeeAll = { streamTab = it }, onMarkPlayed = { markPlayed(it) }, initialSort = device.sort("Home"), onSortChange = { device.sort("Home", it) })
+                            }, { toggleWatch(it) }, onSeeAll = { streamTab = it }, onMarkPlayed = { markPlayed(it) }, initialSort = device.sort("Home"), onSortChange = { device.sort("Home", it) }, completed = completed, saved = savedVideos.map { it.key }.toSet())
                             "Movies" -> BrowseScreen("Movies", lib.titles.filter { it.kind == "movie" }, lib.progress, lib.watch,
                                     browseQueries["Movies"].orEmpty(), { browseQueries["Movies"] = it }, { selected = it }, { toggleWatch(it) }, device.view("Movies"), { device.view("Movies", it) }, episodeProgress()?.completed().orEmpty(), savedVideos.map { it.key }.toSet(), device.sort("Movies"), { device.sort("Movies", it) })
                             "Series" -> BrowseScreen("Series", lib.titles.filter { it.kind == "series" }, lib.progress, lib.watch,
@@ -1199,7 +1209,7 @@ class MainActivity : ComponentActivity() {
                 selectEpisode(nextEpisode)
             }
         }
-        BoxWithConstraints(Modifier.fillMaxSize().background(Color.Black)) {
+        BoxWithConstraints(Modifier.fillMaxSize().background(if (compact) Pts.card else Color.Black)) {
           val landscape = compact || maxWidth > maxHeight || inPip || playerFullscreen
           val miniPreviewWidth = if (maxWidth < 340.dp) 88.dp else 108.dp
           val portraitHeight = (maxWidth * .58f).coerceIn(300.dp, 560.dp).coerceAtMost(maxHeight * .65f)

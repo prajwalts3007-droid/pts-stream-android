@@ -121,7 +121,7 @@ fun PtsTopBar(title: String, initial: String, onAvatar: () -> Unit, onTitle: () 
             maxLines = 1, overflow = TextOverflow.Ellipsis
         )
         Box(
-            Modifier.size(39.dp).testTag("profile-avatar").background(Pts.soft, CircleShape)
+            Modifier.size(48.dp).testTag("profile-avatar").background(Pts.soft, CircleShape)
                 .border(2.dp, Pts.line2, CircleShape)
                 .semantics { contentDescription = "Open profile" }
                 .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null, onClick = onAvatar),
@@ -137,7 +137,7 @@ fun PtsTopBar(title: String, initial: String, onAvatar: () -> Unit, onTitle: () 
 @Composable
 fun PtsPage(title: String, subtitle: String? = null, trailing: (@Composable RowScope.() -> Unit)? = null) {
     Column(Modifier.fillMaxWidth().padding(top = 20.dp, bottom = 6.dp)) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             Text(title, style = MaterialTheme.typography.headlineLarge, color = Pts.text, modifier = Modifier.weight(1f))
             trailing?.let { Row(verticalAlignment = Alignment.CenterVertically, content = it) }
         }
@@ -206,19 +206,19 @@ fun PtsPressable(
 @Composable
 fun PtsPrimaryButton(label: String, modifier: Modifier = Modifier, icon: ImageVector? = null, enabled: Boolean = true, tint: Color = Pts.accent, onClick: () -> Unit) {
     val shape = ButtonShape
-    val bg by animateColorAsState(if (enabled) tint else Pts.line, label = "primary")
+    val bg by animateColorAsState(if (enabled) tint else Pts.line, tween(motionMillis(ptsMotionEnabled(), 150)), label = "primary")
     PtsPressable(onClick = onClick, enabled = enabled, modifier = modifier) {
         Row(
-            Modifier.fillMaxWidth().heightIn(min = 48.dp)
+            Modifier.fillMaxWidth().heightIn(min = 52.dp)
                 .shadow(if (enabled) 7.dp else 0.dp, shape, ambientColor = tint.copy(alpha = .35f), spotColor = tint.copy(alpha = .45f))
                 .clip(shape).background(bg)
-                .padding(horizontal = 18.dp, vertical = 13.dp),
+                 .padding(horizontal = 12.dp, vertical = 12.dp),
             horizontalArrangement = Arrangement.Center,
             verticalAlignment = Alignment.CenterVertically
         ) {
             if (icon != null) Icon(icon, null, Modifier.size(19.dp), tint = if (enabled) Pts.onAccent else Pts.muted)
             if (icon != null) Spacer(Modifier.width(8.dp))
-            Text(label, fontFamily = DmSans, fontWeight = FontWeight.Bold, fontSize = 15.sp, color = if (enabled) Pts.onAccent else Pts.muted)
+            Text(label, fontFamily = DmSans, fontWeight = FontWeight.Bold, fontSize = 15.sp, color = if (enabled) Pts.onAccent else Pts.muted, textAlign = TextAlign.Center, maxLines = 2, overflow = TextOverflow.Ellipsis)
         }
     }
 }
@@ -230,20 +230,20 @@ fun PtsSecondaryButton(label: String, modifier: Modifier = Modifier, icon: Image
     val border = if (danger) Pts.danger.copy(alpha = .55f) else Pts.line2
     PtsPressable(onClick = onClick, enabled = enabled, modifier = modifier) {
         Row(
-            Modifier.fillMaxWidth().heightIn(min = 46.dp).clip(shape).background(Pts.card)
-                .border(2.dp, border, shape).padding(horizontal = 16.dp, vertical = 12.dp),
+            Modifier.fillMaxWidth().heightIn(min = 52.dp).clip(shape).background(Pts.card)
+                .border(2.dp, border, shape).padding(horizontal = 12.dp, vertical = 12.dp),
             horizontalArrangement = Arrangement.Center,
             verticalAlignment = Alignment.CenterVertically
         ) {
             if (icon != null) Icon(icon, null, Modifier.size(18.dp), tint = if (enabled) tint else Pts.muted)
             if (icon != null) Spacer(Modifier.width(7.dp))
-            Text(label, fontFamily = DmSans, fontWeight = FontWeight.Bold, fontSize = 14.sp, color = if (enabled) tint else Pts.muted)
+            Text(label, fontFamily = DmSans, fontWeight = FontWeight.Bold, fontSize = 15.sp, color = if (enabled) tint else Pts.muted, textAlign = TextAlign.Center, maxLines = 2, overflow = TextOverflow.Ellipsis)
         }
     }
 }
 
 @Composable
-fun PtsIconAction(icon: ImageVector, description: String, onClick: () -> Unit, tint: Color = Pts.text, size: Dp = 38.dp) {
+fun PtsIconAction(icon: ImageVector, description: String, onClick: () -> Unit, tint: Color = Pts.text, size: Dp = 48.dp) {
     PtsPressable(onClick, Modifier.size(size).clip(CircleShape)) {
         Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { Icon(icon, description, Modifier.size(20.dp), tint = tint) }
     }
@@ -264,6 +264,7 @@ fun PtsField(
     var revealed by remember { mutableStateOf(false) }
     val source = remember { MutableInteractionSource() }
     val focused by source.collectIsFocusedAsState()
+    val outline by animateColorAsState(if (focused) Pts.accent else Pts.line, tween(motionMillis(ptsMotionEnabled(), 150)), label = "field-focus")
     Column(modifier, verticalArrangement = Arrangement.spacedBy(7.dp)) {
         Text(label, style = MaterialTheme.typography.labelMedium, color = Pts.muted)
         BasicTextField(
@@ -278,7 +279,7 @@ fun PtsField(
             interactionSource = source,
             modifier = Modifier.fillMaxWidth().heightIn(min = 52.dp)
                 .clip(FieldShape).background(Pts.soft)
-                .border(2.dp, if (focused) Pts.accent else Pts.line, FieldShape)
+                .border(2.dp, outline, FieldShape)
                 .padding(horizontal = 15.dp, vertical = 15.dp),
             decorationBox = { inner ->
                 Row(verticalAlignment = Alignment.CenterVertically) {
@@ -301,9 +302,10 @@ fun PtsField(
 fun PtsSearchField(value: String, onValueChange: (String) -> Unit, placeholder: String, modifier: Modifier = Modifier) {
     val source = remember { MutableInteractionSource() }
     val focused by source.collectIsFocusedAsState()
+    val outline by animateColorAsState(if (focused) Pts.accent else Pts.line, tween(motionMillis(ptsMotionEnabled(), 150)), label = "search-focus")
     Row(
         modifier.fillMaxWidth().heightIn(min = 54.dp).clip(RowShape).background(Pts.card)
-            .border(2.dp, if (focused) Pts.accent else Pts.line, RowShape)
+            .border(2.dp, outline, RowShape)
             .padding(horizontal = 15.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
@@ -316,12 +318,12 @@ fun PtsSearchField(value: String, onValueChange: (String) -> Unit, placeholder: 
             modifier = Modifier.weight(1f).padding(horizontal = 10.dp),
             decorationBox = { inner ->
                 Box {
-                    if (value.isEmpty()) Text(placeholder, fontFamily = DmSans, fontSize = 15.sp, color = Pts.muted2)
+                    if (value.isEmpty()) Text(placeholder, fontFamily = DmSans, fontSize = 15.sp, color = Pts.muted2, maxLines = 1, overflow = TextOverflow.Ellipsis)
                     inner()
                 }
             }
         )
-        if (value.isNotEmpty()) PtsIconAction(PtsIcons.Close, "Clear search", { onValueChange("") }, tint = Pts.muted, size = 30.dp)
+        if (value.isNotEmpty()) PtsIconAction(PtsIcons.Close, "Clear search", { onValueChange("") }, tint = Pts.muted, size = 40.dp)
     }
 }
 
@@ -333,13 +335,13 @@ fun PtsSegmented(options: List<Pair<String, String>>, selected: String, onSelect
     ) {
         options.forEach { (value, label) ->
             val active = value == selected
-            val bg by animateColorAsState(if (active) Pts.accent else Color.Transparent, label = "seg")
+            val bg by animateColorAsState(if (active) Pts.accent else Color.Transparent, tween(motionMillis(ptsMotionEnabled(), 160)), label = "seg")
             Box(
-                Modifier.weight(1f).height(44.dp).clip(RoundedCornerShape(12.dp)).background(bg).semantics { this.selected = active }
+                Modifier.weight(1f).heightIn(min = 48.dp).clip(RoundedCornerShape(12.dp)).background(bg).semantics { this.selected = active }
                     .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null) { onSelect(value) },
                 contentAlignment = Alignment.Center
             ) {
-                Text(label, fontFamily = DmSans, fontWeight = FontWeight.Bold, fontSize = 14.sp,
+                Text(label, Modifier.padding(horizontal = 2.dp, vertical = 8.dp), fontFamily = DmSans, fontWeight = FontWeight.Bold, fontSize = 14.sp,
                     color = if (active) Pts.onAccent else Pts.muted, maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
         }
@@ -488,10 +490,14 @@ fun PtsPosterCard(
     onToggleWatch: (() -> Unit)? = null,
     onClearProgress: (() -> Unit)? = null
 ) {
+    val interaction = remember { MutableInteractionSource() }
+    val pressed by interaction.collectIsPressedAsState()
+    val scale by animateFloatAsState(if (pressed && ptsMotionEnabled()) .975f else 1f, tween(motionMillis(ptsMotionEnabled(), 130)), label = "poster-press")
     Column(
         modifier.then(if (width != null) Modifier.width(width) else Modifier.fillMaxWidth())
+            .graphicsLayer { scaleX = scale; scaleY = scale }
             .testTag("poster-card-${title.id}").clip(RoundedCornerShape(19.dp)).background(Pts.card)
-            .border(2.dp, Pts.line, RoundedCornerShape(19.dp)).clickable(onClick = onOpen).padding(7.dp),
+            .border(2.dp, Pts.line, RoundedCornerShape(19.dp)).clickable(interactionSource = interaction, indication = LocalIndication.current, onClick = onOpen).padding(7.dp),
         verticalArrangement = Arrangement.spacedBy(5.dp)
     ) {
         Box(Modifier.fillMaxWidth().aspectRatio(2f / 3f).testTag("poster-art-${title.id}").clip(PosterShape).background(Pts.soft)) {
@@ -573,10 +579,8 @@ fun PtsHero(title: Title, marked: Boolean, onOpen: () -> Unit, onPlay: () -> Uni
                     listOfNotNull(title.year.takeIf { it > 0 }?.toString(), title.genres.take(2).joinToString()).joinToString(" · "),
                     style = MaterialTheme.typography.bodySmall, color = Color(0xFFE7E8FF), maxLines = 2, overflow = TextOverflow.Ellipsis
                 )
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(top = 2.dp)) {
-                    PtsPrimaryButton("Play", Modifier.weight(1f), icon = PtsIcons.Play, onClick = onPlay)
-                    PtsSecondaryButton(if (marked) "In list" else "My list", Modifier.weight(1f), icon = if (marked) PtsIcons.Check else PtsIcons.Plus) { onToggleWatch() }
-                }
+                PtsButtonPair(first = { PtsPrimaryButton("Play", it, icon = PtsIcons.Play, onClick = onPlay) },
+                    second = { PtsSecondaryButton(if (marked) "In list" else "My list", it, icon = if (marked) PtsIcons.Check else PtsIcons.Plus, onClick = onToggleWatch) })
             }
         }
         Box(Modifier.align(Alignment.TopEnd).padding(12.dp)) {
@@ -599,11 +603,13 @@ fun PtsDock(items: List<DockItem>, selected: String, onSelect: (String) -> Unit)
     ) {
         items.forEach { item ->
             val active = item.value == selected
-            val bg by animateColorAsState(if (active) Pts.accentSoft else Color.Transparent, label = "dock")
-            val tint by animateColorAsState(if (active) Pts.accent else Pts.muted, label = "docktint")
+            val bg by animateColorAsState(if (active) Pts.accentSoft else Color.Transparent, tween(motionMillis(ptsMotionEnabled(), 180)), label = "dock")
+            val tint by animateColorAsState(if (active) Pts.accent else Pts.muted, tween(motionMillis(ptsMotionEnabled(), 180)), label = "docktint")
+            val lift by animateFloatAsState(if (active && ptsMotionEnabled()) -2f else 0f, tween(motionMillis(ptsMotionEnabled(), 180)), label = "dock-icon-lift")
             Box(
-                Modifier.weight(1f).height(60.dp).clip(RoundedCornerShape(15.dp)).background(bg)
-                    .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null) { onSelect(item.value) }
+                Modifier.weight(1f).heightIn(min = 60.dp).clip(RoundedCornerShape(15.dp)).background(bg)
+                    .semantics { this.selected = active }
+                    .clickable(interactionSource = remember { MutableInteractionSource() }, indication = LocalIndication.current) { onSelect(item.value) }
                     .drawBehind {
                         if (active) drawRect(accent, topLeft = Offset(8.dp.toPx(), size.height - 3.dp.toPx()),
                             size = Size(size.width - 16.dp.toPx(), 3.dp.toPx()))
@@ -611,7 +617,7 @@ fun PtsDock(items: List<DockItem>, selected: String, onSelect: (String) -> Unit)
                 contentAlignment = Alignment.Center
             ) {
                 Column(Modifier.fillMaxWidth().padding(horizontal = 2.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(3.dp)) {
-                    Icon(item.icon, item.label, Modifier.size(22.dp), tint = tint)
+                    Icon(item.icon, item.label, Modifier.size(22.dp).graphicsLayer { translationY = lift }, tint = tint)
                     Text(item.label, fontFamily = Nunito, fontWeight = FontWeight.ExtraBold, fontSize = 11.sp,
                         color = tint, maxLines = 1, overflow = TextOverflow.Ellipsis, textAlign = androidx.compose.ui.text.style.TextAlign.Center)
                 }
@@ -627,7 +633,7 @@ fun PtsToast(message: String, onDismiss: () -> Unit) {
         onDismiss()
     }
     Box(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp)) {
-        AnimatedVisibility(visible = message.isNotBlank(), enter = slideInVertically { it } + fadeIn(), exit = slideOutVertically { it } + fadeOut()) {
+        AnimatedVisibility(visible = message.isNotBlank(), enter = slideInVertically(tween(motionMillis(ptsMotionEnabled(), 180))) { it } + fadeIn(tween(motionMillis(ptsMotionEnabled(), 180))), exit = slideOutVertically(tween(motionMillis(ptsMotionEnabled(), 140))) { it } + fadeOut(tween(motionMillis(ptsMotionEnabled(), 140)))) {
             Row(
                 Modifier.fillMaxWidth().shadow(14.dp, RowShape).clip(RowShape).background(Pts.card)
                     .border(2.dp, Pts.line, RowShape).padding(horizontal = 14.dp, vertical = 12.dp),
@@ -654,17 +660,15 @@ fun PtsConfirmDialog(
 ) {
     Dialog(onDismissRequest = onDismiss) {
         Column(
-            Modifier.fillMaxWidth().clip(RoundedCornerShape(24.dp)).background(Pts.card)
+            Modifier.fillMaxWidth().heightIn(max = 620.dp).ptsPageMotion(title).clip(RoundedCornerShape(24.dp)).background(Pts.card)
                 .border(2.dp, Pts.line, RoundedCornerShape(24.dp)).verticalScroll(rememberScrollState()).padding(22.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
             Text(title, style = MaterialTheme.typography.titleLarge, color = Pts.text)
             Text(body, style = MaterialTheme.typography.bodyMedium, color = Pts.muted)
             content?.invoke()
-            Row(horizontalArrangement = Arrangement.spacedBy(9.dp), modifier = Modifier.fillMaxWidth().padding(top = 4.dp)) {
-                PtsSecondaryButton("Cancel", Modifier.weight(1f), onClick = onDismiss)
-                PtsPrimaryButton(confirmLabel, Modifier.weight(1f), enabled = confirmEnabled, tint = if (destructive) Pts.danger else Pts.accent, onClick = onConfirm)
-            }
+            PtsButtonPair(first = { PtsSecondaryButton("Cancel", it, onClick = onDismiss) },
+                second = { PtsPrimaryButton(confirmLabel, it, enabled = confirmEnabled, tint = if (destructive) Pts.danger else Pts.accent, onClick = onConfirm) })
         }
     }
 }

@@ -150,7 +150,7 @@ fun NativeAdminSettings(user: JSONObject, api: PtsApi, onUpdate: () -> Unit, onS
         }
         sections.forEach { section ->
             item {
-                PtsCard(Modifier.fillMaxWidth().animateContentSize(tween(motionMillis(ptsMotionEnabled(), 180))), padding = 14.dp) {
+                PtsCard(Modifier.fillMaxWidth().ptsPageMotion(category).animateContentSize(tween(motionMillis(ptsMotionEnabled(), 180))), padding = 14.dp) {
                     Text(when (section) { "Pipeline settings" -> "Pipeline limits"; "Power options" -> "Power"; "API management" -> "API Management"; else -> section }, style = MaterialTheme.typography.titleMedium, color = Pts.text)
                     when (section) {
                         "Playback preferences" -> PlaybackPreferencesScreen(playbackPrefs, onPlayback, {}, embedded = true)
@@ -162,12 +162,11 @@ fun NativeAdminSettings(user: JSONObject, api: PtsApi, onUpdate: () -> Unit, onS
                                     "GitHub: ${status.optInt("active_runners")}/${pipeline!!.optInt("max_runners")} · Pi: ${status.optInt("active_transfers")}/${pipeline!!.optInt("max_pi_transfers")} · Waiting: ${status.optInt("waiting_transfers")}",
                                     color = Pts.muted, style = MaterialTheme.typography.bodySmall)
                             }
-                            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                            PtsPrimaryButton("Save limits", Modifier.weight(1f), enabled = pipeline != null && !busy) {
+                            PtsButtonPair(first = {
+                            PtsPrimaryButton("Save limits", it, enabled = pipeline != null && !busy) {
                                 try { confirm(AdminCommand("/admin/pipeline-settings", "PUT", pipelineBody(fields.toMap(), formOriginal ?: pipeline!!)), "Apply pipeline settings?") } catch (e: Exception) { error = e.message.orEmpty() }
                             }
-                            PtsRefreshButton("Refresh status", pipelineRefreshing, Modifier.weight(1f)) { refreshPipeline(statusOnly = true) }
-                            }
+                            }, second = { PtsRefreshButton("Refresh status", pipelineRefreshing, it) { refreshPipeline(statusOnly = true) } })
                         }
                         "API management" -> {
                             if (!unlocked) {

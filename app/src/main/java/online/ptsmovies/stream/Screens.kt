@@ -1,6 +1,7 @@
 package online.ptsmovies.stream
 
 import androidx.compose.foundation.background
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.selection.toggleable
@@ -30,6 +31,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
@@ -136,38 +138,56 @@ fun StreamHomeScreen(
     onPlay: (Title) -> Unit,
     onToggleWatch: (Title) -> Unit,
     onSeeAll: (String) -> Unit,
-    onMarkPlayed: (Title) -> Unit = {}, initialSort: String = LibrarySort.RELEVANCE.name, onSortChange: (String) -> Unit = {}
+    onMarkPlayed: (Title) -> Unit = {}, initialSort: String = LibrarySort.RELEVANCE.name, onSortChange: (String) -> Unit = {},
+    completed: Set<String> = emptySet(), saved: Set<String> = emptySet()
 ) {
     var query by rememberSaveable { mutableStateOf("") }
     var sortName by rememberSaveable { mutableStateOf(initialSort) }
+    var filtersOpen by remember { mutableStateOf(false) }
+    var year by rememberSaveable { mutableIntStateOf(0) }
+    var language by rememberSaveable { mutableStateOf("") }
+    var unwatched by rememberSaveable { mutableStateOf(false) }
+    var downloaded by rememberSaveable { mutableStateOf(false) }
+    val selection = LibraryFilter(year, language, unwatched, downloaded)
     val sort = LibrarySort.entries.firstOrNull { it.name == sortName } ?: LibrarySort.RELEVANCE
     val searchIndex = remember(library.titles) { indexLibrary(library.titles) }
-    val results = remember(searchIndex, query, sort) { searchLibrary(searchIndex, query, sort) }
-    val featured = remember(library.titles) { library.titles.filter { it.poster.startsWith("https://") }.ifEmpty { library.titles }.take(4) }
-    val continueWatching = remember(library) {
-        library.titles.filter { val p = library.progress[it.id]; p != null && p.duration > 0 && p.seconds > 5 && p.seconds < p.duration - 15 }
+    if (filtersOpen) LibraryFiltersDialog(library.titles, selection, { next -> year = next.year; language = next.language; unwatched = next.unwatched; downloaded = next.downloaded },
+        { filtersOpen = false }, sort, { sortName = it.name; onSortChange(it.name) })
+    val results = remember(searchIndex, query, sort, selection, completed, saved) { filterLibrary(searchLibrary(searchIndex, query, sort), selection, completed, saved) }
+    val featured = remember(results) { results.filter { it.poster.startsWith("https://") }.ifEmpty { results }.take(4) }
+    val continueWatching = remember(library, results) {
+        results.filter { val p = library.progress[it.id]; p != null && p.duration > 0 && p.seconds > 5 && p.seconds < p.duration - 15 }
     }
-    val movies = library.titles.filter { it.kind == "movie" }
-    val series = library.titles.filter { it.kind == "series" }
+    val movies = results.filter { it.kind == "movie" }
+    val series = results.filter { it.kind == "series" }
+    val ptsMotionForPager = ptsMotionEnabled()
+    val fontScale = LocalDensity.current.fontScale
+    BoxWithConstraints(Modifier.fillMaxSize()) {
+    val resultColumns = libraryColumns((maxWidth - 32.dp).value, fontScale, false)
     LazyColumn(
         contentPadding = PaddingValues(start = 16.dp, end = 16.dp, bottom = 20.dp),
-        verticalArrangement = Arrangement.spacedBy(2.dp)
+        verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
         item { PtsPage("Stream") }
         item { PtsSearchField(query, { query = it.take(160) }, "Titles or episode names") }
+        item {
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                PtsSecondaryButton("Library filters", Modifier.weight(1f), icon = PtsIcons.Settings) { filtersOpen = true }
+                Text(sort.label, Modifier.weight(1f), color = Pts.muted, style = MaterialTheme.typography.labelMedium, maxLines = 2, overflow = TextOverflow.Ellipsis)
+            }
+        }
         if (query.isNotBlank()) {
-            item { WebSelect("Sort results", LibrarySort.entries.map { it.name to it.label }, sort.name) { sortName = it; onSortChange(it) } }
             item { Text("${results.size} results", style = MaterialTheme.typography.bodySmall, color = Pts.muted) }
             if (results.isEmpty()) item { PtsEmpty("No matching titles", actionLabel = "Clear search", icon = PtsIcons.Search) { query = "" } }
-            results.chunked(2).forEach { pair -> item {
+            results.chunked(resultColumns).forEach { pair -> item(key = "result-${pair.first().id}") {
                 Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                     pair.forEach { t -> PtsPosterCard(t, library.progress[t.id], t.id in library.watch, Modifier.weight(1f), width = null,
                         onOpen = { onOpen(t) }, onToggleWatch = { onToggleWatch(t) }) }
-                    if (pair.size == 1) Spacer(Modifier.weight(1f))
+                    repeat(resultColumns - pair.size) { Spacer(Modifier.weight(1f)) }
                 }
             } }
-        } else if (library.titles.isEmpty()) {
-            item { PtsEmpty("Your library is empty", icon = PtsIcons.Film) }
+        } else if (results.isEmpty()) {
+            item { PtsEmpty(if (library.titles.isEmpty()) "Your library is empty" else "No matching titles", "Adjust Library filters to change the results.", icon = PtsIcons.Film) }
         } else {
             if (featured.isNotEmpty()) {
                 item {
@@ -181,12 +201,7 @@ fun StreamHomeScreen(
                         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Center) {
                             repeat(featured.size) { index ->
                                 val on = pager.currentPage == index
-                                Box(
-                                    Modifier.padding(horizontal = 4.dp).height(9.dp)
-                                        .width(if (on) 24.dp else 9.dp)
-                                        .background(if (on) Pts.accent else Pts.line2, RoundedCornerShape(99.dp))
-                                        .clickable { pagerScope.launch { pager.animateScrollToPage(index) } }
-                                )
+                                PtsPagerDot(index, on) { pagerScope.launch { if (ptsMotionForPager) pager.animateScrollToPage(index) else pager.scrollToPage(index) } }
                             }
                         }
                     }
@@ -223,6 +238,7 @@ fun StreamHomeScreen(
             }
         }
     }
+    }
 }
 
 @Composable
@@ -250,7 +266,8 @@ fun BrowseScreen(
     val sort = LibrarySort.entries.firstOrNull { it.name == sortName } ?: LibrarySort.RELEVANCE
     val searchIndex = remember(titles) { indexLibrary(titles) }
     val selection = LibraryFilter(year, language, unwatched, downloaded)
-    if (filtersOpen) LibraryFiltersDialog(titles, selection, { next -> year = next.year; language = next.language; unwatched = next.unwatched; downloaded = next.downloaded }, { filtersOpen = false })
+    if (filtersOpen) LibraryFiltersDialog(titles, selection, { next -> year = next.year; language = next.language; unwatched = next.unwatched; downloaded = next.downloaded },
+        { filtersOpen = false }, sort, { sortName = it.name; onSortChange(it.name) })
     val genres = remember(tab, titles) {
         when (tab) {
             "Movies" -> titles.flatMap { it.genres }.distinct().sorted()
@@ -265,8 +282,12 @@ fun BrowseScreen(
         }
     }
     val label = when (tab) { "Movies" -> "Movies"; "Series" -> "TV Shows"; "Watchlist" -> "My List"; else -> tab }
+    val motion = ptsMotionEnabled()
+    val fontScale = LocalDensity.current.fontScale
+    BoxWithConstraints(Modifier.fillMaxSize()) {
+    val columns = libraryColumns((maxWidth - 32.dp).value, fontScale, view == "list")
     LazyVerticalGrid(
-        columns = GridCells.Fixed(if (view == "list") 1 else 2),
+        columns = GridCells.Fixed(columns),
         contentPadding = PaddingValues(start = 16.dp, end = 16.dp, bottom = 20.dp),
         horizontalArrangement = Arrangement.spacedBy(12.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp)
@@ -275,16 +296,16 @@ fun BrowseScreen(
             PtsPage(label)
         }
         item(span = { GridItemSpan(maxLineSpan) }) {
-            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                PtsSearchField(query, { onQuery(it.take(160)) }, "Titles or episode names", Modifier.weight(1f))
-                PtsIconAction(PtsIcons.Settings, "Library filters", { filtersOpen = true }, tint = Pts.accent)
+            PtsSearchField(query, { onQuery(it.take(160)) }, "Titles or episode names")
+        }
+        item(span = { GridItemSpan(maxLineSpan) }) {
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                PtsSecondaryButton("Filters", Modifier.weight(1f), icon = PtsIcons.Settings) { filtersOpen = true }
+                Text(sort.label, Modifier.weight(1f), color = Pts.muted, style = MaterialTheme.typography.labelMedium, maxLines = 2, overflow = TextOverflow.Ellipsis)
                 PtsIconAction(if (view == "grid") PtsIcons.List else PtsIcons.Grid, if (view == "grid") "Switch to list view" else "Switch to grid view", {
                     view = if (view == "grid") "list" else "grid"; onViewChange(view)
                 }, tint = Pts.accent)
             }
-        }
-        item(span = { GridItemSpan(maxLineSpan) }) {
-            WebSelect("Sort", LibrarySort.entries.map { it.name to it.label }, sort.name) { sortName = it; onSortChange(it) }
         }
         if (genres.isNotEmpty()) {
             item(span = { GridItemSpan(maxLineSpan) }) {
@@ -308,9 +329,11 @@ fun BrowseScreen(
             }
         }
         items(filtered, key = { it.id }) { t ->
-            if (view == "grid") PtsPosterCard(t, progress[t.id], t.id in watch, width = null, onOpen = { onOpen(t) }, onToggleWatch = { onToggleWatch(t) })
-            else PtsTitleListRow(t, t.id in watch, { onOpen(t) }, { onToggleWatch(t) })
+            val placement = Modifier.animateItem(fadeInSpec = if (motion) tween(160) else null, placementSpec = if (motion) tween(220) else null, fadeOutSpec = if (motion) tween(100) else null)
+            if (view == "grid") PtsPosterCard(t, progress[t.id], t.id in watch, modifier = placement, width = null, onOpen = { onOpen(t) }, onToggleWatch = { onToggleWatch(t) })
+            else PtsTitleListRow(t, t.id in watch, { onOpen(t) }, { onToggleWatch(t) }, placement)
         }
+    }
     }
 }
 
@@ -354,8 +377,8 @@ fun TitleScreen(
         }
         item {
             PtsCard(Modifier.fillMaxWidth(), padding = 14.dp) {
-                Row {
-                    Box(Modifier.width(116.dp).aspectRatio(2f / 3f).clip(PosterShape).background(Pts.soft)
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Box(Modifier.widthIn(max = 116.dp).fillMaxWidth(.36f).aspectRatio(2f / 3f).clip(PosterShape).background(Pts.soft)
                         .border(1.dp, Pts.line, PosterShape)) {
                         if (title.poster.startsWith("https://")) AsyncImage(title.poster, "Poster", Modifier.fillMaxSize(), contentScale = androidx.compose.ui.layout.ContentScale.Crop)
                         else Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
@@ -366,15 +389,14 @@ fun TitleScreen(
                         Text(title.title, style = MaterialTheme.typography.headlineSmall, color = Pts.text, maxLines = 3, overflow = TextOverflow.Ellipsis)
                     }
                 }
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
-                    val resumeAt = resume?.takeIf { resumePosition(it, if (title.kind == "movie") 0L else it.episodeId) > 0 }
+                val resumeAt = resume?.takeIf { resumePosition(it, if (title.kind == "movie") 0L else it.episodeId) > 0 }
+                PtsButtonPair(first = {
                     PtsPrimaryButton(
                         if (resumeAt != null) "Resume" else if (title.kind == "series") "Play series" else "Play",
-                        Modifier.weight(1f), icon = PtsIcons.Play,
+                        it, icon = PtsIcons.Play,
                         enabled = title.kind == "movie" || episodes.isNotEmpty()
                     ) { onPlay(if (title.kind == "movie") null else episodes.firstOrNull { it.id == resume?.episodeId } ?: episodes.firstOrNull()) }
-                    PtsSecondaryButton(if (marked) "In list" else "My list", Modifier.weight(1f), icon = if (marked) PtsIcons.Check else PtsIcons.Plus) { onToggleWatch() }
-                }
+                }, second = { PtsSecondaryButton(if (marked) "In list" else "My list", it, icon = if (marked) PtsIcons.Check else PtsIcons.Plus, onClick = onToggleWatch) })
                 if (resume != null && resume.seconds > 0) {
                     PtsProgressBar(if (resume.duration > 0) resume.seconds.toFloat() / resume.duration else 0f, tint = Pts.spark)
                 }
@@ -426,19 +448,19 @@ internal fun EpisodeRow(
                 contentAlignment = Alignment.Center
             ) { Icon(PtsIcons.Play, "Play episode", Modifier.size(22.dp), tint = Pts.accent) }
             Column(Modifier.weight(1f).padding(horizontal = 12.dp), verticalArrangement = Arrangement.spacedBy(3.dp)) {
-                Text("E${ep.episode} · ${ep.title.ifBlank { title.title }}", style = MaterialTheme.typography.titleSmall, color = Pts.text, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text("E${ep.episode} · ${ep.title.ifBlank { title.title }}", style = MaterialTheme.typography.titleSmall, color = Pts.text, maxLines = 2, overflow = TextOverflow.Ellipsis)
                 if (saved || completed) Text(listOfNotNull(if (saved) "Downloaded" else null, if (completed) "Completed" else null).joinToString(" · "), style = MaterialTheme.typography.labelSmall, color = Pts.muted)
                 if (resume != null && resume.seconds > 0) PtsProgressBar(
                     if (resume.duration > 0) resume.seconds.toFloat() / resume.duration else 0f, height = 4.dp, tint = Pts.spark
                 )
             }
-            if (onCompleted != null) PtsIconAction(PtsIcons.Check, if (completed) "Mark episode unwatched" else "Mark episode completed", onCompleted, tint = if (completed) Pts.ok else Pts.muted, size = 36.dp)
+            if (onCompleted != null) PtsIconAction(PtsIcons.Check, if (completed) "Mark episode unwatched" else "Mark episode completed", onCompleted, tint = if (completed) Pts.ok else Pts.muted)
             PtsIconAction(
                 if (saved) PtsIcons.Check else PtsIcons.Download,
                 if (saved) "Saved" else "Save offline",
                 onDownload,
                 tint = if (saved) Pts.ok else if (downloading.isBlank()) Pts.text else Pts.muted,
-                size = 36.dp
+                size = 48.dp
             )
         }
     }
@@ -484,10 +506,9 @@ fun ProfileScreen(user: JSONObject, savedCount: Int, onDownloads: () -> Unit, on
                 Text("Appearance", style = MaterialTheme.typography.titleMedium, color = Pts.text)
                 PtsSegmented(listOf("system" to "System", "light" to "Light", "dark" to "Dark"), theme, onTheme)
                 PtsSecondaryButton("Edit profile", Modifier.fillMaxWidth(), onClick = onEdit)
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    PtsSecondaryButton("Change photo", Modifier.weight(1f), onClick = onPhoto)
-                    if (avatar != null) PtsSecondaryButton("Remove photo", Modifier.weight(1f), onClick = onRemovePhoto)
-                }
+                if (avatar != null) PtsButtonPair(first = { PtsSecondaryButton("Change photo", it, onClick = onPhoto) },
+                    second = { PtsSecondaryButton("Remove photo", it, onClick = onRemovePhoto) })
+                else PtsSecondaryButton("Change photo", Modifier.fillMaxWidth(), onClick = onPhoto)
             }
         }
         if (role == "admin") {
@@ -509,6 +530,7 @@ fun ProfileScreen(user: JSONObject, savedCount: Int, onDownloads: () -> Unit, on
                 MenuRow(PtsIcons.Settings, "Downloads & network", "") { onDownloadSettings() }
                 MenuDivider()
                 MenuRow(PtsIcons.Play, "Playback", "") { onPlayback() }
+                MenuDivider()
                 MenuRow(PtsIcons.Refresh, "Sync & alerts", if (role == "admin") "Episode progress and live job alerts" else "Episode progress across devices") { onSync() }
                 MenuDivider()
                 MenuRow(PtsIcons.Refresh, "Check for updates", "Signed releases only") { onUpdate() }
@@ -579,28 +601,30 @@ fun DashboardScreen(
             item {
                 val cpu = host.optDouble("cpu_percent").toFloat() / 100f
                 val mem = host.optDouble("mem_percent").toFloat() / 100f
-                Row(Modifier.height(IntrinsicSize.Min), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                PtsButtonPair(first = {
                     PtsStatTile("CPU", "${(cpu * 100).toInt()}%",
                         "${host.optInt("cpu_cores")} cores · load ${String.format(Locale.US, "%.2f", host.optDouble("load1"))}",
-                        cpu, Pts.accent, Modifier.weight(1f).fillMaxHeight())
+                        cpu, Pts.accent, it)
+                }, second = {
                     PtsStatTile("Memory", "${(mem * 100).toInt()}%",
                         "${formatBytes(host.optLong("mem_used_bytes"))} / ${formatBytes(host.optLong("mem_total_bytes"))}",
-                        mem, Pts.spark, Modifier.weight(1f).fillMaxHeight())
-                }
+                        mem, Pts.spark, it)
+                })
             }
             item {
                 val disk = host.optDouble("disk_percent").toFloat() / 100f
-                Row(Modifier.height(IntrinsicSize.Min), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                PtsButtonPair(first = {
                     PtsStatTile("Storage" + host.optString("disk_path").takeIf { it.isNotBlank() }?.let { " · $it" }.orEmpty(),
                         "${(disk * 100).toInt()}%",
                         "${formatBytes(host.optLong("disk_used_bytes"))} / ${formatBytes(host.optLong("disk_total_bytes"))}",
-                        disk, Pts.ok, Modifier.weight(1f).fillMaxHeight())
+                        disk, Pts.ok, it)
+                }, second = {
                     PtsNetworkTile(
                         formatRate(host.optLong("net_rx_bps")), formatRate(host.optLong("net_tx_bps")),
                         "↓${formatBytes(host.optLong("net_rx_total_bytes"))}  ↑${formatBytes(host.optLong("net_tx_total_bytes"))}",
-                        Modifier.weight(1f).fillMaxHeight()
+                        it
                     )
-                }
+                })
             }
         }
     }

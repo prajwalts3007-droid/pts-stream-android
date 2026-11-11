@@ -30,20 +30,12 @@ fun CompactDownloads(saved: List<SavedVideo>, tasks: List<DownloadTask>, onPlay:
     val ids = (saved.map { it.titleId } + tasks.filter { it.status != "complete" }.map { it.title.id }).distinct()
     fun back() { if (season != null) season = null else if (folder != null) folder = null else onBack() }
     BackHandler(folder != null || season != null) { back() }
-    if (confirm.isNotEmpty()) Dialog(onDismissRequest = { confirm = emptyList() }) {
-        Surface(shape = RoundedCornerShape(20.dp), color = Pts.card, tonalElevation = 4.dp) {
-            Column(Modifier.fillMaxWidth().padding(20.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
-                Text(if (confirm.size == 1) "Delete download?" else "Delete ${confirm.size} downloads?", style = MaterialTheme.typography.titleLarge, color = Pts.text)
-                Text(if (confirm.size == 1) confirm.single().label else metadata[confirm.first().titleId]?.title.orEmpty(), style = MaterialTheme.typography.bodyMedium, color = Pts.muted)
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                    OutlinedButton({ confirm = emptyList() }, Modifier.weight(1f)) { Text("Cancel") }
-                    Button({ val snapshot = confirm; confirm = emptyList(); snapshot.forEach(onDelete) }, Modifier.weight(1f), colors = ButtonDefaults.buttonColors(containerColor = Pts.danger, contentColor = Pts.onAccent)) { Text("Delete") }
-                }
-            }
-        }
-    }
+    if (confirm.isNotEmpty()) PtsConfirmDialog(if (confirm.size == 1) "Delete download?" else "Delete ${confirm.size} downloads?",
+        if (confirm.size == 1) confirm.single().label else metadata[confirm.first().titleId]?.title.orEmpty(), "Delete", destructive = true,
+        onConfirm = { val snapshot = confirm; confirm = emptyList(); snapshot.forEach(onDelete) }, onDismiss = { confirm = emptyList() })
     val selectedTitle = metadata[folder]
-    LazyColumn(contentPadding = PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+    val motion = ptsMotionEnabled()
+    LazyColumn(Modifier.fillMaxSize().ptsPageMotion("$folder/$season"), contentPadding = PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         item {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 PtsIconAction(PtsIcons.Back, "Back", { back() })
@@ -58,7 +50,7 @@ fun CompactDownloads(saved: List<SavedVideo>, tasks: List<DownloadTask>, onPlay:
             val pending = tasks.filter { it.title.id == id && it.status != "complete" }
             val title = metadata[id]
             val series = title?.kind == "series" || videos.any { it.season > 0 }
-            PtsCard(Modifier.fillMaxWidth(), padding = 10.dp, onClick = if (series) ({ folder = id }) else null) {
+            PtsCard(Modifier.fillMaxWidth().animateItem(fadeInSpec = if (motion) androidx.compose.animation.core.tween(160) else null, placementSpec = if (motion) androidx.compose.animation.core.tween(220) else null, fadeOutSpec = if (motion) androidx.compose.animation.core.tween(100) else null), padding = 10.dp, onClick = if (series) ({ folder = id }) else null) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     DownloadPoster(videos.firstOrNull()?.poster ?: title?.poster, imageLoader)
                     Column(Modifier.weight(1f).padding(horizontal = 12.dp), verticalArrangement = Arrangement.spacedBy(5.dp)) {

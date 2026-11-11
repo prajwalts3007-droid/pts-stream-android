@@ -46,6 +46,7 @@ fun NativeFilesScreen(
     var menu by remember(device, path) { mutableStateOf<JSONObject?>(null) }
     var pending by remember { mutableStateOf<FileCommand?>(null) }
     var name by remember { mutableStateOf("") }
+    val motion = ptsMotionEnabled()
     fun command(action: String, names: List<String> = emptyList()) = FileCommand(action, device, path, names)
     fun request(c: FileCommand) {
         if (!busy) {
@@ -119,7 +120,7 @@ fun NativeFilesScreen(
             val isDir = entry.optBoolean("is_dir")
             val shape = RoundedCornerShape(topStart = if (index == 0) 14.dp else 0.dp, topEnd = if (index == 0) 14.dp else 0.dp,
                 bottomStart = if (index == entries.lastIndex) 14.dp else 0.dp, bottomEnd = if (index == entries.lastIndex) 14.dp else 0.dp)
-            Box(Modifier.fillMaxWidth().testTag("file-row-$filename").background(Pts.card, shape).border(1.dp, if (filename in selected) Pts.accent else Pts.line, shape).clickable {
+            Box(Modifier.fillMaxWidth().animateItem(fadeInSpec = if (motion) androidx.compose.animation.core.tween(160) else null, placementSpec = if (motion) androidx.compose.animation.core.tween(220) else null, fadeOutSpec = if (motion) androidx.compose.animation.core.tween(100) else null).testTag("file-row-$filename").background(Pts.card, shape).border(1.dp, if (filename in selected) Pts.accent else Pts.line, shape).clickable {
                 if (selecting) selected = if (filename in selected) selected - filename else selected + filename
                 else if (isDir) onPath(filePath(path, filename)) else menu = entry
             }.padding(10.dp)) {
@@ -163,15 +164,13 @@ fun FileEditorDialog(editor: FileEditor, busy: Boolean, onSave: (String) -> Unit
     if (discard) PtsConfirmDialog("Discard edits?", "Your unsaved changes will be lost.", "Discard", destructive = true,
         onConfirm = onClose, onDismiss = { discard = false })
     Dialog(onDismissRequest = { if (!busy) close() }) {
-        PtsCard(Modifier.fillMaxWidth().heightIn(max = 620.dp).verticalScroll(rememberScrollState()), padding = 16.dp) {
+        PtsCard(Modifier.fillMaxWidth().heightIn(max = 620.dp).ptsPageMotion(editor.path).verticalScroll(rememberScrollState()), padding = 16.dp) {
             Text(editor.path.substringAfterLast('/'), style = MaterialTheme.typography.titleLarge, color = Pts.text)
             Text("${editor.device.uppercase()} · UTF-8 text · 1 MiB maximum", style = MaterialTheme.typography.bodySmall, color = Pts.muted)
             OutlinedTextField(content, { content = it }, modifier = Modifier.fillMaxWidth().height(300.dp),
                 textStyle = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace), enabled = !busy)
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                PtsSecondaryButton("Cancel", Modifier.weight(1f), enabled = !busy) { close() }
-                PtsPrimaryButton("Save", Modifier.weight(1f), enabled = !busy && content.toByteArray(Charsets.UTF_8).size <= 1024 * 1024) { focus.clearFocus(); keyboard?.hide(); onSave(content) }
-            }
+            PtsButtonPair(first = { PtsSecondaryButton("Cancel", it, enabled = !busy) { close() } },
+                second = { PtsPrimaryButton("Save", it, enabled = !busy && content.toByteArray(Charsets.UTF_8).size <= 1024 * 1024) { focus.clearFocus(); keyboard?.hide(); onSave(content) } })
         }
     }
 }

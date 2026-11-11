@@ -116,7 +116,7 @@ fun PlayerOptions(appearance: PlayerAppearance, onAppearance: (PlayerAppearance)
                         Text(page.ifBlank { "Player options" }, Modifier.weight(1f), color = Color.White, style = MaterialTheme.typography.titleLarge)
                         CinemaIcon(PtsIcons.Close, "Close player menu", onClick = onClose)
                     }
-                    Column(Modifier.weight(1f).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Column(Modifier.weight(1f).ptsPageMotion(page).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                         when (page) {
                             "Speed" -> listOf(.5f, .75f, 1f, 1.25f, 1.5f, 1.75f, 2f).forEach { rate ->
                                 PlayerMenuRow(PtsIcons.Speed, "${rate}×", if (speed == rate) "Selected" else "") { onSpeed(rate) }
@@ -184,16 +184,18 @@ fun PlayerMenuRow(icon: ImageVector, title: String, value: String = "", action: 
     Row(Modifier.fillMaxWidth().heightIn(min = 56.dp).clickable(onClick = action).padding(horizontal = 8.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
         Icon(icon, null, Modifier.size(26.dp), tint = Color.White)
         Text(title, Modifier.weight(1f).padding(horizontal = 12.dp), color = Color.White, style = MaterialTheme.typography.bodyMedium)
-        if (value.isNotEmpty()) Text(value, color = Pts.accent, style = MaterialTheme.typography.labelMedium)
+        if (value.isNotEmpty()) Text(value, Modifier.widthIn(max = 110.dp), maxLines = 2, overflow = TextOverflow.Ellipsis, color = Pts.accent, style = MaterialTheme.typography.labelMedium)
     }
 }
 
 @Composable
 private fun TimingControl(label: String, value: Int, limit: Int, onChange: (Int) -> Unit) {
-    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-        Text(label, Modifier.weight(1f), color = Color.White)
+    Column(Modifier.fillMaxWidth()) {
+        Text(label, color = Color.White)
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.Center) {
         TextButton({ onChange((value - 100).coerceAtLeast(-limit)) }, Modifier.semantics { contentDescription = "Decrease $label" }) { Text("−") }
         Text("${if (value > 0) "+" else ""}${value}ms", color = Pts.accent)
         TextButton({ onChange((value + 100).coerceAtMost(limit)) }, Modifier.semantics { contentDescription = "Increase $label" }) { Text("+") }
+        }
     }
 }
