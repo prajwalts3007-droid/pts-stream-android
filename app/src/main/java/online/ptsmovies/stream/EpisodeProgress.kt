@@ -4,6 +4,17 @@ import android.content.Context
 import org.json.JSONArray
 import org.json.JSONObject
 
+fun mergeEpisodeRecords(current: List<JSONObject>, sent: List<JSONObject>, remote: List<JSONObject>): List<JSONObject> {
+    fun key(o: JSONObject) = "${o.optLong("title_id")}_${o.optLong("episode_id")}"
+    val merged = remote.associateBy(::key).toMutableMap()
+    current.forEach { local ->
+        val acknowledged = sent.any { it.optString("event_id") == local.optString("event_id") }
+        if (local.optBoolean("pending") && !acknowledged) merged[key(local)] = local
+        else if (!acknowledged && key(local) !in merged) merged[key(local)] = local
+    }
+    return merged.values.toList()
+}
+
 /** Owner-scoped, offline-first episode records. Separate from legacy title resume. */
 class EpisodeProgress(private val context: Context, val owner: Long) {
     private val prefs = context.getSharedPreferences("episode_progress_$owner", Context.MODE_PRIVATE)
@@ -41,16 +52,11 @@ class EpisodeProgress(private val context: Context, val owner: Long) {
             val remote = (0 until array.length()).map { array.getJSONObject(it) }
             synchronized(lock) {
                 val current = entries()
-                val merged = remote.associateBy(::key).toMutableMap()
-                current.forEach { local ->
-                    val wasSent = pending.any { it.optString("event_id") == local.optString("event_id") }
-                    if (local.optBoolean("pending") && !wasSent) merged[key(local)] = local
-                    else if (!wasSent && key(local) !in merged) merged[key(local)] = local
-                }
+                val merged = mergeEpisodeRecords(current, pending, remote)
                 val server = response.optLong("server_time")
-                prefs.edit().putString("records", JSONArray(merged.values.toList()).toString())
+                prefs.edit().putString("records", JSONArray(merged).toString())
                     .putLong("clock_offset", if (server > 0) server - System.currentTimeMillis() else prefs.getLong("clock_offset",0))
-                    .putString("status", if (merged.values.any { it.optBoolean("pending") }) "More changes waiting to sync" else "Episode progress synced").commit()
+                    .putString("status", if (merged.any { it.optBoolean("pending") }) "More changes waiting to sync" else "Episode progress synced").commit()
             }
         } catch (e: kotlinx.coroutines.CancellationException) { throw e }
         catch (_: Exception) { prefs.edit().putString("status", "Offline or sync unavailable · changes kept on this device").apply() }

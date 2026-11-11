@@ -8,7 +8,7 @@ class LibraryFeaturesTest {
     private val first = Episode(101,1,1,"First",100.0,"mp4")
     private val second = first.copy(id=102,episode=2)
     private val third = first.copy(id=103,season=2,episode=1)
-    private val series = Title(100,"series","Series",2025,"","Description",listOf("Drama"),listOf(first,second,third),"hevc","mp4",listOf("hi","en"))
+    private val series = Title(100,"series","Series",2025,"","Description",listOf("Drama"),listOf(first,second,third),"hevc","mp4",listOf("en","hi"))
     private val movie = series.copy(id=200,kind="movie",title="Movie",year=2026,episodes=emptyList(),languages=listOf("ta"))
 
     @Test fun languageParsingUsesTrackMetadataWithoutInventingMissingLanguages() {
@@ -52,5 +52,18 @@ class LibraryFeaturesTest {
         for (bytes in listOf(byteArrayOf(0,1,2),ByteArray(MAX_SUBTITLE_BYTES+1),"Not a subtitle".toByteArray())) {
             try { validateSubtitle(bytes); fail("Invalid subtitles accepted") } catch (_: IllegalArgumentException) { }
         }
+    }
+    @Test fun syncAcknowledgesSentEditAndKeepsConcurrentLocalChange() {
+        val sent=JSONObject("""{"title_id":100,"episode_id":101,"event_id":"first-event","pending":true,"completed":false}""")
+        val newer=JSONObject(sent.toString()).put("event_id","second-event").put("completed",true)
+        val remote=JSONObject(sent.toString()).put("pending",false)
+        val merged=mergeEpisodeRecords(listOf(newer),listOf(sent),listOf(remote))
+        assertEquals("second-event",merged.single().getString("event_id"));assertTrue(merged.single().getBoolean("pending"))
+    }
+    @Test fun staleOfflineEditCannotUndoAcknowledgedNewerRemoteCompletion() {
+        val stale=JSONObject("""{"title_id":100,"episode_id":101,"event_id":"first-event","pending":true,"completed":false}""")
+        val remote=JSONObject(stale.toString()).put("event_id","remote-newer").put("pending",false).put("completed",true)
+        val merged=mergeEpisodeRecords(listOf(stale),listOf(stale),listOf(remote))
+        assertTrue(merged.single().getBoolean("completed"));assertFalse(merged.single().getBoolean("pending"))
     }
 }

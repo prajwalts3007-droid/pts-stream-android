@@ -213,7 +213,8 @@ class MainActivity : ComponentActivity() {
                 require(target.first == account?.optLong("id")) { "Account changed; choose the subtitle again" }
                 withContext(Dispatchers.IO) { LocalSubtitles(this@MainActivity, target.first).save(target.second, target.third, bytes) }
                 subtitleRevision++; toast("Subtitles imported for this video", true)
-            } catch (e: Exception) { toast(e.message ?: "Could not import subtitles") }
+            } catch (e: CancellationException) { throw e }
+            catch (e: Exception) { toast(e.message ?: "Could not import subtitles") }
         }
     }
 
@@ -1017,6 +1018,7 @@ class MainActivity : ComponentActivity() {
         val source = saved?.file?.toURI()?.toString() ?: api.streamUrl(title, ep, fallback)
         val externalSubtitle = remember(title.id, ep?.id, subtitleRevision) { LocalSubtitles(context, playbackOwner ?: 0).get(title.id, ep?.id ?: 0) }
         val mediaItem = remember(source, externalSubtitle?.path, subtitleRevision) { playbackItem(source, externalSubtitle) }
+        var appliedSubtitleRevision by remember { mutableIntStateOf(subtitleRevision) }
         val exo = remember {
             val dataSource = DefaultDataSource.Factory(context, OkHttpDataSource.Factory(TrackedCallFactory(api.http, telemetry)).setUserAgent("PTS-Library-Android"))
             if (saved != null) dataSource.setTransferListener(object : androidx.media3.datasource.TransferListener {
@@ -1035,7 +1037,7 @@ class MainActivity : ComponentActivity() {
                 setHandleAudioBecomingNoisy(true)
                 trackSelectionParameters = trackSelectionParameters.buildUpon()
                     .setPreferredAudioLanguage(playbackPrefs.optString("audio_lang").ifBlank { null })
-                    .setPreferredTextLanguage(playbackPrefs.optString("subtitle_lang").ifBlank { null })
+                    .setPreferredTextLanguage(if (externalSubtitle != null) "und" else playbackPrefs.optString("subtitle_lang").ifBlank { null })
                     .setTrackTypeDisabled(androidx.media3.common.C.TRACK_TYPE_TEXT, externalSubtitle == null && playbackPrefs.optString("subtitle_lang").isBlank()).build()
                 if (resumeAt > 0) seekTo(resumeAt)
                 setPlaybackSpeed(speed)
@@ -1104,11 +1106,12 @@ class MainActivity : ComponentActivity() {
             }
         }
         LaunchedEffect(mediaItem, subtitleRevision) {
-            if (exo.currentMediaItem != mediaItem) {
+            if (exo.currentMediaItem != mediaItem || appliedSubtitleRevision != subtitleRevision) {
                 val keepPlaying = desiredPlay
-                val keepPosition = exo.currentPosition.coerceAtLeast(resumeAt.coerceAtLeast(0))
+                val keepPosition = if (firstFrame) exo.currentPosition.coerceAtLeast(0) else exo.currentPosition.coerceAtLeast(resumeAt.coerceAtLeast(0))
                 exo.setMediaItem(mediaItem, keepPosition); firstFrame = false; error = ""
-                if (externalSubtitle != null) exo.trackSelectionParameters = exo.trackSelectionParameters.buildUpon().setTrackTypeDisabled(androidx.media3.common.C.TRACK_TYPE_TEXT, false).build()
+                appliedSubtitleRevision = subtitleRevision
+                if (externalSubtitle != null) exo.trackSelectionParameters = exo.trackSelectionParameters.buildUpon().setPreferredTextLanguage("und").setTrackTypeDisabled(androidx.media3.common.C.TRACK_TYPE_TEXT, false).build()
                 exo.prepare(); exo.playWhenReady = keepPlaying
             }
         }

@@ -785,14 +785,14 @@ class AppFlowTest {
         assertTrue(adminWrites.isEmpty()); capture("power-aligned-real-page")
     }
 
-    @Test fun darkWatchDetailsHaveNoSynopsisBadgesOrMetadataEditor() {
+    @Test fun darkWatchDetailsRestoreDescriptionWithoutBadgesOrMetadataEditor() {
         launchLoggedIn(); openMovie()
-        ui.onNodeWithText("Generated test pattern and tone. No third-party media.").assertDoesNotExist()
+        ui.onNodeWithText("Generated test pattern and tone. No third-party media.").assertExists()
         ui.onNodeWithText("Episode names").assertDoesNotExist()
         ui.onNodeWithText("2026").assertDoesNotExist()
         capture("clean-black-watch-details")
         ui.onNodeWithText("Play").performClick(); waitForMovingPlayback(); pauseIfPlaying()
-        ui.onNodeWithText("Generated test pattern and tone. No third-party media.").assertDoesNotExist()
+        ui.onNodeWithText("Generated test pattern and tone. No third-party media.").assertExists()
         ui.onNodeWithTag("media-route").assertDoesNotExist()
         capture("clean-black-watch-playing")
     }

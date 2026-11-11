@@ -93,4 +93,22 @@ class CompanionTest(unittest.TestCase):
             self.assertEqual([],request('GET','/api/v1/native/progress','pts_session=fixture-2')[1]['records'])
         finally:server.shutdown();server.server_close();thread.join()
 
+    def test_long_poll_revalidates_revoked_administrator_before_delivery(self):
+        self.app.scan_jobs()
+        server=Server(('127.0.0.1',0),self.app)
+        thread=threading.Thread(target=server.serve_forever,daemon=True);thread.start()
+        result=[]
+        def poll():
+            client=http.client.HTTPConnection(*server.server_address,timeout=5)
+            client.request('GET','/api/v1/native/events?cursor=0',headers={'Cookie':'pts_session=fixture-1'})
+            response=client.getresponse();result.append(response.status);response.read();client.close()
+        polling=threading.Thread(target=poll);polling.start()
+        try:
+            time.sleep(.15)
+            with sqlite3.connect(self.production,factory=ClosingConnection) as db:db.execute("UPDATE users SET role='user' WHERE id=1")
+            with self.app.changed:self.app.changed.notify_all()
+            polling.join(3)
+            self.assertEqual([403],result)
+        finally:server.shutdown();server.server_close();thread.join();polling.join(5)
+
 if __name__ == '__main__':unittest.main()
