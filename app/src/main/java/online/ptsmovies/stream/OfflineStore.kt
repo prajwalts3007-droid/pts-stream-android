@@ -33,9 +33,7 @@ data class TransferProgress(val bytes: Long, val total: Long, val speed: Long) {
 class OfflineStore(private val context: Context, private val api: PtsApi, ownerId: Long) {
     private val prefs = context.getSharedPreferences("offline_index_$ownerId", Context.MODE_PRIVATE)
     private val root = File(context.filesDir, "media/$ownerId").apply { mkdirs() }
-    private val notifier = context.getSystemService(NotificationManager::class.java)
     private val indexLock = Any()
-    init { notifier.createNotificationChannel(NotificationChannel("downloads", "Offline downloads", NotificationManager.IMPORTANCE_LOW)) }
     private fun key(title: Title, episode: Episode?) = "${title.id}_${episode?.id ?: 0}"
 
     fun list(): List<SavedVideo> {
@@ -167,11 +165,8 @@ class OfflineStore(private val context: Context, private val api: PtsApi, ownerI
             writeIndex(list().filterNot { it.key == id } + item)
         }
         cachePoster(title)
-        try {
-            notifier.notify(id.hashCode(), NotificationCompat.Builder(context, "downloads")
-                .setSmallIcon(android.R.drawable.stat_sys_download_done).setContentTitle("PTS Library")
-                .setContentText("${item.label} ready offline").setAutoCancel(true).build())
-        } catch (_: SecurityException) { /* notification permission is optional */ }
+        // The owner-scoped DownloadService publishes completion in the same
+        // stable per-episode group as progress, never a second ungrouped alert.
         item
     }
 

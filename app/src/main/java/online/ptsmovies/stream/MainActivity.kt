@@ -144,6 +144,8 @@ class MainActivity : ComponentActivity() {
 
     private var episode by mutableStateOf<Episode?>(null)
     private var playing by mutableStateOf(false)
+    private var playbackTitle by mutableStateOf<Title?>(null)
+    private var miniPlayer by mutableStateOf(false)
     private var player: ExoPlayer? = null
     private var pipVideoView: android.view.View? = null
     private var inPip by mutableStateOf(false)
@@ -240,19 +242,20 @@ class MainActivity : ComponentActivity() {
         startAccountSync()
         setContent {
             val dark = device.theme == "dark" || (device.theme == "system" && androidx.compose.foundation.isSystemInDarkTheme())
-            val watching = playing || (dark && selected != null && mode == "Stream" && !profileOpen && !downloadsOpen && !updatesOpen)
+            val fullPlayer = playing && (!miniPlayer || inPip)
+            val watching = fullPlayer || (dark && selected != null && mode == "Stream" && !profileOpen && !downloadsOpen && !updatesOpen)
             PtsTheme(if (watching) "watch" else device.theme) {
-                val bar = if (playing) Color.Black else Pts.bg
-                val light = !playing && MaterialTheme.colorScheme.background.luminance() > .5f
+                val bar = if (fullPlayer) Color.Black else Pts.bg
+                val light = !fullPlayer && MaterialTheme.colorScheme.background.luminance() > .5f
                 SideEffect {
                     window.statusBarColor = android.graphics.Color.rgb((bar.red * 255).toInt(), (bar.green * 255).toInt(), (bar.blue * 255).toInt())
                     window.navigationBarColor = window.statusBarColor
                     if (Build.VERSION.SDK_INT >= 28) window.attributes = window.attributes.apply {
-                        layoutInDisplayCutoutMode = if (playing) android.view.WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES else android.view.WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_DEFAULT
+                        layoutInDisplayCutoutMode = if (fullPlayer) android.view.WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES else android.view.WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_DEFAULT
                     }
                     WindowCompat.getInsetsController(window, window.decorView).apply { isAppearanceLightStatusBars = light; isAppearanceLightNavigationBars = light }
                 }
-                PtsBackground(if (playing) Modifier else Modifier.windowInsetsPadding(WindowInsets.safeDrawing), decorative = !watching) {
+                PtsBackground(if (fullPlayer) Modifier else Modifier.windowInsetsPadding(WindowInsets.safeDrawing), decorative = !watching) {
                     episodeDownloadTitle?.let { title ->
                         EpisodeDownloadDialog(title, savedVideos.map { it.key }.toSet(), journal()?.completed().orEmpty(),
                             onStart = { episodes -> episodeDownloadTitle = null; try { downloads?.enqueueSeason(title, episodes); toast("Downloads queued", true) } catch (e: Exception) { toast(e.message ?: "Cannot queue downloads") } },
@@ -261,13 +264,18 @@ class MainActivity : ComponentActivity() {
                     when {
                         loading -> PtsLoading()
                         account == null -> LoginScreen(startupError, busy = false, googleEnabled = googleClientId.isNotBlank(), onGoogle = { signInGoogle(it) }) { user, pass, remember -> signIn(user, pass, remember) }
-                        playing && selected != null -> key(selected!!.id, episode?.id) {
-                            PlayerScreen(selected!!, episode, offline.find(selected!!, episode)) {
-                                playing = false; episode = null; playerFullscreen = false
-                                requestedOrientation = android.content.pm.ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
-                            }
+                        !fullPlayer -> AppShell()
+                    }
+                    // Stable sibling/key: resizing to the in-app mini-player never
+                    // removes PlayerScreen or owns another ExoPlayer instance.
+                    if (playing && playbackTitle != null && account != null) key(playbackTitle!!.id, episode?.id) {
+                        val compact = miniPlayer && !inPip
+                        val dock = !profileOpen && !updatesOpen && !downloadsOpen && nativeSettings.isBlank() && WindowInsets.ime.getBottom(LocalDensity.current) == 0
+                        val frame = if (compact) Modifier.align(Alignment.BottomCenter).padding(start = 8.dp, end = 8.dp, bottom = if (dock) 88.dp else 4.dp)
+                            .fillMaxWidth().height(80.dp).clip(androidx.compose.foundation.shape.RoundedCornerShape(14.dp)) else Modifier.fillMaxSize()
+                        Box(frame) {
+                            PlayerScreen(playbackTitle!!, episode, offline.find(playbackTitle!!, episode)) { stopPlayback() }
                         }
-                        else -> AppShell()
                     }
                 }
             }
@@ -363,12 +371,13 @@ class MainActivity : ComponentActivity() {
             val result = (journal()?.overlay(fresh) ?: fresh).let { lib -> lib.copy(titles = lib.titles.map { applyEpisodeNames(it, episodeNames.cached(it)) }) }
             if (generation != sessionGeneration || owner != account?.optLong("id")) return
             episodeProgressRevision++
-            val current = selected?.id?.takeIf { playing }
+            val current = playbackTitle?.id?.takeIf { playing }
             library = if (current != null && library?.progress?.containsKey(current) == true) result.copy(progress = result.progress + (current to library!!.progress.getValue(current))) else result
             account?.let { device.library(it.optLong("id"), library!!) }
             val repository = downloads
             scope.launch { if (repository?.owner == owner) { repository.store.hydrate(result.titles); repository.refresh() } }
             selected?.let { old -> library?.titles?.firstOrNull { it.id == old.id }?.let { selected = it } }
+            playbackTitle?.let { old -> library?.titles?.firstOrNull { it.id == old.id }?.let { playbackTitle = it } }
         } catch (e: CancellationException) { throw e }
         catch (e: Exception) {
             toast("Library unavailable: ${e.message}")
@@ -376,6 +385,7 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun signOut() {
+        val signedOutOwner = account?.optLong("id")
         stopService(Intent(this, JobAlertsService::class.java))
         sessionGeneration++
         persistNavigation()
@@ -390,8 +400,8 @@ class MainActivity : ComponentActivity() {
             catch (e: CancellationException) { throw e }
             catch (_: Exception) { /* Local cookies are cleared even if the server is unreachable. */ }
             finally {
-                account = null; library = null; selected = null; profileOpen = false; downloadsOpen = false
-                device.clearSession(); navigationRestored = false; updatesOpen = false
+                account = null; library = null; selected = null; playbackTitle = null; miniPlayer = false; playing = false; profileOpen = false; downloadsOpen = false
+                device.clearSession(); signedOutOwner?.let { DownloadNotifications.clear(this@MainActivity, it) }; navigationRestored = false; updatesOpen = false
                 queueJobs = emptyList(); queueDone = emptyList(); metrics = null; users = emptyList()
                 savedVideos = emptyList(); downloadTasks = emptyList(); downloading = ""; message = ""; startupError = ""
                 fileClipboard = null; fileEditor = null; fileStatus = ""; clearedProgress.clear()
@@ -412,7 +422,8 @@ class MainActivity : ComponentActivity() {
     private fun enterMode(next: String) {
         if (!admin() && next != "Stream") return
         mode = next
-        profileOpen = false; downloadsOpen = false; updatesOpen = false; selected = null; playing = false
+        profileOpen = false; downloadsOpen = false; updatesOpen = false; selected = null
+        if (!miniPlayer) playing = false
         persistNavigation()
     }
 
@@ -477,15 +488,18 @@ class MainActivity : ComponentActivity() {
     private fun openUpdates() { profileOpen = false; downloadsOpen = false; updatesOpen = true; NativeUpdates.get(this).check() }
 
     private fun play(title: Title, ep: Episode?) {
+        val resumeExistingPlayer = playing && playbackTitle?.id == title.id && episode?.id == ep?.id
         clearedProgress.remove(title.id)
         journal()?.begin(title.id)
         val named = applyEpisodeNames(title, episodeNames.cached(title))
         episode = named.episodes.firstOrNull { it.id == ep?.id } ?: ep
         selected = named
+        playbackTitle = named; miniPlayer = false
         downloads?.smartNext(named, episode, episodeProgress()?.completed().orEmpty())
         playing = true
         profileOpen = false; downloadsOpen = false
         restoredPosition = -1L; restoredAutoplay = true
+        if (resumeExistingPlayer) player?.play()
         persistNavigation()
     }
 
@@ -498,6 +512,24 @@ class MainActivity : ComponentActivity() {
             val owner = account?.optLong("id")
             scope.launch { if (repository?.owner == owner) { repository?.store?.hydrate(listOf(title)); repository?.refresh() } }
         }
+    }
+
+    private fun stopPlayback() {
+        playing = false; miniPlayer = false; playbackTitle = null; episode = null; playerFullscreen = false
+        requestedOrientation = android.content.pm.ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
+        persistNavigation()
+    }
+
+    private fun minimizePlayback() {
+        if (!playing || inPip) return
+        fullscreen(false)
+        miniPlayer = true; selected = null; profileOpen = false; downloadsOpen = false; updatesOpen = false; nativeSettings = ""
+        persistNavigation()
+    }
+
+    private fun expandPlayback() {
+        if (!playing) return
+        selected = playbackTitle; miniPlayer = false; persistNavigation()
     }
 
     private fun loadMetrics() {
@@ -610,12 +642,12 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun markPlayed(title: Title) {
-        val active = episode?.takeIf { selected?.id == title.id && playing }
+        val active = episode?.takeIf { playbackTitle?.id == title.id && playing }
         if (title.kind == "series" && active == null) title.episodes.forEach { episodeProgress()?.record(title.id, it.id, 0, it.duration.toLong(), true) }
         else episodeProgress()?.record(title.id, active?.id ?: 0, 0, active?.duration?.toLong() ?: 0, true)
         episodeProgressRevision++
         clearedProgress.add(title.id)
-        journal()?.markCompleted("${title.id}_${episode?.takeIf { selected?.id == title.id }?.id ?: 0}")
+        journal()?.markCompleted("${title.id}_${episode?.takeIf { playbackTitle?.id == title.id }?.id ?: 0}")
         recordProgress(title.id, episode?.id, 0, 0, clear = true)
         library = library?.let { it.copy(progress = it.progress - title.id) }
         toast("Marked as completed", true)
@@ -764,7 +796,7 @@ class MainActivity : ComponentActivity() {
 
     private fun routeBack() {
         when {
-            playing -> { playing = false; episode = null }
+            playing && !miniPlayer -> stopPlayback()
             nativeSettings.isNotBlank() -> { nativeSettings = ""; profileOpen = true }
             updatesOpen -> updatesOpen = false
             profileOpen -> profileOpen = false
@@ -903,13 +935,13 @@ class MainActivity : ComponentActivity() {
                                 val next = if (title.kind == "series") title.episodes.firstOrNull { it.id == resume?.episodeId }
                                     ?: title.episodes.minWithOrNull(compareBy({ it.season }, { it.episode })) else null
                                 play(title, next)
-                            }, { toggleWatch(it) }, onSeeAll = { streamTab = it }, onMarkPlayed = { markPlayed(it) })
+                            }, { toggleWatch(it) }, onSeeAll = { streamTab = it }, onMarkPlayed = { markPlayed(it) }, initialSort = device.sort("Home"), onSortChange = { device.sort("Home", it) })
                             "Movies" -> BrowseScreen("Movies", lib.titles.filter { it.kind == "movie" }, lib.progress, lib.watch,
-                                    browseQueries["Movies"].orEmpty(), { browseQueries["Movies"] = it }, { selected = it }, { toggleWatch(it) }, device.view("Movies"), { device.view("Movies", it) }, episodeProgress()?.completed().orEmpty(), savedVideos.map { it.key }.toSet())
+                                    browseQueries["Movies"].orEmpty(), { browseQueries["Movies"] = it }, { selected = it }, { toggleWatch(it) }, device.view("Movies"), { device.view("Movies", it) }, episodeProgress()?.completed().orEmpty(), savedVideos.map { it.key }.toSet(), device.sort("Movies"), { device.sort("Movies", it) })
                             "Series" -> BrowseScreen("Series", lib.titles.filter { it.kind == "series" }, lib.progress, lib.watch,
-                                    browseQueries["Series"].orEmpty(), { browseQueries["Series"] = it }, { selected = it }, { toggleWatch(it) }, device.view("Series"), { device.view("Series", it) }, episodeProgress()?.completed().orEmpty(), savedVideos.map { it.key }.toSet())
+                                    browseQueries["Series"].orEmpty(), { browseQueries["Series"] = it }, { selected = it }, { toggleWatch(it) }, device.view("Series"), { device.view("Series", it) }, episodeProgress()?.completed().orEmpty(), savedVideos.map { it.key }.toSet(), device.sort("Series"), { device.sort("Series", it) })
                             else -> BrowseScreen("Watchlist", lib.titles, lib.progress, lib.watch,
-                                    browseQueries["Watchlist"].orEmpty(), { browseQueries["Watchlist"] = it }, { selected = it }, { toggleWatch(it) }, device.view("Watchlist"), { device.view("Watchlist", it) }, episodeProgress()?.completed().orEmpty(), savedVideos.map { it.key }.toSet())
+                                    browseQueries["Watchlist"].orEmpty(), { browseQueries["Watchlist"] = it }, { selected = it }, { toggleWatch(it) }, device.view("Watchlist"), { device.view("Watchlist", it) }, episodeProgress()?.completed().orEmpty(), savedVideos.map { it.key }.toSet(), device.sort("Watchlist"), { device.sort("Watchlist", it) })
                         }
                     }
                 }
@@ -922,6 +954,7 @@ class MainActivity : ComponentActivity() {
                     else PtsErrorToast(message) { message = "" }
                 }
             }
+            if (playing && miniPlayer && !inPip) Spacer(Modifier.height(84.dp))
             if (!profileOpen && !updatesOpen && !downloadsOpen && nativeSettings.isBlank() && WindowInsets.ime.getBottom(LocalDensity.current) == 0) {
                 val pages = when (mode) {
                     "Hub" -> listOf(DockItem("Dashboard", PtsIcons.Home), DockItem("Ingest", PtsIcons.Download, "Download"), DockItem("Queue", PtsIcons.Queue), DockItem("Settings", PtsIcons.Settings))
@@ -956,6 +989,7 @@ class MainActivity : ComponentActivity() {
     @androidx.annotation.OptIn(markerClass = [androidx.media3.common.util.UnstableApi::class])
     @OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
     private fun PlayerScreen(title: Title, ep: Episode?, initialSaved: SavedVideo?, onBack: () -> Unit) {
+        val compact = miniPlayer && !inPip
         val playbackOwner = remember { account?.optLong("id") }
         val saved = remember(title.id, ep?.id) { initialSaved }
         val context = LocalContext.current
@@ -998,8 +1032,8 @@ class MainActivity : ComponentActivity() {
             nextEpisode(title, ep, savedVideos.map { it.key }.toSet(), appearance.nextDownloadedOnly)
         }
         fun touchControls() { controls = true; interaction++ }
-        LaunchedEffect(inPip) {
-            if (inPip) {
+        LaunchedEffect(inPip, compact) {
+            if (inPip || compact) {
                 controls = false; showSettings = false; showTracks = false; showEpisodes = false; showSleep = false
                 seekPreview = null; touching = false; gestureFeedback = ""
             } else touchControls()
@@ -1044,7 +1078,7 @@ class MainActivity : ComponentActivity() {
             }
         }
         val nativeView = remember(exo) { arrayOfNulls<PlayerView>(1) }
-        BackHandler { if (locked) locked = false else leavePlayer() }
+        BackHandler(enabled = !compact) { if (locked) locked = false else leavePlayer() }
         DisposableEffect(exo) {
             player = exo
             val originalBrightness = window.attributes.screenBrightness
@@ -1166,26 +1200,27 @@ class MainActivity : ComponentActivity() {
             }
         }
         BoxWithConstraints(Modifier.fillMaxSize().background(Color.Black)) {
-          val landscape = maxWidth > maxHeight || inPip || playerFullscreen
+          val landscape = compact || maxWidth > maxHeight || inPip || playerFullscreen
           val portraitHeight = (maxWidth * .58f).coerceIn(300.dp, 560.dp).coerceAtMost(maxHeight * .65f)
-          DisposableEffect(landscape) {
+          DisposableEffect(landscape, compact) {
               val bars = WindowCompat.getInsetsController(window, window.decorView)
-              if (landscape && !inPip) {
+              if (landscape && !inPip && !compact) {
                   bars.systemBarsBehavior = androidx.core.view.WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
                   bars.hide(androidx.core.view.WindowInsetsCompat.Type.systemBars())
               }
               onDispose { bars.show(androidx.core.view.WindowInsetsCompat.Type.systemBars()) }
           }
           Column(Modifier.fillMaxSize()) {
-              val frame = if (landscape) Modifier.weight(1f).fillMaxWidth() else Modifier.fillMaxWidth().height(portraitHeight)
+              val frame = if (compact) Modifier.width(if (maxWidth < 340.dp) 88.dp else 108.dp).fillMaxHeight() else if (landscape) Modifier.weight(1f).fillMaxWidth() else Modifier.fillMaxWidth().height(portraitHeight)
               PtsTheme("watch") { Box(frame.testTag("player-surface").clipToBounds().background(Color.Black)) {
-                  Box(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.displayCutout).clipToBounds()) {
+                  Box(Modifier.fillMaxSize().then(if (compact) Modifier else Modifier.windowInsetsPadding(WindowInsets.displayCutout)).clipToBounds()) {
                   key(exo) { AndroidView(factory = { ctx -> (android.view.LayoutInflater.from(ctx).inflate(R.layout.native_player, FrameLayout(ctx), false) as PlayerView).apply {
                      useController = false
                      keepScreenOn = true
                      setEnableComposeSurfaceSyncWorkaround(true)
                      setShutterBackgroundColor(android.graphics.Color.TRANSPARENT)
-                     layoutParams = FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
+                      layoutParams = FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
+                      addOnLayoutChangeListener { _, _, _, _, _, _, _, _, _ -> updatePipParameters() }
                  } }, onRelease = { view -> view.player = null }, update = { view ->
                       nativeView[0] = view
                       pipVideoView = view.videoSurfaceView ?: view
@@ -1207,7 +1242,7 @@ class MainActivity : ComponentActivity() {
                          // gets its own view; the old surface is explicitly detached on release.
                           view.doOnLayout { if (view.player === exo) { exo.prepare(); exo.playWhenReady = startPlaying; updatePipParameters() } }
                      }
-                   }, modifier = Modifier.fillMaxSize().graphicsLayer { scaleX = zoom; scaleY = zoom }) }
+                   }, modifier = Modifier.fillMaxSize().graphicsLayer { scaleX = if (compact) 1f else zoom; scaleY = if (compact) 1f else zoom }) }
                    }
                    PlayerGestures(this@MainActivity, exo.currentPosition, duration,
                         onTap = { controls = !controls; interaction++ },
@@ -1215,26 +1250,26 @@ class MainActivity : ComponentActivity() {
                      onSeek = { exo.seekTo(it); touchControls() },
                       onFeedback = { gestureFeedback = it; touchControls() }, zoom = zoom,
                       onZoom = { value -> zoom = value; gestureFeedback = "Zoom ${"%.2f".format(Locale.US, value)}×"; touchControls() },
-                        onZoomEnd = { if (abs(zoom - 1f) <= .04f) zoom = 1f; if (playbackPrefs.optString("zoom_mode") == "remember") playerPreference("zoom", zoom) }, enabled = !inPip && !locked,
+                        onZoomEnd = { if (abs(zoom - 1f) <= .04f) zoom = 1f; if (playbackPrefs.optString("zoom_mode") == "remember") playerPreference("zoom", zoom) }, enabled = !inPip && !locked && !compact,
                         onTouch = { touching = it; if (!it) interaction++ }) {
-                  if (!inPip) androidx.compose.animation.AnimatedVisibility(visible = controls && !locked, enter = fadeIn(), exit = fadeOut(), modifier = Modifier.fillMaxSize()) {
+                  if (!inPip && !compact) androidx.compose.animation.AnimatedVisibility(visible = controls && !locked, enter = fadeIn(), exit = fadeOut(), modifier = Modifier.fillMaxSize()) {
                        Box(Modifier.fillMaxSize().windowInsetsPadding(if (landscape) WindowInsets.safeDrawing else WindowInsets.statusBars.union(WindowInsets.displayCutout))) {
                           CinemaControls(ep?.let { "${title.title} · S${it.season}E${it.episode}" } ?: title.title,
                                desiredPlay && !ended, seekPreview ?: position, duration, buffered, playerFullscreen,
                                onBack = { leavePlayer() }, onToggle = { if (exo.playWhenReady && !ended) exo.pause() else { if (ended) exo.seekTo(0); exo.play() }; touchControls() },
                               onSeek = { exo.seekTo(it); touchControls() }, onPreview = { seekPreview = it; touchControls() },
                               onOptions = { optionsPage = ""; showSettings = true; touchControls() }, onTracks = { showTracks = true; touchControls() },
-                               onPip = { requestPip(true) }, onFullscreen = { fullscreen(!playerFullscreen); touchControls() }, buffering = buffering || !firstFrame)
+                               onPip = { requestPip(true) }, onFullscreen = { fullscreen(!playerFullscreen); touchControls() }, buffering = buffering || !firstFrame, onMinimize = { minimizePlayback() })
                       }
                  }
-                  if (locked && !inPip) Box(Modifier.align(Alignment.TopEnd).padding(12.dp).background(Color.Black.copy(alpha = .7f), androidx.compose.foundation.shape.CircleShape)) {
+                  if (locked && !inPip && !compact) Box(Modifier.align(Alignment.TopEnd).padding(12.dp).background(Color.Black.copy(alpha = .7f), androidx.compose.foundation.shape.CircleShape)) {
                        CinemaIcon(PtsIcons.Lock, "Unlock player", onClick = { locked = false; touchControls() })
                   }
-                  if (gestureFeedback.isNotBlank() && !inPip) Text(gestureFeedback,
+                  if (gestureFeedback.isNotBlank() && !inPip && !compact) Text(gestureFeedback,
                      Modifier.align(Alignment.Center).background(Color.Black.copy(alpha = .9f), RowShape).padding(horizontal = 16.dp, vertical = 10.dp).testTag("gesture-feedback"),
                      style = MaterialTheme.typography.labelLarge, color = Color.White)
                 if ((buffering || !firstFrame) && error.isBlank()) CircularProgressIndicator(Modifier.align(Alignment.Center).size(32.dp), color = Pts.accent)
-                if (error.isNotBlank() && !inPip) Column(Modifier.align(Alignment.Center).fillMaxWidth().background(Color.Black.copy(alpha = .9f)).padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                if (error.isNotBlank() && !inPip && !compact) Column(Modifier.align(Alignment.Center).fillMaxWidth().background(Color.Black.copy(alpha = .9f)).padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Text("Playback interrupted", style = MaterialTheme.typography.titleMedium, color = Color.White)
                     Text(error, style = MaterialTheme.typography.bodySmall, color = Pts.muted)
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -1242,7 +1277,7 @@ class MainActivity : ComponentActivity() {
                         PtsSecondaryButton("Audio / CC", Modifier.weight(1f)) { showTracks = true }
                     }
                 }
-                 if (landscape && !inPip && ended && nextEpisode != null && !cancelNext) Box(Modifier.align(Alignment.TopEnd).padding(12.dp).widthIn(max = 300.dp)) {
+                 if (landscape && !inPip && !compact && ended && nextEpisode != null && !cancelNext) Box(Modifier.align(Alignment.TopEnd).padding(12.dp).widthIn(max = 300.dp)) {
                     UpNextCard(nextEpisode, if (autoplay) nextCountdown else null, { selectEpisode(nextEpisode) }, { cancelNext = true })
                  }
                  }
@@ -1267,7 +1302,10 @@ class MainActivity : ComponentActivity() {
              }
             }
           }
-          if (message.isNotBlank() && !inPip) Box(Modifier.align(Alignment.BottomCenter).padding(16.dp)) {
+          if (compact) MiniPlayerControls(title.title, if (error.isNotBlank()) "Playback interrupted · expand" else ep?.let { "S${it.season} E${it.episode}" } ?: if (ended) "Finished" else "Now playing",
+              desiredPlay && !ended, if (duration > 0) position.toFloat() / duration else 0f,
+              onExpand = { expandPlayback() }, onToggle = { if (exo.playWhenReady && !ended) exo.pause() else { if (ended) exo.seekTo(0); exo.play() } }, onClose = { stopPlayback() })
+          if (message.isNotBlank() && !inPip && !compact) Box(Modifier.align(Alignment.BottomCenter).padding(16.dp)) {
               if (messageOk) PtsOkToast(message) { message = "" }
               else PtsErrorToast(message) { message = "" }
           }
@@ -1429,11 +1467,13 @@ class MainActivity : ComponentActivity() {
             filesPath = nav.optString("path"); filesDevice = nav.optString("device", "vps")
             selected = library?.titles?.firstOrNull { it.id == nav.optLong("title") }
                 ?: nav.optJSONObject("selected")?.let { runCatching { parseTitle(it) }.getOrNull() }
-            episode = selected?.episodes?.firstOrNull { it.id == nav.optLong("episode") }
+            playbackTitle = nav.optJSONObject("playback_title")?.let { runCatching { parseTitle(it) }.getOrNull() } ?: selected
+            miniPlayer = nav.optBoolean("mini_player")
+            episode = playbackTitle?.episodes?.firstOrNull { it.id == nav.optLong("episode") }
             downloadsOpen = nav.optBoolean("downloads")
             if (intent?.getBooleanExtra("open_downloads", false) == true) { downloadsOpen = false; profileOpen = true }
             profileOpen = nav.optBoolean("profile"); updatesOpen = nav.optBoolean("updates")
-            playing = !downloadsOpen && !updatesOpen && !profileOpen && nav.optBoolean("playing") && selected != null
+            playing = nav.optBoolean("playing") && playbackTitle != null && (miniPlayer || (!downloadsOpen && !updatesOpen && !profileOpen))
             restoredPosition = nav.optLong("position", -1L); restoredAutoplay = nav.optBoolean("autoplay", true)
             nativeSettings = nav.optString("native_settings")
             sleepDeadline = nav.optLong("sleep_deadline"); sleepAtEnd = nav.optBoolean("sleep_at_end")
@@ -1454,6 +1494,7 @@ class MainActivity : ComponentActivity() {
         device.navigation(JSONObject().put("owner", user.optLong("id")).put("mode", mode).put("hub", hubTab)
             .put("files", filesTab).put("stream", streamTab).put("path", filesPath).put("device", filesDevice)
             .put("title", selected?.id ?: 0).put("selected", selected?.toJson()).put("episode", episode?.id ?: 0)
+            .put("playback_title", if (playing) playbackTitle?.toJson() else null).put("mini_player", miniPlayer && playing)
             .put("downloads", downloadsOpen).put("profile", profileOpen).put("updates", updatesOpen)
             .put("playing", playing).put("position", pos).put("autoplay", resumeAfterBackground || exo?.isPlaying == true)
             .put("native_settings", nativeSettings).put("sleep_deadline", sleepDeadline).put("sleep_at_end", sleepAtEnd)
@@ -1463,8 +1504,8 @@ class MainActivity : ComponentActivity() {
 
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent); setIntent(intent)
-        if (intent.getBooleanExtra("open_downloads", false)) { playing = false; mode = "Stream"; downloadsOpen = false; profileOpen = true; updatesOpen = false; streamTab = "Home" }
-        if (intent.getBooleanExtra("open_jobs", false) && admin()) { playing = false; mode = "Hub"; hubTab = "Queue"; profileOpen = false; downloadsOpen = false; updatesOpen = false; nativeSettings = "" }
+        if (intent.getBooleanExtra("open_downloads", false)) { if (playing) { miniPlayer = true; fullscreen(false) }; mode = "Stream"; downloadsOpen = false; profileOpen = true; updatesOpen = false; streamTab = "Home" }
+        if (intent.getBooleanExtra("open_jobs", false) && admin()) { if (playing) { miniPlayer = true; fullscreen(false) }; mode = "Hub"; hubTab = "Queue"; profileOpen = false; downloadsOpen = false; updatesOpen = false; nativeSettings = "" }
     }
 
     override fun onStart() {
@@ -1496,7 +1537,7 @@ class MainActivity : ComponentActivity() {
     }
 
     override fun onStop() {
-        val t = selected
+        val t = playbackTitle
         if (playing && t != null && t.id !in clearedProgress && player?.duration?.let { it > 0 } == true)
             recordProgress(t.id, episode?.id, player!!.currentPosition / 1000, player!!.duration / 1000)
         if (!isInPictureInPictureMode) {

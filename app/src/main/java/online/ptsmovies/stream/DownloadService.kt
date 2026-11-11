@@ -13,6 +13,7 @@ import androidx.core.content.ContextCompat
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.asStateFlow
 import okhttp3.Call
 import org.json.JSONArray
@@ -113,7 +114,7 @@ class DownloadRepository internal constructor(private val context: Context, priv
         reconcile()
     }
     fun detachService(): Unit = synchronized(lock) { statusCallback = null; pauseAll() }
-    fun remove(saved: SavedVideo) { store.remove(saved); update { s -> s.copy(saved = store.list(), tasks = s.tasks.filterNot { it.key == saved.key }) } }
+    fun remove(saved: SavedVideo) { store.remove(saved); DownloadNotifications.remove(context, owner, saved.key); update { s -> s.copy(saved = store.list(), tasks = s.tasks.filterNot { it.key == saved.key }) } }
     fun refresh() { update { it.copy(saved = store.list()) } }
     fun enqueueSeason(title: Title, episodes: List<Episode>) { episodes.filter { ep -> store.find(title, ep) == null }.forEach { enqueue(title, it) } }
     fun smartNext(title: Title, current: Episode?, completed: Set<String>) {
@@ -187,6 +188,10 @@ object DeviceDownloads {
 
 class DownloadService : Service() {
     private var repository: DownloadRepository? = null
+    private var notifications: DownloadNotifications? = null
+    private var observer: Job? = null
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
+    private var lastStartId = 0
     private val manager get() = getSystemService(NotificationManager::class.java)
     private val network = object : android.net.ConnectivityManager.NetworkCallback() {
         override fun onAvailable(network: android.net.Network) { repository?.reconcile() }
@@ -196,34 +201,48 @@ class DownloadService : Service() {
     override fun onCreate() {
         super.onCreate()
         manager.createNotificationChannel(NotificationChannel("native-transfers", "Device downloads", NotificationManager.IMPORTANCE_LOW))
+        manager.activeNotifications.filter { it.notification.channelId == "downloads" }.forEach { manager.cancel(it.tag, it.id) }
         getSystemService(android.net.ConnectivityManager::class.java).registerDefaultNetworkCallback(network)
     }
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        startForeground(3001, notification(null))
         val owner = intent?.getLongExtra("owner", 0) ?: 0
+        val display = notifications ?: DownloadNotifications(this, owner)
+        startForeground(DownloadNotifications.SUMMARY_ID, display.summary(repository?.state?.value?.tasks.orEmpty()))
         // Do not continue private transfers for an account that has signed out.
-        if (owner <= 0 || DeviceState(this).account()?.optLong("id") != owner) { stopSelf(startId); return START_NOT_STICKY }
-        if (repository?.owner != null && repository?.owner != owner) repository?.pauseAll()
-        repository = DeviceDownloads.forOwner(this, ApiProvider.create(), owner)
-        repository!!.runNext { task ->
-            if (task == null) { stopForeground(STOP_FOREGROUND_REMOVE); stopSelf(startId) }
-            else try { manager.notify(3001, notification(task)) } catch (_: SecurityException) { /* The foreground service still owns the transfer when notification visibility is denied. */ }
+        if (owner <= 0 || DeviceState(this).account()?.optLong("id") != owner) { if (owner > 0) DownloadNotifications.clear(this, owner); stopSelf(startId); return START_NOT_STICKY }
+        lastStartId = startId
+        if (repository?.owner != null && repository?.owner != owner) { observer?.cancel(); repository?.detachService(); DownloadNotifications.clear(this, repository!!.owner); notifications = null }
+        val repo = DeviceDownloads.forOwner(this, ApiProvider.create(), owner)
+        if (repository !== repo || observer?.isActive != true) {
+            repository = repo
+            DownloadNotifications.clear(this, owner)
+            notifications = DownloadNotifications(this, owner).also { it.seed(repo.state.value.tasks) }
+            startForeground(DownloadNotifications.SUMMARY_ID, notifications!!.summary(repo.state.value.tasks))
+            repo.runNext { /* Full snapshots, not whichever episode reported last, drive notifications. */ }
+            observer = scope.launch {
+                repo.state.collect { snapshot ->
+                    if (DeviceState(this@DownloadService).account()?.optLong("id") != owner) {
+                        DownloadNotifications.clear(this@DownloadService, owner); stopSelf(); return@collect
+                    }
+                    try { notifications?.publish(snapshot) } catch (_: SecurityException) { /* Android may hide notifications when permission is revoked; transfer remains owned. */ }
+                    if (snapshot.tasks.none { transferIsActive(it.status) } && repo.state.value.tasks.none { transferIsActive(it.status) }) {
+                        stopForeground(if (notifications?.hasChildren == true) STOP_FOREGROUND_DETACH else STOP_FOREGROUND_REMOVE); stopSelf(lastStartId)
+                    }
+                }
+            }
         }
+        val key = intent?.getStringExtra("key").orEmpty()
+        when (intent?.action) { "PAUSE" -> repo.pause(key); "RESUME" -> repo.resume(key); "CANCEL" -> repo.cancel(key) }
+        repo.reconcile()
         return START_NOT_STICKY
-    }
-    private fun notification(task: DownloadTask?): Notification {
-        val intent = Intent(this, MainActivity::class.java).putExtra("open_downloads", true)
-            .addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP)
-        val open = PendingIntent.getActivity(this, 3100, intent, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
-        return NotificationCompat.Builder(this, "native-transfers").setSmallIcon(android.R.drawable.stat_sys_download)
-            .setContentTitle(task?.label ?: "PTS Library downloads")
-            .setContentText(task?.let { when (it.status) { "waiting_wifi" -> "Waiting for Wi-Fi"; "preparing" -> "Preparing MP4 on Pi"; else -> "${it.progress.percent}% · ${formatBytes(it.speed)}/s" } } ?: "Preparing device transfer")
-            .setProgress(100, task?.progress?.percent ?: 0, task == null).setOngoing(true).setContentIntent(open).build()
     }
     override fun onTimeout(startId: Int, fgsType: Int) { repository?.pauseAll(); stopSelf() }
     override fun onDestroy() {
+        observer?.cancel(); scope.cancel()
         runCatching { getSystemService(android.net.ConnectivityManager::class.java).unregisterNetworkCallback(network) }
-        repository?.detachService(); super.onDestroy()
+        repository?.detachService()
+        repository?.owner?.let { if (DeviceState(this).account()?.optLong("id") != it) DownloadNotifications.clear(this, it) }
+        super.onDestroy()
     }
     override fun onBind(intent: Intent?): IBinder? = null
 }

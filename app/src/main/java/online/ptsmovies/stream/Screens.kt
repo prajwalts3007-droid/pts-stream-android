@@ -136,10 +136,13 @@ fun StreamHomeScreen(
     onPlay: (Title) -> Unit,
     onToggleWatch: (Title) -> Unit,
     onSeeAll: (String) -> Unit,
-    onMarkPlayed: (Title) -> Unit = {}
+    onMarkPlayed: (Title) -> Unit = {}, initialSort: String = LibrarySort.RELEVANCE.name, onSortChange: (String) -> Unit = {}
 ) {
     var query by rememberSaveable { mutableStateOf("") }
-    val results = remember(library.titles, query) { library.titles.filter { it.title.contains(query.trim(), true) || it.genres.any { g -> g.contains(query.trim(), true) } } }
+    var sortName by rememberSaveable { mutableStateOf(initialSort) }
+    val sort = LibrarySort.entries.firstOrNull { it.name == sortName } ?: LibrarySort.RELEVANCE
+    val searchIndex = remember(library.titles) { indexLibrary(library.titles) }
+    val results = remember(searchIndex, query, sort) { searchLibrary(searchIndex, query, sort) }
     val featured = remember(library.titles) { library.titles.filter { it.poster.startsWith("https://") }.ifEmpty { library.titles }.take(4) }
     val continueWatching = remember(library) {
         library.titles.filter { val p = library.progress[it.id]; p != null && p.duration > 0 && p.seconds > 5 && p.seconds < p.duration - 15 }
@@ -151,8 +154,9 @@ fun StreamHomeScreen(
         verticalArrangement = Arrangement.spacedBy(2.dp)
     ) {
         item { PtsPage("Stream") }
-        item { PtsSearchField(query, { query = it }, "Search movies and series") }
+        item { PtsSearchField(query, { query = it.take(160) }, "Titles or episode names") }
         if (query.isNotBlank()) {
+            item { WebSelect("Sort results", LibrarySort.entries.map { it.name to it.label }, sort.name) { sortName = it; onSortChange(it) } }
             item { Text("${results.size} results", style = MaterialTheme.typography.bodySmall, color = Pts.muted) }
             if (results.isEmpty()) item { PtsEmpty("No matching titles", actionLabel = "Clear search", icon = PtsIcons.Search) { query = "" } }
             results.chunked(2).forEach { pair -> item {
@@ -232,7 +236,8 @@ fun BrowseScreen(
     onOpen: (Title) -> Unit,
     onToggleWatch: (Title) -> Unit,
     initialView: String = "grid",
-    onViewChange: (String) -> Unit = {}, completed: Set<String> = emptySet(), saved: Set<String> = emptySet()
+    onViewChange: (String) -> Unit = {}, completed: Set<String> = emptySet(), saved: Set<String> = emptySet(),
+    initialSort: String = LibrarySort.RELEVANCE.name, onSortChange: (String) -> Unit = {}
 ) {
     var view by rememberSaveable(tab) { mutableStateOf(initialView) }
     var genre by remember(tab) { mutableStateOf("") }
@@ -241,6 +246,9 @@ fun BrowseScreen(
     var language by rememberSaveable(tab) { mutableStateOf("") }
     var unwatched by rememberSaveable(tab) { mutableStateOf(false) }
     var downloaded by rememberSaveable(tab) { mutableStateOf(false) }
+    var sortName by rememberSaveable(tab) { mutableStateOf(initialSort) }
+    val sort = LibrarySort.entries.firstOrNull { it.name == sortName } ?: LibrarySort.RELEVANCE
+    val searchIndex = remember(titles) { indexLibrary(titles) }
     val selection = LibraryFilter(year, language, unwatched, downloaded)
     if (filtersOpen) LibraryFiltersDialog(titles, selection, { next -> year = next.year; language = next.language; unwatched = next.unwatched; downloaded = next.downloaded }, { filtersOpen = false })
     val genres = remember(tab, titles) {
@@ -250,11 +258,10 @@ fun BrowseScreen(
             else -> emptyList()
         }.take(10)
     }
-    val filtered = remember(titles, genre, query, watch, tab, selection, completed, saved) {
-        filterLibrary(titles, selection, completed, saved).filter { t ->
+    val filtered = remember(searchIndex, genre, query, watch, tab, selection, completed, saved, sort) {
+        filterLibrary(searchLibrary(searchIndex, query, sort), selection, completed, saved).filter { t ->
             (tab != "Watchlist" || t.id in watch) &&
-                (genre.isBlank() || t.genres.any { it.equals(genre, true) }) &&
-                (query.isBlank() || t.title.contains(query, true) || t.genres.any { it.contains(query, true) })
+                (genre.isBlank() || t.genres.any { it.equals(genre, true) })
         }
     }
     val label = when (tab) { "Movies" -> "Movies"; "Series" -> "TV Shows"; "Watchlist" -> "My List"; else -> tab }
@@ -269,12 +276,15 @@ fun BrowseScreen(
         }
         item(span = { GridItemSpan(maxLineSpan) }) {
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                PtsSearchField(query, onQuery, "Search", Modifier.weight(1f))
+                PtsSearchField(query, { onQuery(it.take(160)) }, "Titles or episode names", Modifier.weight(1f))
                 PtsIconAction(PtsIcons.Settings, "Library filters", { filtersOpen = true }, tint = Pts.accent)
                 PtsIconAction(if (view == "grid") PtsIcons.List else PtsIcons.Grid, if (view == "grid") "Switch to list view" else "Switch to grid view", {
                     view = if (view == "grid") "list" else "grid"; onViewChange(view)
                 }, tint = Pts.accent)
             }
+        }
+        item(span = { GridItemSpan(maxLineSpan) }) {
+            WebSelect("Sort", LibrarySort.entries.map { it.name to it.label }, sort.name) { sortName = it; onSortChange(it) }
         }
         if (genres.isNotEmpty()) {
             item(span = { GridItemSpan(maxLineSpan) }) {

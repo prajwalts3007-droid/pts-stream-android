@@ -56,12 +56,13 @@ fun CinemaIcon(icon: ImageVector, description: String, modifier: Modifier = Modi
 @Composable
 fun CinemaControls(title: String, playing: Boolean, position: Long, duration: Long, buffered: Long, fullscreen: Boolean,
     onBack: () -> Unit, onToggle: () -> Unit, onSeek: (Long) -> Unit, onPreview: (Long?) -> Unit,
-    onOptions: () -> Unit, onTracks: () -> Unit, onPip: () -> Unit, onFullscreen: () -> Unit, buffering: Boolean = false) {
+    onOptions: () -> Unit, onTracks: () -> Unit, onPip: () -> Unit, onFullscreen: () -> Unit, buffering: Boolean = false, onMinimize: (() -> Unit)? = null) {
     BoxWithConstraints(Modifier.fillMaxSize().testTag("cinema-controls").background(Brush.verticalGradient(listOf(Color(0xB3000000), Color.Transparent, Color(0xE6000000))))) {
         val centralSize = if (maxHeight < 240.dp) 48.dp else 64.dp
         Row(Modifier.align(Alignment.TopCenter).fillMaxWidth().testTag("player-header").padding(horizontal = 4.dp), verticalAlignment = Alignment.CenterVertically) {
             CinemaIcon(PtsIcons.Back, "Back", onClick = onBack)
             Text(title, Modifier.weight(1f).padding(horizontal = 6.dp), color = Color.White, style = MaterialTheme.typography.titleSmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            if (onMinimize != null) CinemaIcon(PtsIcons.ChevronDown, "Minimize in app", onClick = onMinimize)
             CinemaIcon(PtsIcons.Pip, "Picture in picture", onClick = onPip)
             CinemaIcon(PtsIcons.PlayerSettings, "Player options", onClick = onOptions)
         }

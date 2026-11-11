@@ -785,6 +785,24 @@ class AppFlowTest {
         assertTrue(adminWrites.isEmpty()); capture("power-aligned-real-page")
     }
 
+    @Test fun inAppMiniPlayerKeepsSameDecoderWhileBrowsingAndExpanding() {
+        launchLoggedIn(); openMovie(); ui.onNodeWithText("Play").performClick(); waitForMovingPlayback(); pauseIfPlaying()
+        var original: androidx.media3.common.Player? = null
+        scenario!!.onActivity { original = nativePlayer(it.window.decorView) }
+        ui.onNodeWithContentDescription("Minimize in app").performClick()
+        ui.onNodeWithTag("in-app-mini-player").assertIsDisplayed()
+        ui.onNodeWithContentDescription("Movies").performClick()
+        ui.onNodeWithTag("poster-card-90001").performClick()
+        ui.onNodeWithTag("title-details").assertExists()
+        scenario!!.onActivity { assertSame(original,nativePlayer(it.window.decorView)) }
+        ui.onNodeWithContentDescription("Expand mini-player").performClick()
+        ui.onNodeWithContentDescription("Minimize in app").assertIsDisplayed()
+        scenario!!.onActivity { assertSame(original,nativePlayer(it.window.decorView)) }
+        ui.onNodeWithContentDescription("Minimize in app").performClick()
+        ui.onNodeWithContentDescription("Close mini-player").performClick()
+        ui.onNodeWithTag("in-app-mini-player").assertDoesNotExist()
+    }
+
     @Test fun darkWatchDetailsRestoreDescriptionWithoutBadgesOrMetadataEditor() {
         launchLoggedIn(); openMovie()
         ui.onNodeWithText("Generated test pattern and tone. No third-party media.").assertExists()

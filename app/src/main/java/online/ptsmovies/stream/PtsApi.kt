@@ -26,7 +26,7 @@ data class Episode(val id: Long, val season: Int, val episode: Int, val title: S
 data class Title(
     val id: Long, val kind: String, val title: String, val year: Int, val poster: String,
     val synopsis: String, val genres: List<String>, val episodes: List<Episode>, val codec: String, val container: String,
-    val languages: List<String> = emptyList()
+    val languages: List<String> = emptyList(), val addedAt: String = ""
 )
 data class Resume(val episodeId: Long, val seconds: Long, val duration: Long = 0L)
 data class Library(val titles: List<Title>, val watch: Set<Long>, val progress: Map<Long, Resume>)
