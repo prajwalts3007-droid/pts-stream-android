@@ -8,8 +8,9 @@ fun recentTitles(titles: List<Title>): List<Title> = titles.withIndex()
     .map { Triple(it.value, addedMillis(it.value.addedAt), it.index) }
     .sortedWith(compareByDescending<Triple<Title, Long, Int>> { it.second }.thenBy { it.third }).map { it.first }
 
-fun homeShelves(titles: List<Title>, progress: Map<Long, Resume>): HomeShelves {
-    val recent = recentTitles(titles)
+fun homeShelves(titles: List<Title>, progress: Map<Long, Resume>, serverOrder: List<Title> = titles): HomeShelves {
+    val allowed = titles.mapTo(hashSetOf()) { it.id }
+    val recent = recentTitles(serverOrder.filter { it.id in allowed })
     return HomeShelves(titles.take(5), titles.filter { t -> progress[t.id]?.let { it.duration > 0 && it.seconds > 5 && it.seconds < it.duration - 15 } == true },
         recent.filter { it.kind == "movie" }.take(10), recent.filter { it.kind == "series" }.take(10))
 }

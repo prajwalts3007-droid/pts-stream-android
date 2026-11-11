@@ -26,6 +26,12 @@ class StreamPresentationTest {
         val titles=listOf(title(20),title(2),title(300))
         assertEquals(titles,recentTitles(titles))
     }
+    @Test fun homeRecentFallbackDoesNotMistakeSearchSortForServerRecency() {
+        val server=listOf(title(3),title(1),title(2))
+        val alphabetical=server.sortedBy { it.title }
+        assertEquals(server,homeShelves(alphabetical,emptyMap(),server).movies)
+        assertEquals(server.filter { it.id != 1L },homeShelves(alphabetical.filter { it.id != 1L },emptyMap(),server).movies)
+    }
     @Test fun continueWatchingExcludesFinishedAndBarelyStartedItems() {
         val titles=(1L..4).map { title(it) }
         val progress=mapOf(1L to Resume(0,60,600),2L to Resume(0,595,600),3L to Resume(0,2,600),4L to Resume(0,100,0))

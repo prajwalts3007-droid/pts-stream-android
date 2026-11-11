@@ -154,7 +154,7 @@ fun StreamHomeScreen(
         { filtersOpen = false }, sort, { sortName = it.name; onSortChange(it.name) })
     val queryResults = rememberLibraryResults(library.titles, query, sort, selection, completed, saved)
     val results = queryResults.orEmpty()
-    val shelves = remember(results, library.progress) { homeShelves(results, library.progress) }
+    val shelves = remember(results, library.progress, library.titles) { homeShelves(results, library.progress, library.titles) }
     val featured = shelves.featured
     val continueWatching = shelves.continuing
     val movies = shelves.movies
@@ -517,7 +517,7 @@ fun ProfileScreen(user: JSONObject, savedCount: Int, onDownloads: () -> Unit, on
                 MenuDivider()
                 MenuRow(PtsIcons.Refresh, "Check for updates", "Signed releases only") { onUpdate() }
                 MenuDivider()
-                MenuRow(PtsIcons.Shield, "Session", "Signed in · ${role.ifBlank { "user" }}") { }
+                MenuRow(PtsIcons.Shield, "Session", "Signed in · ${role.ifBlank { "user" }}", null)
                 MenuDivider()
                 MenuRow(PtsIcons.Info, "About", "PTS Library ${BuildConfig.VERSION_NAME}", onAbout)
             }
@@ -529,14 +529,14 @@ fun ProfileScreen(user: JSONObject, savedCount: Int, onDownloads: () -> Unit, on
 }
 
 @Composable
-private fun MenuRow(icon: androidx.compose.ui.graphics.vector.ImageVector, title: String, sub: String, onClick: () -> Unit) {
-    Row(Modifier.fillMaxWidth().clickable(onClick = onClick).padding(horizontal = 16.dp, vertical = 13.dp), verticalAlignment = Alignment.CenterVertically) {
+private fun MenuRow(icon: androidx.compose.ui.graphics.vector.ImageVector, title: String, sub: String, onClick: (() -> Unit)?) {
+    Row(Modifier.fillMaxWidth().then(if (onClick != null) Modifier.clickable(onClick = onClick) else Modifier).padding(horizontal = 16.dp, vertical = 13.dp), verticalAlignment = Alignment.CenterVertically) {
         Icon(icon, null, Modifier.size(21.dp), tint = Pts.accent)
         Column(Modifier.weight(1f).padding(start = 12.dp), verticalArrangement = Arrangement.spacedBy(1.dp)) {
             Text(title, style = MaterialTheme.typography.bodyLarge, color = Pts.text)
             if (sub.isNotBlank()) Text(sub, style = MaterialTheme.typography.labelSmall, color = Pts.muted)
         }
-        Icon(PtsIcons.ChevronRight, null, Modifier.size(17.dp), tint = Pts.line2)
+        if (onClick != null) Icon(PtsIcons.ChevronRight, null, Modifier.size(17.dp), tint = Pts.line2)
     }
 }
 
