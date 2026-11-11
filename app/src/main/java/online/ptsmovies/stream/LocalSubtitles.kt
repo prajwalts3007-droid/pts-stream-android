@@ -19,6 +19,7 @@ fun validateSubtitle(bytes: ByteArray): Pair<String, String> {
     val cue = if (vtt) Regex("(?m)^(?:\\d{2}:)?\\d{2}:\\d{2}\\.\\d{3}\\s+-->\\s+(?:\\d{2}:)?\\d{2}:\\d{2}\\.\\d{3}")
         else Regex("(?m)^\\d{2}:\\d{2}:\\d{2},\\d{3}\\s+-->\\s+\\d{2}:\\d{2}:\\d{2},\\d{3}")
     require(cue.containsMatchIn(text)) { "Choose a valid SRT or WebVTT subtitle file" }
+    require(text.toByteArray(Charsets.UTF_8).size <= MAX_SUBTITLE_BYTES) { "Decoded subtitle exceeds 2 MiB" }
     return (if (vtt) "vtt" else "srt") to text
 }
 

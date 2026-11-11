@@ -61,7 +61,7 @@ class CompanionTest(unittest.TestCase):
         self.assertEqual(120,self.app.progress(1)[0]['position'])
 
     def test_invalid_or_future_records_are_rejected(self):
-        for patch in [dict(position=-1),dict(changed_at=int(time.time()*1000)+900000),dict(event_id=''),dict(title_id=999),dict(episode_id=201)]:
+        for patch in [dict(position=-1),dict(changed_at=int(time.time()*1000)+900000),dict(event_id=''),dict(event_id='bad-event\ud800'),dict(title_id=2**70),dict(title_id=999),dict(episode_id=201)]:
             value=self.record();value.update(patch)
             with self.assertRaises(Denied):self.app.put(1,[value])
 

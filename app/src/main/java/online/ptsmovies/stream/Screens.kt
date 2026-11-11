@@ -499,7 +499,7 @@ fun ProfileScreen(user: JSONObject, savedCount: Int, onDownloads: () -> Unit, on
                 MenuRow(PtsIcons.Settings, "Downloads & network", "") { onDownloadSettings() }
                 MenuDivider()
                 MenuRow(PtsIcons.Play, "Playback", "") { onPlayback() }
-                MenuRow(PtsIcons.Refresh, "Sync & alerts", "Episode progress and live job alerts") { onSync() }
+                MenuRow(PtsIcons.Refresh, "Sync & alerts", if (role == "admin") "Episode progress and live job alerts" else "Episode progress across devices") { onSync() }
                 MenuDivider()
                 MenuRow(PtsIcons.Refresh, "Check for updates", "Signed releases only") { onUpdate() }
                 MenuDivider()

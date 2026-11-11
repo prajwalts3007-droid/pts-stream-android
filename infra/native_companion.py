@@ -9,6 +9,7 @@ import hmac
 import http.cookies
 import json
 import os
+import re
 import sqlite3
 import threading
 import time
@@ -87,9 +88,9 @@ class Companion:
                 try:
                     title, episode, position, duration, changed = [int(value[key]) for key in ['title_id', 'episode_id', 'position', 'duration', 'changed_at']]
                     event = value['event_id']; completed = value['completed']
-                    assert isinstance(event, str) and 8 <= len(event) <= 80
+                    assert isinstance(event, str) and re.fullmatch(r'[A-Za-z0-9-]{8,80}',event)
                     assert isinstance(completed, bool) or completed in (0, 1)
-                    assert title > 0 and episode >= 0 and 0 <= position <= 7*86400 and 0 <= duration <= 7*86400
+                    assert 0 < title < 2**63 and 0 <= episode < 2**63 and 0 <= position <= 7*86400 and 0 <= duration <= 7*86400
                     assert 0 < changed <= now + 300000
                 except (KeyError, ValueError, TypeError, AssertionError):
                     raise Denied(400, 'Invalid progress record or device clock')
@@ -194,6 +195,7 @@ class Handler(BaseHTTPRequestHandler):
                     if not 0 < length <= 65536: raise Denied(413,'Progress payload too large')
                     if self.headers.get_content_type() != 'application/json': raise Denied(415,'JSON required')
                     data = json.loads(self.rfile.read(length))
+                    if not isinstance(data,dict): raise Denied(400,'JSON object required')
                     records = app.put(owner,data.get('records'))
                 else: records = app.progress(owner)
                 self.reply(200,{'records':records,'server_time':int(time.time()*1000)})
@@ -201,7 +203,7 @@ class Handler(BaseHTTPRequestHandler):
                 if unsafe: raise Denied(405,'Read-only events')
                 if role != 'admin': raise Denied(403,'Administrator access required')
                 cursor = int(urllib.parse.parse_qs(url.query).get('cursor',['-1'])[0])
-                if cursor < -1: raise Denied(400,'Invalid cursor')
+                if not -1 <= cursor < 2**63: raise Denied(400,'Invalid cursor')
                 result = app.events(cursor)
                 if cursor >= 0 and not result['events']:
                     with app.changed: app.changed.wait(20)

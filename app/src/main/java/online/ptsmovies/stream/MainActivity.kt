@@ -1254,7 +1254,9 @@ class MainActivity : ComponentActivity() {
                   ep?.let { Text("S${it.season}E${it.episode} · ${it.title.ifBlank { "Episode ${it.episode}" }}", style = MaterialTheme.typography.bodySmall, color = Pts.muted) }
                   Text("Description", style = MaterialTheme.typography.titleMedium, color = Pts.text)
                   ShortSynopsis(ep?.description?.takeIf { it.isNotBlank() } ?: title.synopsis.ifBlank { "No description is available for this title." })
-                if (ended && nextEpisode != null && !cancelNext) UpNextCard(nextEpisode, if (autoplay) nextCountdown else null, { selectEpisode(nextEpisode) }, { cancelNext = true })
+                  if (ended && nextEpisode != null && !cancelNext) {
+                      UpNextCard(nextEpisode, if (autoplay) nextCountdown else null, { selectEpisode(nextEpisode) }, { cancelNext = true })
+                  }
                   WatchActionBar(downloaded, "${title.id}_${ep?.id ?: 0}" in episodeProgress()?.completed().orEmpty(), title.kind == "series",
                      onComplete = { markPlayed(title) }, onSave = { startDownload(title, ep) }, onSeasonDownload = { episodeDownloadTitle = title })
                  if (title.kind == "series") SeasonEpisodes(title, ep, library?.progress?.get(title.id), savedVideos.map { it.key }.toSet(), downloading,
@@ -1437,6 +1439,9 @@ class MainActivity : ComponentActivity() {
             sleepDeadline = nav.optLong("sleep_deadline"); sleepAtEnd = nav.optBoolean("sleep_at_end")
             val queries = nav.optJSONObject("queries")
             queries?.keys()?.forEach { browseQueries[it] = queries.optString(it) }
+        }
+        if (intent?.getBooleanExtra("open_jobs", false) == true && admin()) {
+            playing = false; mode = "Hub"; hubTab = "Queue"; profileOpen = false; downloadsOpen = false; updatesOpen = false; nativeSettings = ""
         }
         navigationRestored = true
     }
