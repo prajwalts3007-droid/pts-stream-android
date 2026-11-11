@@ -26,7 +26,7 @@ object Pts {
     val bg: Color @Composable @ReadOnlyComposable get() = if (LocalWatch.current) Color.Black else if (LocalLight.current) Color(0xFFEEF2FF) else Color(0xFF11132D)
     val card: Color @Composable @ReadOnlyComposable get() = if (LocalWatch.current) Color(0xFF141414) else if (LocalLight.current) Color.White else Color(0xFF202343)
     val soft: Color @Composable @ReadOnlyComposable get() = if (LocalWatch.current) Color(0xFF202020) else if (LocalLight.current) Color(0xFFF3F4FF) else Color(0xFF2B2F57)
-    val text: Color @Composable @ReadOnlyComposable get() = if (LocalLight.current) Color(0xFF1E1B4B) else Color(0xFFF7F7FF)
+    val text: Color @Composable @ReadOnlyComposable get() = if (LocalWatch.current) Color.White else if (LocalLight.current) Color(0xFF1E1B4B) else Color(0xFFF7F7FF)
     val muted: Color @Composable @ReadOnlyComposable get() = if (LocalWatch.current) Color(0xFFB0B0B0) else if (LocalLight.current) Color(0xFF575578) else Color(0xFFC4C9E4)
     val muted2: Color @Composable @ReadOnlyComposable get() = muted
     val line: Color @Composable @ReadOnlyComposable get() = if (LocalWatch.current) Color(0xFF303030) else if (LocalLight.current) Color(0xFFD2D5EC) else Color(0xFF414671)

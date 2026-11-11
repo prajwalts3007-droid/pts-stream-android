@@ -35,7 +35,9 @@ function fixture(path, request) {
   return {};
 }
 (async () => {
-  const browser = await chromium.launch();
+  // GitHub's installed Chrome includes H.264; the bundled headless Chromium
+  // build can omit that decoder. The production player code remains unchanged.
+  const browser = await chromium.launch({ channel: 'chrome' });
   try {
     const context = await browser.newContext({ viewport: { width: 390, height: 844 }, serviceWorkers: 'block' });
     await context.route('**/*', async route => {
@@ -48,7 +50,7 @@ function fixture(path, request) {
           const start = range ? Number(range[1]) : 0;
           const end = range && range[2] ? Math.min(Number(range[2]), media.length - 1) : media.length - 1;
           return route.fulfill({ status: range ? 206 : 200, contentType: 'video/mp4',
-            headers: { 'Accept-Ranges': 'bytes', ...(range ? { 'Content-Range': `bytes ${start}-${end}/${media.length}` } : {}) }, body: media.subarray(start, end + 1) });
+            headers: { 'Accept-Ranges': 'bytes', 'Content-Length': String(end - start + 1), ...(range ? { 'Content-Range': `bytes ${start}-${end}/${media.length}` } : {}) }, body: request.method() === 'HEAD' ? Buffer.alloc(0) : media.subarray(start, end + 1) });
         }
         return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(fixture(path, request)) });
       }
@@ -95,7 +97,11 @@ function fixture(path, request) {
       geometry.push({ width, height, queue: boxes });
       await page.evaluate(() => stOpenWatch(90001, 101));
       await page.locator('#st-player').waitFor({ state: 'visible' });
-      await page.waitForFunction(() => document.querySelector('#st-video').readyState >= 2);
+      await page.waitForFunction(() => { const video = document.querySelector('#st-video'); return video.readyState >= 2 || !!video.error; });
+      const videoState = await page.evaluate(() => { const video = document.querySelector('#st-video'); return { ready: video.readyState, source: video.currentSrc, error: video.error && { code: video.error.code, message: video.error.message }, h264: video.canPlayType('video/mp4; codecs="avc1.42E01E"') }; });
+      geometry.push({ width, height, videoState });
+      if (videoState.error) await page.screenshot({ path: `${output}/${width}x${height}-player-error.png`, fullPage: true });
+      assert.equal(videoState.error, null, 'Browser must decode the generated H.264 fixture');
       await page.evaluate(() => { const video = document.querySelector('#st-video'); video.loop = true; video.muted = true; return video.play(); });
       await page.waitForFunction(() => document.querySelector('#st-video').currentTime > 0);
       await page.evaluate(() => plShowControls());

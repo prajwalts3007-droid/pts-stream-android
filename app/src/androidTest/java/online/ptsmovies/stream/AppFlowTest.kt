@@ -711,7 +711,10 @@ class AppFlowTest {
             InstrumentationRegistry.getInstrumentation().runOnMainSync {
                 val activity = androidx.test.runner.lifecycle.ActivityLifecycleMonitorRegistry.getInstance()
                     .getActivitiesInStage(androidx.test.runner.lifecycle.Stage.PAUSED).filterIsInstance<MainActivity>().firstOrNull()
-                if (activity != null) { entered.set(activity.isInPictureInPictureMode); moving.set(nativePlayer(activity.window.decorView)?.isPlaying == true) }
+                if (activity != null) {
+                    entered.set(activity.isInPictureInPictureMode && activity.resources.configuration.screenWidthDp < 300)
+                    moving.set(nativePlayer(activity.window.decorView)?.isPlaying == true)
+                }
             }
             entered.get() && moving.get()
         }

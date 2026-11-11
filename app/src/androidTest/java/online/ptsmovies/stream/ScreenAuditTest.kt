@@ -430,8 +430,8 @@ class ScreenAuditTest {
     }
 
     @Test fun watchThemeIsPitchBlackAndHasNoDecorativeGradient() {
-        ui.setContent { PtsTheme("watch") { PtsBackground(decorative = false) { Spacer(Modifier.fillMaxSize()) } } }
-        val image = ui.onRoot().captureToImage().asAndroidBitmap()
+        ui.setContent { PtsTheme("watch") { PtsBackground(Modifier.testTag("black-watch-background"), decorative = false) { Spacer(Modifier.fillMaxSize()) } } }
+        val image = ui.onNodeWithTag("black-watch-background").captureToImage().asAndroidBitmap()
         for (x in listOf(1, image.width / 2, image.width - 2)) for (y in listOf(1, image.height / 2, image.height - 2)) {
             assertEquals(android.graphics.Color.BLACK, image.getPixel(x, y))
         }

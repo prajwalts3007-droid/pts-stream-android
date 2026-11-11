@@ -51,6 +51,7 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
@@ -521,7 +522,10 @@ fun PtsPosterCard(
                 PtsIconAction(PtsIcons.Close, "Remove from Continue watching", onClearProgress, tint = Pts.text, size = 32.dp)
             }
         }
-        Text(title.title, style = MaterialTheme.typography.titleSmall, color = Pts.text, minLines = 2, maxLines = 2, overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(horizontal = 2.dp))
+        val titleStyle = MaterialTheme.typography.titleSmall
+        val titleHeight = with(LocalDensity.current) { (titleStyle.lineHeight * 2).toDp() + 4.dp }
+        Text(title.title, style = titleStyle, color = Pts.text, maxLines = 2, overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.fillMaxWidth().height(titleHeight).padding(horizontal = 2.dp))
     }
 }
 
