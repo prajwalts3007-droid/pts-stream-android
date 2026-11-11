@@ -19,6 +19,7 @@ class PtsApplication : Application() {
 
 /** Route signed media only. Account cookies/passwords never go to LAN. */
 internal data class LanEndpoint(val client: OkHttpClient, val base: HttpUrl)
+internal data class MediaRoutePolicy(val preferLan: Boolean)
 class MediaRouting internal constructor(private val endpointOverride: (() -> LanEndpoint?)? = null) : Interceptor {
     @Volatile private var cachedAddress = ""
     @Volatile private var local: OkHttpClient? = null
@@ -66,6 +67,7 @@ class MediaRouting internal constructor(private val endpointOverride: (() -> Lan
         } catch (e: Exception) { watcher.cancel(false); throw e }
     }
     private fun tryLocal(request: Request, parent: Call): Response? {
+        if (request.tag(MediaRoutePolicy::class.java)?.preferLan == false) return null
         if (request.method !in listOf("GET", "HEAD") || request.url.scheme != "https" || request.url.host != "media.ptsmovies.online" || request.url.encodedPath != "/media" || request.url.queryParameter("sig").isNullOrBlank()) return null
         return try {
             val endpoint = endpoint() ?: return null

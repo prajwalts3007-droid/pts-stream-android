@@ -114,7 +114,7 @@ fun NativeIngest(api: PtsApi, query: String, onQuery: (String) -> Unit, results:
                     PtsSecondaryButton("Upload links.txt", Modifier.weight(1f), enabled = !busy) { upload.launch(arrayOf("text/plain", "application/octet-stream")) }
                     PtsSecondaryButton("Paste links", Modifier.weight(1f), enabled = !busy) { paste = "" }
                 } }
-                item { PtsField(zipLink, { zipLink = it }, "Public HTTPS ZIP link", Modifier.fillMaxWidth()) }
+                item { PtsField(zipLink, { zipLink = it }, "Public HTTPS ZIP link", Modifier.fillMaxWidth().testTag("ingest-zip-source")) }
                 item { PtsSecondaryButton("Inspect ZIP", enabled = !busy && zipLink.startsWith("https://")) {
                     val link = zipLink.trim(); busy = true; error = ""
                     scope.launch { try { fill(zipEpisodeLinks(link, api.json("/queue/zip/preflight", "POST", JSONObject().put("url", link)))) }

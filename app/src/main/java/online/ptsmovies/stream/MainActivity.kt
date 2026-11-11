@@ -1226,7 +1226,12 @@ class MainActivity : ComponentActivity() {
                 onZoomReset = { zoom = 1f; if (playbackPrefs.optString("zoom_mode") == "remember") playerPreference("zoom", 1) },
                 onAutoplay = { autoplay = !autoplay; playerPreference("autoplay", autoplay) },
                 onTracks = { showSettings = false; showTracks = true }, onSleep = { showSettings = false; showSleep = true },
-                onLock = { locked = true; showSettings = false }, onClose = { showSettings = false; touchControls() }, initialPage = optionsPage, timingRevision = timingRevision)
+                onLock = { locked = true; showSettings = false }, onClose = { showSettings = false; touchControls() }, initialPage = optionsPage, timingRevision = timingRevision,
+                probe = if (saved != null || ep?.container == "hls" || (ep == null && title.container == "hls")) null else ({
+                    val local = probeMediaRoute(api.http, api.streamUrl(title, ep), true)
+                    val internet = probeMediaRoute(api.http, api.streamUrl(title, ep), false)
+                    "LAN preference: ${local.route.label} · ${formatBytes(local.bytesPerSecond)}/s\nInternet only: ${internet.route.label} · ${formatBytes(internet.bytesPerSecond)}/s"
+                }))
         }
         if (showTracks) {
             val audioGroups = exo.currentTracks.groups.filter { it.type == androidx.media3.common.C.TRACK_TYPE_AUDIO }

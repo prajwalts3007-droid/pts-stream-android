@@ -41,7 +41,7 @@ class NativeIngestTest {
             NativeIngest(api, "Generated", {}, listOf(result), false) { queued = true }
         } }
         ui.onNodeWithText("Generated ingest series").performScrollTo().performClick()
-        ui.onNode(hasSetTextAction() and hasAnySibling(hasText("Public HTTPS ZIP link"))).performScrollTo().performTextReplacement("https://example.invalid/generated.zip")
+        ui.onNode(hasSetTextAction() and hasAnyAncestor(hasTestTag("ingest-zip-source"))).performScrollTo().performTextReplacement("https://example.invalid/generated.zip")
         ui.onNodeWithText("Inspect ZIP").performScrollTo().performClick()
         ui.waitUntil(10000) { writes.size == 1 && ui.onAllNodesWithContentDescription("Select S01E02").fetchSemanticsNodes().isNotEmpty() }
         assertFalse(queued)

@@ -21,6 +21,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
+import kotlinx.coroutines.launch
 
 data class PlayerAppearance(val subtitleSize: Float = 1f, val subtitleColor: String = "white", val outline: Boolean = true,
     val subtitlePosition: String = "bottom", val controlsSeconds: Int = 12, val nextDownloadedOnly: Boolean = false)
@@ -110,8 +111,11 @@ fun CinemaControls(title: String, playing: Boolean, position: Long, duration: Lo
 fun PlayerOptions(appearance: PlayerAppearance, onAppearance: (PlayerAppearance) -> Unit, speed: Float, onSpeed: (Float) -> Unit,
     timing: PlaybackTiming, onTiming: (Int, Int) -> Unit, traffic: TrafficSnapshot, bufferMs: Long, fill: Boolean, autoplay: Boolean,
     onFit: () -> Unit, onZoomReset: () -> Unit, onAutoplay: () -> Unit, onTracks: () -> Unit, onSleep: () -> Unit,
-    onLock: () -> Unit, onClose: () -> Unit, initialPage: String = "", timingRevision: Int = 0) {
+    onLock: () -> Unit, onClose: () -> Unit, initialPage: String = "", timingRevision: Int = 0,
+    probe: (suspend () -> String)? = null) {
     var page by remember { mutableStateOf(initialPage) }
+    val scope = rememberCoroutineScope()
+    var probing by remember { mutableStateOf(false) }; var probeResult by remember { mutableStateOf("") }
     val sync = remember(timingRevision) { timing.audioDelayMs to timing.subtitleDelayMs }
     Dialog(onDismissRequest = onClose, properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false)) {
         BoxWithConstraints(Modifier.fillMaxSize().background(Color.Black.copy(alpha = .25f))) {
@@ -154,6 +158,14 @@ fun PlayerOptions(appearance: PlayerAppearance, onAppearance: (PlayerAppearance)
                                 Text("Buffered ${playerClock(bufferMs)}", color = Color.White)
                                 MediaRoute.entries.filter { it !in listOf(MediaRoute.CONNECTING) }.forEach { route -> Text("${route.label}: ${formatBytes(traffic.bytes[route] ?: 0)}", color = Pts.muted) }
                                 Text("Media payload only, not account/metadata traffic or network overhead. A filled buffer can reduce the measured rate to zero.", color = Pts.muted, style = MaterialTheme.typography.bodySmall)
+                                if (probe != null) {
+                                    PtsSecondaryButton(if (probing) "Testing…" else "Compare LAN / Internet", Modifier.fillMaxWidth(), enabled = !probing) {
+                                        probing = true; probeResult = ""
+                                        scope.launch { try { probeResult = probe() } catch (_: Exception) { probeResult = "Connection test unavailable. Keep your current route and try again later." } finally { probing = false } }
+                                    }
+                                    if (probeResult.isNotBlank()) Text(probeResult, color = Color.White, style = MaterialTheme.typography.bodySmall)
+                                    Text("Reads up to 1 MiB per route without saving it. Pause playback for a clearer comparison. Results include connection startup and are estimates, not guaranteed download rates.", color = Pts.muted, style = MaterialTheme.typography.bodySmall)
+                                }
                             }
                             else -> {
                                 PlayerMenuRow(PtsIcons.Subtitles, "Audio and subtitles", "Tracks") { onTracks() }

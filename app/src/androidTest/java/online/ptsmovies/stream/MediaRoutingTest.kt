@@ -41,6 +41,27 @@ class MediaRoutingTest {
     private fun client(localClient: OkHttpClient = baseClient) = baseClient.newBuilder()
         .addInterceptor(MediaRouting { LanEndpoint(localClient, local.url("/")) }).build()
 
+    @Test fun boundedComparisonMeasuresActualLanAndCanBypassItWithoutChangingPreferences() = kotlinx.coroutines.runBlocking {
+        local.enqueue(MockResponse().setBody("pts-pi-lan-v1"))
+        local.enqueue(MockResponse().setResponseCode(206).setHeader("Content-Range", "bytes 0-3/4").setBody("test"))
+        tunnel.enqueue(MockResponse().setResponseCode(206).setHeader("Content-Range", "bytes 0-3/4").setBody("test"))
+        val http = client(); val url = request().url.toString()
+        val lan = probeMediaRoute(http, url, true); val internet = probeMediaRoute(http, url, false)
+        assertEquals(MediaRoute.LAN, lan.route); assertEquals(MediaRoute.TUNNEL, internet.route)
+        assertEquals(4L, lan.bytes); assertEquals(4L, internet.bytes)
+        assertEquals(2, local.requestCount); assertEquals(1, tunnel.requestCount)
+        local.takeRequest(); val media = local.takeRequest()
+        assertEquals("bytes=0-1048575", media.getHeader("Range")); assertEquals(signed, media.path)
+        assertEquals(signed, tunnel.takeRequest().path)
+    }
+
+    @Test fun boundedComparisonRefusesAFullLargeFileWhenRangeIsIgnored() = kotlinx.coroutines.runBlocking {
+        tunnel.enqueue(MockResponse().setBody("x".repeat(2 * 1024 * 1024)))
+        try { probeMediaRoute(client(), request().url.toString(), false); fail("Unbounded sample accepted") }
+        catch (_: java.io.IOException) { }
+        assertEquals(0, local.requestCount)
+    }
+
     @Test fun signedRedirectUsesVerifiedLanWithExactQueryAndRangeButNoAccountCredentials() {
         tunnel.enqueue(MockResponse().setResponseCode(302).setHeader("Location", tunnel.url(signed).newBuilder().host("media.ptsmovies.online").build()))
         local.enqueue(MockResponse().setBody("pts-pi-lan-v1"))

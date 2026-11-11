@@ -30,7 +30,7 @@ import java.util.concurrent.ConcurrentLinkedQueue
 /** Runs the real Activity against a loopback API and a generated HEVC test pattern. */
 class AppFlowTest {
     @get:Rule val ui = createEmptyComposeRule()
-    @get:Rule val notifications = GrantPermissionRule.grant(Manifest.permission.POST_NOTIFICATIONS)
+    @get:Rule val notifications = GrantPermissionRule.grant(*if (android.os.Build.VERSION.SDK_INT >= 33) arrayOf(Manifest.permission.POST_NOTIFICATIONS) else emptyArray())
     @get:Rule val testName = org.junit.rules.TestName()
     private lateinit var server: MockWebServer
     private var scenario: ActivityScenario<MainActivity>? = null
@@ -675,7 +675,9 @@ class AppFlowTest {
     @Test fun aTapShowsControlsAndRestartsTheWholeTimeoutRatherThanTogglingThemAway() {
         InstrumentationRegistry.getInstrumentation().targetContext.getSharedPreferences("playback_local", 0).edit().putInt("controls_seconds", 8).commit()
         launchLoggedIn(); openMovie(); ui.onNodeWithText("Play").performClick(); waitForMovingPlayback()
-        scenario!!.onActivity { activity -> nativePlayer(activity.window.decorView)!!.repeatMode = androidx.media3.common.Player.REPEAT_MODE_ONE }
+        // The generated fixture is eight seconds. Slow it down so an end/rebuffer event
+        // cannot legitimately reveal controls while testing the independent hide timer.
+        scenario!!.onActivity { activity -> nativePlayer(activity.window.decorView)!!.setPlaybackSpeed(.1f) }
         fun tapBlankVideo() { ui.onNodeWithTag("player-gesture-zone").performTouchInput { click(androidx.compose.ui.geometry.Offset(4f, height * .45f)) } }
         tapBlankVideo(); ui.onNodeWithContentDescription("Pause playback").assertIsDisplayed()
         Thread.sleep(4500); tapBlankVideo(); Thread.sleep(4500)

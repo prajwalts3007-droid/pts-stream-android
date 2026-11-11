@@ -9,6 +9,10 @@ jobs:
   emulator:
     runs-on: ubuntu-24.04
     timeout-minutes: 35
+    strategy:
+      fail-fast: false
+      matrix:
+        api: [29, 35]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-java@v5
@@ -30,7 +34,7 @@ jobs:
       - name: Run isolated UI and API tests
         uses: reactivecircus/android-emulator-runner@v2
         with:
-          api-level: 35
+          api-level: ${{ matrix.api }}
           arch: x86_64
           profile: pixel_2
           disable-animations: true
@@ -39,7 +43,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: native-audit-evidence
+          name: ${{ matrix.api == 35 && 'native-audit-evidence' || format('native-audit-evidence-api{0}', matrix.api) }}
           path: |
             audit-screens/
             audit-logcat.txt
