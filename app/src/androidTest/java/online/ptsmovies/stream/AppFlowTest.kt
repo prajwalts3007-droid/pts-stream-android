@@ -726,7 +726,9 @@ class AppFlowTest {
         }
         saveAuditCapture("automatic-home-pip", checkNotNull(InstrumentationRegistry.getInstrumentation().uiAutomation.takeScreenshot()))
         val context = InstrumentationRegistry.getInstrumentation().targetContext
-        context.startActivity(android.content.Intent(context, MainActivity::class.java).addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK or android.content.Intent.FLAG_ACTIVITY_REORDER_TO_FRONT))
+        // Use the real launcher action/category. ActivityScenario filters lifecycle
+        // events by that intent; a bare component intent makes it lose the Activity.
+        context.startActivity(checkNotNull(context.packageManager.getLaunchIntentForPackage(context.packageName)).addFlags(android.content.Intent.FLAG_ACTIVITY_REORDER_TO_FRONT))
         ui.waitUntil(10000) {
             InstrumentationRegistry.getInstrumentation().runOnMainSync {
                 val activity = androidx.test.runner.lifecycle.ActivityLifecycleMonitorRegistry.getInstance()
@@ -748,7 +750,7 @@ class AppFlowTest {
         InstrumentationRegistry.getInstrumentation().runOnMainSync { assertFalse(activity.isInPictureInPictureMode) }
         saveAuditCapture("paused-home-no-pip", checkNotNull(InstrumentationRegistry.getInstrumentation().uiAutomation.takeScreenshot()))
         val context = InstrumentationRegistry.getInstrumentation().targetContext
-        context.startActivity(android.content.Intent(context, MainActivity::class.java).addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK or android.content.Intent.FLAG_ACTIVITY_REORDER_TO_FRONT))
+        context.startActivity(checkNotNull(context.packageManager.getLaunchIntentForPackage(context.packageName)).addFlags(android.content.Intent.FLAG_ACTIVITY_REORDER_TO_FRONT))
         ui.waitUntil(10000) { ui.onAllNodesWithContentDescription("Play playback").fetchSemanticsNodes().isNotEmpty() }
         scenario!!.onActivity { assertSame(activity, it); assertFalse(nativePlayer(it.window.decorView)!!.playWhenReady) }
     }

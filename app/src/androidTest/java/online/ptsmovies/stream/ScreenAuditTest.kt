@@ -431,7 +431,9 @@ class ScreenAuditTest {
     }
 
     @Test fun watchThemeIsPitchBlackAndHasNoDecorativeGradient() {
-        ui.setContent { PtsTheme("watch") { PtsBackground(Modifier.testTag("black-watch-background"), decorative = false) { Spacer(Modifier.fillMaxSize()) } } }
+        // The generic Compose test Activity does not theme Android's system bars.
+        // Check app-owned pixels here; AppFlowTest independently checks real bars.
+        ui.setContent { PtsTheme("watch") { PtsBackground(Modifier.windowInsetsPadding(WindowInsets.safeDrawing).testTag("black-watch-background"), decorative = false) { Spacer(Modifier.fillMaxSize()) } } }
         ui.waitUntil(3000) {
             val frame = ui.onNodeWithTag("black-watch-background").captureToImage().asAndroidBitmap()
             val black = listOf(1, frame.width / 2, frame.width - 2).all { x ->
