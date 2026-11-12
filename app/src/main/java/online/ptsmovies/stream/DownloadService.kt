@@ -141,6 +141,7 @@ class DownloadRepository internal constructor(private val context: Context, priv
         }
     }
     /** Clears ownership synchronously; persistence runs on process work, not a scope teardown may cancel. */
+    /** Ownership clears synchronously; interrupted transfers persist as paused, as on a cold start. */
     fun detachService() {
         if (serviceOwners.updateAndGet { (it - 1).coerceAtLeast(0) } > 0) return
         statusCallback = null
