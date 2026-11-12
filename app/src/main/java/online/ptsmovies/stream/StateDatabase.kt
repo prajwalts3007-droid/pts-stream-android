@@ -80,7 +80,15 @@ internal object DurableWork {
 
 internal fun compactQueue(tasks: List<DownloadTask>): String {
     val titles = JSONObject()
-    tasks.distinctBy { it.title.id }.forEach { titles.put(it.title.id.toString(), it.title.toJson()) }
+    tasks.groupBy { it.title.id }.forEach { (id, group) ->
+        val seen = java.util.IdentityHashMap<Title, Boolean>()
+        val episodes = linkedMapOf<Long, Episode>()
+        group.forEach { task ->
+            if (seen.put(task.title, true) == null) task.title.episodes.forEach { episodes[it.id] = it }
+            task.episode?.let { episodes[it.id] = it }
+        }
+        titles.put(id.toString(), group.last().title.copy(episodes = episodes.values.toList()).toJson())
+    }
     val rows = org.json.JSONArray(tasks.map { task -> JSONObject().put("title_id", task.title.id).put("episode_id", task.episode?.id ?: 0)
         .put("status", task.status).put("bytes", task.bytes).put("total", task.total).put("error", task.error).put("destination", task.destination) })
     return JSONObject().put("version", 1).put("titles", titles).put("tasks", rows).toString()
@@ -93,10 +101,18 @@ internal fun parseQueue(source: String): List<DownloadTask> {
     val titles = mutableMapOf<Long, Title>()
     root?.getJSONObject("titles")?.let { objectTitles -> objectTitles.keys().forEach { key -> titles[key.toLong()] = parseTitle(objectTitles.getJSONObject(key)) } }
     val rows = if (legacy) org.json.JSONArray(source) else root!!.getJSONArray("tasks")
-    return (0 until rows.length()).map { i ->
+    val result = (0 until rows.length()).map { i ->
         val row = rows.getJSONObject(i)
-        val title = if (legacy) parseTitle(row.getJSONObject("title")).let { titles.getOrPut(it.id) { it } } else titles.getValue(row.getLong("title_id"))
+        val title = if (legacy) {
+            val raw = row.getJSONObject("title"); val id = raw.getLong("id"); val cached = titles[id]
+            val taskId = row.optJSONObject("episode")?.optLong("id")
+            if (cached == null || (raw.optJSONArray("episodes")?.length() ?: 0) > cached.episodes.size || (taskId != null && cached.episodes.none { it.id == taskId })) {
+                val newer = parseTitle(raw)
+                newer.copy(episodes = ((cached?.episodes.orEmpty()) + newer.episodes).distinctBy { it.id }).also { titles[id] = it }
+            } else cached
+        } else titles.getValue(row.getLong("title_id"))
         val episode = if (legacy) row.optJSONObject("episode")?.let(::parseEpisode) else row.optLong("episode_id").takeIf { it > 0 }?.let { id -> title.episodes.firstOrNull { it.id == id } ?: error("Episode missing from queue metadata") }
         DownloadTask(title, episode, row.optString("status"), row.optLong("bytes"), row.optLong("total"), error = row.optString("error"), destination = row.optString("destination").takeIf { it.isNotBlank() && it != "null" })
     }
+    return if (legacy) parseQueue(compactQueue(result)) else result
 }

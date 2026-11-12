@@ -245,14 +245,14 @@ class DownloadService : Service() {
         if (owner <= 0 || DeviceState(this).account()?.optLong("id") != owner) { if (owner > 0) DownloadNotifications.clear(this, owner); stopSelf(startId); return START_NOT_STICKY }
         lastStartId = startId
         if (repository?.owner != null && repository?.owner != owner) { observer?.cancel(); repository?.detachService(); DownloadNotifications.clear(this, repository!!.owner); notifications = null }
-        scope.launch(Dispatchers.IO) { starts.lock(); try {
-        val repo = DeviceDownloads.forService(this@DownloadService, ApiProvider.create(), owner)
+        scope.launch(Dispatchers.IO) { starts.lock(); var leased: DownloadRepository? = null; var accepted = false; try {
+        val repo = DeviceDownloads.forService(this@DownloadService, ApiProvider.create(), owner).also { leased = it }
         if (DeviceState(this@DownloadService).account()?.optLong("id") != owner) { repo.detachService(); withContext(Dispatchers.Main) { stopSelf(startId) }; return@launch }
         val key = intent?.getStringExtra("key").orEmpty()
         when (intent?.action) { "PAUSE" -> repo.pause(key); "RESUME" -> repo.resume(key); "CANCEL" -> repo.cancel(key) }
         repo.runNext { }
         withContext(Dispatchers.Main) { if (repository !== repo || observer?.isActive != true) {
-            repository = repo
+             repository = repo
             DownloadNotifications.clear(this@DownloadService, owner)
             notifications = DownloadNotifications(this@DownloadService, owner).also { it.seed(repo.state.value.tasks) }
             startForeground(DownloadNotifications.SUMMARY_ID, notifications!!.summary(repo.state.value.tasks))
@@ -267,10 +267,10 @@ class DownloadService : Service() {
                     }
                 }
             }
-        } }
+        }; accepted = true }
         } catch (e: CancellationException) { throw e }
           catch (_: Exception) { withContext(Dispatchers.Main) { stopSelf(startId) } }
-          finally { starts.unlock() }
+          finally { if (!accepted) leased?.detachService(); starts.unlock() }
         }
         return START_NOT_STICKY
     }

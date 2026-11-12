@@ -87,6 +87,8 @@ class MainActivity : ComponentActivity() {
         .memoryCache { coil.memory.MemoryCache.Builder(applicationContext).maxSizeBytes(4 * 1024 * 1024).build() }.build() }
     private val images by imagesDelegate
     private var downloads: DownloadRepository? = null
+    private var downloadsAttached = false
+    private fun detachDownloads() { if (downloadsAttached) { downloads?.detachUi(); downloadsAttached = false } }
     private var downloadWatch: Job? = null
     private var downloadTasks by mutableStateOf(emptyList<DownloadTask>())
     private var updatesOpen by mutableStateOf(false)
@@ -129,6 +131,7 @@ class MainActivity : ComponentActivity() {
     }
     private var lastCatalogueAt = 0L
     private var destinationDialog by mutableStateOf(false)
+    private var destinationRevision by mutableIntStateOf(0)
     private var destinationAction: (() -> Unit)? = null
     private var destinationOwner = 0L
     private val pickDownloadFolder = registerForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
@@ -136,6 +139,7 @@ class MainActivity : ComponentActivity() {
         if (uri != null && owner == account?.optLong("id")) try {
             contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION)
             getSharedPreferences("download_destination_$owner", MODE_PRIVATE).edit().putString("tree", uri.toString()).putBoolean("chosen", true).apply()
+            destinationRevision++
             destinationAction?.invoke()
         } catch (_: Exception) { toast("Folder access was not granted. Choose another folder or private storage.") }
         destinationAction = null
@@ -473,7 +477,7 @@ class MainActivity : ComponentActivity() {
         sessionGeneration++
         destinationAction = null; destinationDialog = false; destinationOwner = 0
         libraryRefresh.reset(); opsRefresh.reset(); relayRefresh.reset(); progressStores = null
-        roleVerified = false; librarySave?.cancel(); downloads?.detachUi()
+        roleVerified = false; librarySave?.cancel(); detachDownloads()
         persistNavigation()
         downloads?.pauseAll()
         downloadWatch?.cancel()
@@ -574,16 +578,17 @@ class MainActivity : ComponentActivity() {
     private suspend fun attachDownloads() {
         val user = account ?: return
         if (downloads?.owner == user.optLong("id") && downloadWatch?.isActive == true) return
-        val repo = try { withContext(Dispatchers.IO) { DeviceDownloads.forUi(this@MainActivity, api, user.optLong("id")) } }
-            catch (e: CancellationException) { throw e }
+        val leased = java.util.concurrent.atomic.AtomicReference<DownloadRepository>()
+        val repo = try { withContext(Dispatchers.IO) { DeviceDownloads.forUi(this@MainActivity, api, user.optLong("id")).also { leased.set(it) } } }
+            catch (e: CancellationException) { leased.get()?.detachUi(); throw e }
             catch (e: Exception) { toast("Downloads could not be opened; existing data was kept. ${e.message}"); return }
         if (user.optLong("id") != account?.optLong("id")) { repo.detachUi(); return }
         offline = repo.store
         val cached = getSharedPreferences("playback_${user.optLong("id")}", MODE_PRIVATE).getString("value", "{}")
-        if (downloads === repo && downloadWatch?.isActive == true) return
+        if (downloads === repo && downloadWatch?.isActive == true) { repo.detachUi(); return }
         clearedProgress.clear(); clearedProgress.addAll(journal()?.clearedTitles().orEmpty())
         playbackPrefs = runCatching { JSONObject(cached!!) }.getOrDefault(JSONObject())
-        downloads?.detachUi(); downloads = repo; downloadWatch?.cancel()
+        detachDownloads(); downloads = repo; downloadsAttached = true; downloadWatch?.cancel()
         savedVideos = repo.state.value.saved; downloadTasks = repo.state.value.tasks
         downloadWatch = scope.launch {
             lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) { repo.state.collect { snapshot ->
@@ -963,6 +968,7 @@ class MainActivity : ComponentActivity() {
             dismissButton = { androidx.compose.material3.TextButton({
                 destinationDialog = false
                 getSharedPreferences("download_destination_${user.optLong("id")}", MODE_PRIVATE).edit().remove("tree").putBoolean("chosen", true).apply()
+                destinationRevision++
                 destinationAction?.invoke(); destinationAction = null
             }) { Text("Private storage") } })
     }
@@ -1020,7 +1026,7 @@ class MainActivity : ComponentActivity() {
                 when {
                     nativeSettings == "downloads" -> DownloadSettingsScreen(NativePreferences(this@MainActivity), { nativeSettings = ""; profileOpen = true }, { scope.launch(Dispatchers.IO) { downloads?.reconcile() }; nativeSettings = ""; profileOpen = true },
                         onLocation = { destinationOwner = user.optLong("id"); destinationAction = null; destinationDialog = true },
-                        location = if (getSharedPreferences("download_destination_${user.optLong("id")}", MODE_PRIVATE).getString("tree", null) == null) "Private app storage" else "Selected folder")
+                        location = remember(destinationRevision, user.optLong("id")) { if (getSharedPreferences("download_destination_${user.optLong("id")}", MODE_PRIVATE).getString("tree", null) == null) "Private app storage" else "Selected folder" })
                     nativeSettings == "playback" -> PlaybackPreferencesScreen(playbackPrefs, { key, value -> playerPreference(key, value) }, { nativeSettings = ""; profileOpen = true })
                     nativeSettings == "sync" -> SyncAlertsScreen(streamUser, api) { nativeSettings = ""; profileOpen = true; episodeProgressRevision++ }
                     updatesOpen -> NativeUpdateScreen(NativeUpdates.get(this@MainActivity), { NativeUpdates.get(this@MainActivity).install(this@MainActivity) }, { updatesOpen = false })
@@ -1034,7 +1040,7 @@ class MainActivity : ComponentActivity() {
                         }, onPlayback = { nativeSettings = "playback"; profileOpen = false }, onDownloadSettings = { nativeSettings = "downloads"; profileOpen = false }, onAbout = { about = true }, onSync = { nativeSettings = "sync"; profileOpen = false }, onPassword = { passwordOpen = true })
                     downloadsOpen -> DownloadsScreen(savedVideos, { item ->
                         val title = library?.titles?.firstOrNull { it.id == item.titleId }
-                        val stored = title ?: item.titleMetadata()
+                        val stored = title?.takeIf { candidate -> item.season <= 0 || candidate.episodes.any { item.key == "${candidate.id}_${it.id}" } } ?: item.titleMetadata()
                         play(stored, stored.episodes.firstOrNull { item.key.endsWith("_${it.id}") })
                     }, { item ->
                          scope.launch { try { withContext(Dispatchers.IO) { downloads?.remove(item) }; toast("Download deleted", ok = true) }
@@ -1344,7 +1350,7 @@ class MainActivity : ComponentActivity() {
                 exo.pause(); sleepDeadline = 0; resumeAfterBackground = false; controls = true; persistNavigation()
             }
         }
-        LaunchedEffect(exo, inPip) {
+        LaunchedEffect(exo, inPip, compact) {
             lifecycle.repeatOnLifecycle(if (inPip) Lifecycle.State.STARTED else Lifecycle.State.RESUMED) { while (true) {
                 delay(if (controls || compact) 500 else 1500)
                 duration = exo.duration.coerceAtLeast(0)
@@ -1355,21 +1361,23 @@ class MainActivity : ComponentActivity() {
                 playingNow = exo.isPlaying
             } }
         }
-        LaunchedEffect(exo) {
-            while (true) {
+        LaunchedEffect(exo, inPip) {
+            lifecycle.repeatOnLifecycle(if (inPip) Lifecycle.State.STARTED else Lifecycle.State.RESUMED) { while (true) {
                 delay(15000)
                 if (exo.isPlaying && title.id !in clearedProgress) recordProgress(title.id, ep?.id, exo.currentPosition / 1000, exo.duration.coerceAtLeast(0) / 1000)
-            }
+            } }
         }
         LaunchedEffect(controls, desiredPlay, interaction, touching, seekPreview != null, showTracks, showEpisodes, showSettings, showSleep, appearance.controlsSeconds, ended, error) {
             if (controls && !touching && !ended && error.isBlank() && controlsShouldHide(desiredPlay, buffering, seekPreview != null, showTracks || showEpisodes || showSettings || showSleep, appearance.controlsSeconds)) {
                 delay(controlDelayMillis(appearance.controlsSeconds)); controls = false
             }
         }
-        LaunchedEffect(ended, autoplay, cancelNext) {
+        LaunchedEffect(ended, autoplay, cancelNext, inPip) {
             if (ended && autoplay && !cancelNext && nextEpisode != null) {
-                for (seconds in 5 downTo 1) { nextCountdown = seconds; delay(1000) }
-                selectEpisode(nextEpisode)
+                lifecycle.repeatOnLifecycle(if (inPip) Lifecycle.State.STARTED else Lifecycle.State.RESUMED) {
+                    for (seconds in 5 downTo 1) { nextCountdown = seconds; delay(1000) }
+                    selectEpisode(nextEpisode)
+                }
             }
         }
         BoxWithConstraints(Modifier.fillMaxSize().background(if (compact) Pts.card else Color.Black)) {
@@ -1395,28 +1403,30 @@ class MainActivity : ComponentActivity() {
                      setShutterBackgroundColor(android.graphics.Color.TRANSPARENT)
                       layoutParams = FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
                       addOnLayoutChangeListener { _, _, _, _, _, _, _, _, _ -> updatePipParameters() }
-                 } }, onRelease = { view -> view.player = null }, update = { view ->
-                      nativeView[0] = view
-                      pipVideoView = view.videoSurfaceView ?: view
-                     if (view.player !== exo) view.player = exo
-                     view.keepScreenOn = playingNow || buffering
-                      view.resizeMode = if (fill) AspectRatioFrameLayout.RESIZE_MODE_ZOOM else AspectRatioFrameLayout.RESIZE_MODE_FIT
-                        if (captionStyle[0]?.first !== view || captionStyle[0]?.second != appearance) view.subtitleView?.apply {
-                           setFractionalTextSize(.0533f * appearance.subtitleSize)
-                           setApplyEmbeddedStyles(false)
-                           setStyle(androidx.media3.ui.CaptionStyleCompat(
-                               when (appearance.subtitleColor) { "yellow" -> android.graphics.Color.YELLOW; "cyan" -> android.graphics.Color.CYAN; else -> android.graphics.Color.WHITE },
-                               android.graphics.Color.TRANSPARENT, android.graphics.Color.TRANSPARENT,
-                                if (appearance.outline) androidx.media3.ui.CaptionStyleCompat.EDGE_TYPE_OUTLINE else androidx.media3.ui.CaptionStyleCompat.EDGE_TYPE_NONE,
-                                android.graphics.Color.BLACK, null))
+                  } }, onRelease = { view -> view.player = null }, update = { view ->
+                        nativeView[0] = view
+                        pipVideoView = view.videoSurfaceView ?: view
+                        if (view.player !== exo) view.player = exo
+                        view.keepScreenOn = playingNow || buffering
+                        view.resizeMode = if (fill) AspectRatioFrameLayout.RESIZE_MODE_ZOOM else AspectRatioFrameLayout.RESIZE_MODE_FIT
+                        if (captionStyle[0]?.first !== view || captionStyle[0]?.second != appearance) {
+                            view.subtitleView?.apply {
+                                setFractionalTextSize(.0533f * appearance.subtitleSize)
+                                setApplyEmbeddedStyles(false)
+                                setStyle(androidx.media3.ui.CaptionStyleCompat(
+                                    when (appearance.subtitleColor) { "yellow" -> android.graphics.Color.YELLOW; "cyan" -> android.graphics.Color.CYAN; else -> android.graphics.Color.WHITE },
+                                    android.graphics.Color.TRANSPARENT, android.graphics.Color.TRANSPARENT,
+                                    if (appearance.outline) androidx.media3.ui.CaptionStyleCompat.EDGE_TYPE_OUTLINE else androidx.media3.ui.CaptionStyleCompat.EDGE_TYPE_NONE,
+                                    android.graphics.Color.BLACK, null))
+                            }
                             captionStyle[0] = view to appearance
                         }
-                     if (view.tag !== exo) {
-                         view.tag = exo
-                         // Decode only after the native surface has dimensions. A new source
-                         // gets its own view; the old surface is explicitly detached on release.
-                          view.doOnLayout { if (view.player === exo) { exo.prepare(); exo.playWhenReady = startPlaying; updatePipParameters() } }
-                     }
+                        if (view.tag !== exo) {
+                            view.tag = exo
+                            // Decode only after the native surface has dimensions. A new source
+                            // gets its own view; the old surface is explicitly detached on release.
+                            view.doOnLayout { if (view.player === exo) { exo.prepare(); exo.playWhenReady = startPlaying; updatePipParameters() } }
+                        }
                     }, modifier = Modifier.fillMaxSize().graphicsLayer { scaleX = if (compact) 1f else zoom; scaleY = if (compact) 1f else zoom }) }
                    }
                    PlayerGestures(this@MainActivity, exo.currentPosition, duration,
@@ -1458,8 +1468,8 @@ class MainActivity : ComponentActivity() {
                  }
               } }
              if (!landscape) {
-             if (!hevcAvailable) PtsErrorBanner("This device may not support HEVC playback", modifier = Modifier.padding(12.dp))
-               androidx.compose.foundation.lazy.LazyColumn(Modifier.weight(1f).windowInsetsPadding(WindowInsets.navigationBars).background(Pts.bg), contentPadding = PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(9.dp)) {
+                  if (!hevcAvailable) { PtsErrorBanner("This device may not support HEVC playback", modifier = Modifier.padding(12.dp)) }
+                  androidx.compose.foundation.lazy.LazyColumn(Modifier.weight(1f).windowInsetsPadding(WindowInsets.navigationBars).background(Pts.bg), contentPadding = PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(9.dp)) {
                   item { Text(title.title, style = MaterialTheme.typography.titleLarge, color = Pts.text) }
                    ep?.let { item { Text("S${it.season}E${it.episode} · ${it.title.ifBlank { "Episode ${it.episode}" }}", style = MaterialTheme.typography.bodySmall, color = Pts.muted) } }
                    item { Text("Description", style = MaterialTheme.typography.titleMedium, color = Pts.text) }
@@ -1628,7 +1638,7 @@ class MainActivity : ComponentActivity() {
     }
 
     override fun onDestroy() {
-        downloadWatch?.cancel(); downloads?.detachUi(); if (imagesDelegate.isInitialized()) images.shutdown()
+        downloadWatch?.cancel(); detachDownloads(); if (imagesDelegate.isInitialized()) images.shutdown()
         DurableWork.scope.launch { DeviceDownloads.trimInactive() }
         super.onDestroy()
     }

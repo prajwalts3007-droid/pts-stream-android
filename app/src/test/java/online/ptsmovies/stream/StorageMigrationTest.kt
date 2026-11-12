@@ -11,6 +11,8 @@ import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 import java.io.File
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.runBlocking
 
 /** Host Android runtime tests only: no emulator, no production account or media. */
 @RunWith(RobolectricTestRunner::class)
@@ -96,5 +98,26 @@ class StorageMigrationTest {
         try { DownloadRepository(context, PtsApi("https://example.invalid", CookieJar.NO_COOKIES), owner, foreground = {}); fail("Expected explicit migration failure") }
         catch (_: IllegalArgumentException) { }
         assertEquals(source, prefs.getString("jobs", null)); assertNull(StateDatabase.get(context).read(owner, "download_queue"))
+    }
+    @Test fun repositoryIsNotReleasedWhileAnyUiOwnerIsAttached() = runBlocking(Dispatchers.IO) {
+        val repo = DownloadRepository(context, PtsApi("https://example.invalid", CookieJar.NO_COOKIES), 71012, foreground = {})
+        repo.attachUi(); repo.attachUi()
+        assertFalse(repo.releaseIfIdle()); repo.detachUi(); assertFalse(repo.releaseIfIdle())
+        repo.detachUi(); assertTrue(repo.releaseIfIdle())
+    }
+    @Test fun serviceOwnershipPreventsReclamationUntilDetached() = runBlocking(Dispatchers.IO) {
+        val repo = DownloadRepository(context, PtsApi("https://example.invalid", CookieJar.NO_COOKIES), 71013, foreground = {})
+        repo.attachService(); assertFalse(repo.releaseIfIdle())
+        repo.detachService(); assertTrue(repo.releaseIfIdle())
+    }
+    @Test fun bulkEnqueuePersistsOneCheckpointAndSharesMetadata() = runBlocking(Dispatchers.IO) {
+        val owner = 71014L; val db = StateDatabase.get(context)
+        val repo = DownloadRepository(context, PtsApi("https://example.invalid", CookieJar.NO_COOKIES), owner, foreground = {})
+        db.writableDatabase.execSQL("CREATE TABLE fixture_queue_writes (value INTEGER)")
+        db.writableDatabase.execSQL("CREATE TRIGGER fixture_queue_checkpoint AFTER INSERT ON documents WHEN NEW.owner=$owner AND NEW.name='download_queue' BEGIN INSERT INTO fixture_queue_writes VALUES(1); END")
+        val title = title(1); repo.enqueueSeason(title, title.episodes)
+        assertEquals(24, repo.state.value.tasks.size)
+        db.readableDatabase.rawQuery("SELECT count(*) FROM fixture_queue_writes", null).use { assertTrue(it.moveToFirst()); assertEquals(1, it.getInt(0)) }
+        assertFalse(repo.releaseIfIdle()); repo.pauseAll(); assertTrue(repo.releaseIfIdle())
     }
 }

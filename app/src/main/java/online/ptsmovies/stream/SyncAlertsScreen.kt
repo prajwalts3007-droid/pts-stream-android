@@ -17,10 +17,12 @@ import androidx.core.content.ContextCompat
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import org.json.JSONObject
+import androidx.lifecycle.repeatOnLifecycle
 
 @Composable
 fun SyncAlertsScreen(user: JSONObject, api: PtsApi, onBack: () -> Unit) {
     val context = LocalContext.current
+    val lifecycle = androidx.lifecycle.compose.LocalLifecycleOwner.current.lifecycle
     val owner = user.optLong("id")
     val progress = remember(owner) { EpisodeProgress(context, owner) }
     val alerts = remember(owner) { context.getSharedPreferences("job_alerts_$owner",0) }
@@ -34,7 +36,7 @@ fun SyncAlertsScreen(user: JSONObject, api: PtsApi, onBack: () -> Unit) {
         catch (_: Exception) { alertStatus = "Android could not start live alerts. Keep the app in the foreground and try again." }
     }
     val permission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { allowed -> if (allowed) start() else alertStatus = "Notification permission is required for live alerts" }
-    LaunchedEffect(owner) { while (true) { status = progress.status(); running = alerts.getBoolean("running",false) && System.currentTimeMillis() - alerts.getLong("heartbeat",0) < 90000; alertStatus = alerts.getString("status","Stopped") ?: "Stopped"; delay(3000) } }
+    LaunchedEffect(owner, lifecycle) { lifecycle.repeatOnLifecycle(androidx.lifecycle.Lifecycle.State.STARTED) { while (true) { status = progress.status(); running = alerts.getBoolean("running",false) && System.currentTimeMillis() - alerts.getLong("heartbeat",0) < 90000; alertStatus = alerts.getString("status","Stopped") ?: "Stopped"; delay(3000) } } }
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
         PtsSecondaryButton("Back", onClick = onBack)
         PtsPage("Sync & alerts")

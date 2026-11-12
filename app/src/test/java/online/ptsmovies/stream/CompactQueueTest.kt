@@ -26,10 +26,21 @@ class CompactQueueTest {
         assertEquals(task.destination, parseQueue(compactQueue(listOf(task))).single().destination)
         assertNull(parseQueue(compactQueue(listOf(task.copy(destination = null)))).single().destination)
     }
+    @Test fun mixedOldAndNewShowSnapshotsKeepEveryQueuedEpisode() {
+        val full = title(); val short = full.copy(episodes = full.episodes.take(1))
+        val tasks = listOf(DownloadTask(short, short.episodes.first()), DownloadTask(full, full.episodes.last()))
+        val legacy = parseQueue(JSONArray(tasks.map { it.json() }).toString())
+        val compact = parseQueue(compactQueue(tasks))
+        listOf(legacy, compact).forEach { rows -> assertEquals(193, rows.first().title.episodes.size); assertSame(rows.first().title, rows.last().title); assertEquals(193L, rows.last().episode?.id) }
+    }
     @Test(expected = IllegalArgumentException::class) fun unknownVersionIsRejectedRatherThanErasingQueue() { parseQueue("{\"version\":99,\"titles\":{},\"tasks\":[]}") }
     @Test fun obsoleteSearchStopsCooperatively() {
         var checks = 0
         try { searchLibrary(indexLibrary(listOf(title())), "unmatched words", LibrarySort.RELEVANCE) { checks++; if (checks > 3) throw java.util.concurrent.CancellationException() }; fail("Expected cancellation") } catch (_: java.util.concurrent.CancellationException) { }
         assertEquals(4, checks)
+    }
+    @Test fun offlineEpisodeCanPlayEvenIfNewCatalogueNoLongerListsIt() {
+        val saved = SavedVideo("1_193", 1, "Synthetic", 1, 193, "Episode 193", 10, java.io.File("unused-fixture"), metadata = title().copy(episodes = emptyList()))
+        assertEquals(193L, saved.titleMetadata().episodes.single().id)
     }
 }

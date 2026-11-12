@@ -21,6 +21,8 @@ class ApiContractTest {
     private val movie = Title(90001, "movie", "Synthetic rights-cleared fixture", 2026, "", "", emptyList(), emptyList(), "hevc", "mp4")
 
     @Before fun setup() {
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        listOf(90001L, 90002L, 90003L, 90004L, 90020L, 90021L, 90022L, 90023L, 90030L, 90031L, 90032L, 90033L, 90034L, 90035L, 90036L, 90037L, 90092L).forEach { clearFixtureDatabase(context, it) }
         server = MockWebServer()
         server.start()
         val baseUrl = server.url("/").toString()

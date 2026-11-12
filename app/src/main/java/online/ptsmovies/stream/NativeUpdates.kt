@@ -16,6 +16,7 @@ import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.first
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import org.json.JSONArray
@@ -36,6 +37,8 @@ class NativeUpdates internal constructor(private val context: Context, private v
     var channel by mutableStateOf(prefs.getString("channel", if (BuildConfig.IS_PRERELEASE) "test" else "stable") ?: "stable")
         private set
     private var monitor: Job? = null
+    private val visible = MutableStateFlow(false)
+    internal fun setVisible(value: Boolean) { visible.value = value }
     init {
         runCatching {
             val raw = JSONObject(prefs.getString("candidate", "")!!)
@@ -87,6 +90,7 @@ class NativeUpdates internal constructor(private val context: Context, private v
             var previousTime = android.os.SystemClock.elapsedRealtime()
             try {
                 while (true) {
+                    visible.first { it }
                     val result = withContext(Dispatchers.IO) {
                         manager.query(DownloadManager.Query().setFilterById(id))?.use { cursor ->
                             check(cursor.moveToFirst()) { "Update download no longer exists. Check and download again." }
@@ -137,6 +141,13 @@ class NativeUpdates internal constructor(private val context: Context, private v
 
 @Composable
 fun NativeUpdateScreen(controller: NativeUpdates, onInstall: () -> Unit, onBack: () -> Unit) {
+    val lifecycle = androidx.lifecycle.compose.LocalLifecycleOwner.current.lifecycle
+    DisposableEffect(controller, lifecycle) {
+        val observer = androidx.lifecycle.LifecycleEventObserver { _, _ -> controller.setVisible(lifecycle.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.STARTED)) }
+        controller.setVisible(lifecycle.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.STARTED))
+        lifecycle.addObserver(observer)
+        onDispose { lifecycle.removeObserver(observer); controller.setVisible(false) }
+    }
     val state by controller.state.collectAsState()
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
         PtsSecondaryButton("Back", onClick = onBack)

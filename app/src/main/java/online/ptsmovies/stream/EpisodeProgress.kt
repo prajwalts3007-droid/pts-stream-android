@@ -47,10 +47,14 @@ class EpisodeProgress(private val context: Context, val owner: Long) {
     companion object {
         private val locks = java.util.concurrent.ConcurrentHashMap<Long, Any>()
         private val syncLocks = java.util.concurrent.ConcurrentHashMap<Long, Mutex>()
+        private val snapshots = java.util.concurrent.ConcurrentHashMap<Long, RecordSnapshot>()
+        fun trimInactive(owner: Long?) { snapshots.keys.removeIf { it != owner } }
     }
     private val legacy = ProgressJournal(context, owner)
     private data class RecordSnapshot(val source: String?, val records: List<JSONObject>)
-    @Volatile private var parsed = RecordSnapshot(null, emptyList())
+    private var parsed: RecordSnapshot
+        get() = snapshots[owner] ?: RecordSnapshot(null, emptyList())
+        set(value) { snapshots[owner] = value }
     private var completionSource: List<JSONObject>? = null
     private var completionLegacy = emptySet<String>()
     private var completionSnapshot = emptySet<String>()

@@ -19,19 +19,27 @@ data class MetadataMatch(val provider: String, val id: String, val name: String,
 }
 data class EpisodeNames(val source: MetadataMatch, val episodes: List<EpisodeName>)
 fun encodeMetadata(value: String): String = java.net.URLEncoder.encode(value, "UTF-8")
+private val metadataPunctuation = Regex("\\p{M}|[^\\p{L}\\p{N}]")
+private val episodePrefix = Regex("(?i)^(?:(?:s\\d+\\s*)?e(?:p(?:isode)?)?\\s*\\d+|episode\\s*\\d+)\\s*[-–—:·.]*\\s*")
+private val episodeNumberOnly = Regex("(?i)^s\\d+e\\d+$")
 fun normalizedName(value: String) = java.text.Normalizer.normalize(value, java.text.Normalizer.Form.NFKD)
-    .lowercase(java.util.Locale.ROOT).replace(Regex("\\p{M}|[^\\p{L}\\p{N}]"), "")
+    .lowercase(java.util.Locale.ROOT).replace(metadataPunctuation, "")
 
 fun isGeneratedEpisodeName(name: String, series: String): Boolean {
-    val trimmed = name.replace(Regex("(?i)^(?:(?:s\\d+\\s*)?e(?:p(?:isode)?)?\\s*\\d+|episode\\s*\\d+)\\s*[-–—:·.]*\\s*"), "")
-    return name.isBlank() || trimmed.isBlank() || normalizedName(trimmed) == normalizedName(series) || Regex("(?i)^s\\d+e\\d+$").matches(name.trim())
+    val trimmed = name.replace(episodePrefix, "")
+    return name.isBlank() || trimmed.isBlank() || normalizedName(trimmed) == normalizedName(series) || episodeNumberOnly.matches(name.trim())
 }
 
-fun applyEpisodeNames(title: Title, metadata: EpisodeNames?, previous: EpisodeNames? = null): Title = if (metadata == null) title else title.copy(episodes = title.episodes.map { ep ->
-    val match = metadata.episodes.singleOrNull { it.season == ep.season && it.episode == ep.episode }
-    val imported = previous?.episodes?.singleOrNull { it.season == ep.season && it.episode == ep.episode }
+fun applyEpisodeNames(title: Title, metadata: EpisodeNames?, previous: EpisodeNames? = null): Title {
+    if (metadata == null) return title
+    fun index(names: List<EpisodeName>) = names.groupBy { it.season to it.episode }.mapValues { it.value.singleOrNull() }
+    val names = index(metadata.episodes); val old = previous?.let { index(it.episodes) }.orEmpty()
+    return title.copy(episodes = title.episodes.map { ep ->
+    val match = names[ep.season to ep.episode]
+    val imported = old[ep.season to ep.episode]
     if (match == null || (!isGeneratedEpisodeName(ep.title, title.title) && ep.title != imported?.name)) ep else ep.copy(title = match.name, description = ep.description.ifBlank { match.description })
 })
+}
 
 fun parseTvmazeNames(array: JSONArray): List<EpisodeName> = (0 until array.length()).mapNotNull { i ->
     val ep = array.getJSONObject(i); val s = ep.optInt("season"); val e = ep.optInt("number"); val name = ep.optString("name")

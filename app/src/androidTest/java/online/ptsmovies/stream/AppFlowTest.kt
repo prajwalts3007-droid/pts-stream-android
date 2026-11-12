@@ -139,6 +139,8 @@ class AppFlowTest {
         val baseUrl = server.url("/").toString()
         ApiProvider.override = { PtsApi(baseUrl, CookieJar.NO_COOKIES) }
         val context = InstrumentationRegistry.getInstrumentation().targetContext
+        clearFixtureDatabase(context, 90011)
+        context.getSharedPreferences("download_destination_90011", 0).edit().remove("tree").putBoolean("chosen", true).commit()
         DeviceState(context).clearSession()
         context.getSharedPreferences("native_ui", 0).edit().putString("theme", "dark").remove("view_Movies").remove("view_Series").apply()
         context.getSharedPreferences("download_jobs_90011", 0).edit().clear().commit()
@@ -245,6 +247,18 @@ class AppFlowTest {
         }
         image.recycle()
         return hues
+    }
+
+    @Test fun firstManualDownloadAsksForLocationWithoutMovingExistingMedia() {
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        context.getSharedPreferences("download_destination_90011", 0).edit().clear().commit()
+        launchLoggedIn(); openMovie()
+        ui.onNodeWithText("Save offline").performScrollTo().performClick()
+        waitForText("Download location")
+        ui.onNodeWithText("Choose folder").assertExists()
+        ui.onNodeWithText("Private storage").performClick()
+        ui.waitUntil(20000) { context.getSharedPreferences("download_destination_90011", 0).getBoolean("chosen", false) }
+        assertNull(context.getSharedPreferences("download_destination_90011", 0).getString("tree", null))
     }
 
     @Test fun viewerLoginNavigationAndRecreation() {

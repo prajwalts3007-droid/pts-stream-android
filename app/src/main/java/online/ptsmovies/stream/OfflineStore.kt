@@ -23,8 +23,11 @@ data class SavedVideo(val key: String, val titleId: Long, val title: String, val
                       val episode: Int, val label: String, val bytes: Long, val file: File,
                       val poster: File? = null, val metadata: Title? = null, val documentUri: String? = null) {
     fun playbackUri(): String = documentUri ?: file.toURI().toString()
-    fun titleMetadata(): Title = metadata ?: Title(titleId, if (season > 0) "series" else "movie", title, 0, "", "", emptyList(),
-        if (season > 0) listOf(Episode(key.substringAfter('_').toLong(), season, episode, label, 0.0, "mp4")) else emptyList(), "hevc", "mp4")
+    fun titleMetadata(): Title {
+        val local = if (season > 0) Episode(key.substringAfter('_').toLong(), season, episode, label, 0.0, "mp4", size = bytes) else null
+        val base = metadata ?: Title(titleId, if (season > 0) "series" else "movie", title, 0, "", "", emptyList(), emptyList(), "hevc", "mp4")
+        return if (local != null && base.episodes.none { it.id == local.id }) base.copy(episodes = base.episodes + local) else base
+    }
 }
 data class TransferProgress(val bytes: Long, val total: Long, val speed: Long) {
     val percent: Int get() = if (total > 0) (bytes * 100 / total).toInt().coerceIn(0, 100) else 0
@@ -256,7 +259,11 @@ class OfflineStore(private val context: Context, private val api: PtsApi, privat
         } catch (_: Exception) { /* Poster failure never destroys a completed media transfer. */ }
     }
 
-    fun usedBytes(): Long = (root.listFiles()?.sumOf { if (it.isFile) it.length() else 0L } ?: 0L) + list().filter { it.documentUri != null }.sumOf { it.bytes }
+    fun usedBytes(): Long {
+        val rows = JSONArray(database.read(ownerId, "offline_index") ?: "[]")
+        val shared = (0 until rows.length()).sumOf { i -> rows.getJSONObject(i).let { if (it.optString("document_uri").isNotBlank()) it.optLong("bytes") else 0L } }
+        return (root.listFiles()?.sumOf { if (it.isFile) it.length() else 0L } ?: 0L) + shared
+    }
     fun freeBytes(): Long = (root.usableSpace - 64L * 1024 * 1024).coerceAtLeast(0)
     suspend fun hydrate(titles: List<Title>) = withContext(Dispatchers.IO) {
         val savedIds = list().map { it.titleId }.toSet()

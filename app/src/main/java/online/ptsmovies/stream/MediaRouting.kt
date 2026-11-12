@@ -17,7 +17,10 @@ class PtsApplication : Application() {
     override fun onCreate() { super.onCreate(); environment = applicationContext }
     override fun onTrimMemory(level: Int) {
         super.onTrimMemory(level); PosterImages.trim(level)
-        if (level >= TRIM_MEMORY_UI_HIDDEN) DurableWork.scope.launch { DeviceDownloads.trimInactive(); StateDatabase.get(this@PtsApplication).trim(DeviceState(this@PtsApplication).account()?.optLong("id")) }
+        if (level >= TRIM_MEMORY_UI_HIDDEN) DurableWork.scope.launch {
+            val owner = DeviceState(this@PtsApplication).account()?.optLong("id")
+            DeviceDownloads.trimInactive(); StateDatabase.get(this@PtsApplication).trim(owner); EpisodeProgress.trimInactive(owner)
+        }
     }
     companion object { @Volatile var environment: Context? = null; private set }
 }
