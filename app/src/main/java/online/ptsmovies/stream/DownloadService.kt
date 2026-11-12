@@ -51,7 +51,8 @@ class DownloadRepository internal constructor(private val context: Context, priv
     private val uiOwners = java.util.concurrent.atomic.AtomicInteger()
     fun attachUi() { uiOwners.incrementAndGet() }
     fun detachUi() { uiOwners.updateAndGet { (it - 1).coerceAtLeast(0) } }
-    fun attachService() = synchronized(lock) { statusCallback = {} }
+    private val serviceOwners = java.util.concurrent.atomic.AtomicInteger()
+    fun attachService() { serviceOwners.incrementAndGet(); synchronized(lock) { statusCallback = {} } }
     fun releaseIfIdle(): Boolean = synchronized(lock) {
         if (uiOwners.get() > 0 || statusCallback != null || jobs.isNotEmpty() || mutable.value.tasks.any { transferIsActive(it.status) }) false
         else { scope.cancel(); true }
@@ -141,8 +142,9 @@ class DownloadRepository internal constructor(private val context: Context, priv
     }
     /** Clears ownership synchronously; persistence runs on process work, not a scope teardown may cancel. */
     fun detachService() {
+        if (serviceOwners.updateAndGet { (it - 1).coerceAtLeast(0) } > 0) return
         statusCallback = null
-        DurableWork.scope.launch { if (statusCallback == null) pauseAll() }
+        DurableWork.scope.launch { if (serviceOwners.get() == 0) pauseAll() }
     }
     fun remove(saved: SavedVideo) { if (offMain { remove(saved) }) return; store.remove(saved); DownloadNotifications.remove(context, owner, saved.key); update { s -> s.copy(saved = store.list(), tasks = s.tasks.filterNot { it.key == saved.key }) } }
     fun refresh() { if (offMain { refresh() }) return; update { it.copy(saved = store.list()) } }

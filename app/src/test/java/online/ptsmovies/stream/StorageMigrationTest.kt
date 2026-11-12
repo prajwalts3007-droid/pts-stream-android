@@ -124,9 +124,11 @@ class StorageMigrationTest {
         val repo = DownloadRepository(context, PtsApi("https://example.invalid", CookieJar.NO_COOKIES), owner, foreground = {})
         val title = title(1); repo.enqueueSeason(title, title.episodes.take(1))
         repo.attachService(); repo.detachService(); repo.attachService()
-        delay(300)
+        delay(500)
         assertEquals("queued", repo.state.value.tasks.single().status)
         repo.detachService()
+        withTimeout(5_000) { while (!repo.releaseIfIdle()) delay(20) }
+        assertTrue(repo.releaseIfIdle())
     }
     @Test fun bulkEnqueuePersistsOneCheckpointAndSharesMetadata() = runBlocking(Dispatchers.IO) {
         val owner = 71014L; val db = StateDatabase.get(context)
