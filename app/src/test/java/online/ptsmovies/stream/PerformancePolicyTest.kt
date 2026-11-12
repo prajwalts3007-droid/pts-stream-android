@@ -44,7 +44,7 @@ class PerformancePolicyTest {
         val cache = LibraryIndexCache(); val first = cache.get(listOf(title()))
         val changed = title().let { it.copy(episodes = it.episodes.map { ep -> ep.copy(title = "Changed ${ep.episode}") }) }
         assertNotSame(first, cache.get(listOf(changed)))
-        assertTrue(searchLibrary(cache.get(listOf(changed)), "Changed").isNotEmpty())
+        assertTrue(searchLibrary(cache.get(listOf(changed)), "Changed", LibrarySort.RELEVANCE).isNotEmpty())
     }
     @Test fun cacheIsBoundedAndLeastRecentlyUsed() = runBlocking {
         val builds = AtomicInteger(); val cache = LibraryIndexCache(2) { builds.incrementAndGet(); indexLibrary(it) }
