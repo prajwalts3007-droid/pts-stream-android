@@ -132,4 +132,13 @@ class LayoutPolishTest {
         ui.waitForIdle()
         assertEquals(1, starts.get()); assertEquals(0, disposes.get())
     }
+
+    @Test fun queueShowsApiEtaAndSpeedWithoutChangingJobActions() {
+        val job = org.json.JSONObject("""{"job_id":"fixture","title":"Synthetic transfer","stage":"downloading","progress":42,"speed_bps":1048576,"eta_seconds":90}""")
+        ui.setContent { PtsTheme("dark") { QueueScreen(listOf(job),emptyList(),"downloading",{},{},{},{_,_->}) } }
+        ui.onNodeWithText("ETA 1m").assertExists()
+        ui.onNodeWithText("1.0 MB/s").assertExists()
+        ui.onNodeWithContentDescription("Change download link").assertExists()
+        ui.onNodeWithContentDescription("Remove").assertExists()
+    }
 }

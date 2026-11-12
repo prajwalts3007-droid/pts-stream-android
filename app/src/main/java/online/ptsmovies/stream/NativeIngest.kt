@@ -16,6 +16,7 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.*
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
@@ -24,6 +25,7 @@ import org.json.JSONObject
 @Composable
 fun NativeIngest(api: PtsApi, query: String, onQuery: (String) -> Unit, results: List<JSONObject>, searching: Boolean, onQueued: () -> Unit, searchError: String = "") {
     val scope = rememberCoroutineScope(); val context = LocalContext.current
+    val latestQuery = rememberUpdatedState(query)
     var selected by remember { mutableStateOf<JSONObject?>(null) }
     var rows by remember { mutableStateOf(emptyList<IngestEpisode>()) }
     var season by remember { mutableStateOf("1") }; var count by remember { mutableStateOf("1") }
@@ -53,7 +55,8 @@ fun NativeIngest(api: PtsApi, query: String, onQuery: (String) -> Unit, results:
             try {
                 val bytes = withContext(Dispatchers.IO) { context.contentResolver.openInputStream(uri)!!.use { it.readBytesBounded(2 * 1024 * 1024) } }
                 import(bytes.toString(Charsets.UTF_8))
-            } catch (e: Exception) { error = e.message.orEmpty() }
+            } catch (e: CancellationException) { throw e }
+            catch (e: Exception) { error = e.message.orEmpty() }
         }
     }
     fun submit(payload: JSONObject) {
@@ -69,7 +72,8 @@ fun NativeIngest(api: PtsApi, query: String, onQuery: (String) -> Unit, results:
                 if (e.status == 409 && !payload.optBoolean("force") && duplicates != null && duplicates.length() > 0) {
                     duplicate = payload to (0 until duplicates.length()).joinToString("\n") { val d = duplicates.getJSONObject(it); "${d.optString("label")} — ${d.optString("where")}" }
                 } else error = e.message.orEmpty()
-            } catch (e: Exception) { error = e.message.orEmpty() }
+            } catch (e: CancellationException) { throw e }
+            catch (e: Exception) { error = e.message.orEmpty() }
             finally { busy = false }
         }
     }
@@ -85,9 +89,12 @@ fun NativeIngest(api: PtsApi, query: String, onQuery: (String) -> Unit, results:
         item { PtsPage("Ingest") }
         item { PtsSearchField(query, onQuery, "Title or IMDb ID") }
         item { PtsSecondaryButton("Look up IMDb ID / URL", enabled = query.isNotBlank() && !busy) {
+            val lookupQuery = query.trim()
             busy = true; error = ""; scope.launch { try {
-                selected = api.json("/imdb/lookup?q=${java.net.URLEncoder.encode(query.trim(), "UTF-8")}").getJSONObject("title"); rows = emptyList(); movieLink = ""; zipLink = ""
-            } catch (e: Exception) { error = e.message.orEmpty() } finally { busy = false } }
+                val match = api.json("/imdb/lookup?q=${java.net.URLEncoder.encode(lookupQuery, "UTF-8")}").getJSONObject("title")
+                if (latestQuery.value.trim() == lookupQuery) { selected = match; rows = emptyList(); movieLink = ""; zipLink = "" }
+            } catch (e: CancellationException) { throw e }
+            catch (e: Exception) { if (latestQuery.value.trim() == lookupQuery) error = e.message.orEmpty() } finally { busy = false } }
         } }
         if (busy || searching) item { LinearProgressIndicator(Modifier.fillMaxWidth()) }
         if (error.isNotBlank()) item { PtsErrorBanner(error) }
@@ -106,6 +113,7 @@ fun NativeIngest(api: PtsApi, query: String, onQuery: (String) -> Unit, results:
                 PtsCard(Modifier.fillMaxWidth(), onClick = { selected = result; rows = emptyList(); movieLink = ""; zipLink = ""; error = "" }) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Box(Modifier.width(52.dp).aspectRatio(2f / 3f).clip(PosterShape).background(Pts.soft)) {
+                            Text(result.optString("title").take(1), Modifier.align(Alignment.Center), color = Pts.muted)
                             PtsPosterImage(api.imageUrl(result.optString("poster")), result.optString("title"), Modifier.fillMaxSize())
                         }
                         Column(Modifier.weight(1f).padding(start = 12.dp)) {
@@ -121,6 +129,7 @@ fun NativeIngest(api: PtsApi, query: String, onQuery: (String) -> Unit, results:
         selected?.let { title ->
             item { Row(verticalAlignment = Alignment.CenterVertically) {
                 Box(Modifier.width(52.dp).aspectRatio(2f / 3f).clip(PosterShape).background(Pts.soft)) {
+                    Text(title.optString("title").take(1), Modifier.align(Alignment.Center), color = Pts.muted)
                     PtsPosterImage(api.imageUrl(title.optString("poster")), title.optString("title"), Modifier.fillMaxSize())
                 }
                 Column(Modifier.weight(1f).padding(start = 12.dp)) { Text(title.optString("title"), color = Pts.text, style = MaterialTheme.typography.titleLarge); Text("${title.optInt("year")} · ${title.optString("type")}", color = Pts.muted) }
@@ -142,7 +151,11 @@ fun NativeIngest(api: PtsApi, query: String, onQuery: (String) -> Unit, results:
                 item { PtsField(zipLink, { zipLink = it }, "Public HTTPS ZIP link", Modifier.fillMaxWidth().testTag("ingest-zip-source")) }
                 item { PtsSecondaryButton("Inspect ZIP", enabled = !busy && zipLink.startsWith("https://")) {
                     val link = zipLink.trim(); busy = true; error = ""
-                    scope.launch { try { fill(zipEpisodeLinks(link, api.json("/queue/zip/preflight", "POST", JSONObject().put("url", link)))) }
+                    scope.launch { try {
+                        val inspected = zipEpisodeLinks(link, api.json("/queue/zip/preflight", "POST", JSONObject().put("url", link)))
+                        if (selected === title && zipLink.trim() == link) fill(inspected)
+                    }
+                    catch (e: CancellationException) { throw e }
                     catch (e: Exception) { error = e.message.orEmpty() } finally { busy = false } }
                 } }
                 item { Text("ZIP inspection checks ranges from the VPS only; the host must also allow GitHub runners. Review selected members before adding.", color = Pts.muted, style = MaterialTheme.typography.bodySmall) }

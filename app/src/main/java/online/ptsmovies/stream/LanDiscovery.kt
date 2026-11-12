@@ -20,6 +20,7 @@ import okhttp3.Call
 import okhttp3.Callback
 import okhttp3.CookieJar
 import okhttp3.Dns
+import okhttp3.Dispatcher
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.Response
@@ -123,6 +124,7 @@ internal object LanDiscovery {
             .apply { init(store) }.trustManagers.filterIsInstance<X509TrustManager>().single()
         val ssl = SSLContext.getInstance("TLS").apply { init(null, arrayOf(trust), null) }
         return OkHttpClient.Builder()
+            .dispatcher(Dispatcher().apply { maxRequests = CONCURRENCY; maxRequestsPerHost = CONCURRENCY })
             .socketFactory(network.socketFactory)
             .sslSocketFactory(ssl.socketFactory, trust)
             .cookieJar(CookieJar.NO_COOKIES)

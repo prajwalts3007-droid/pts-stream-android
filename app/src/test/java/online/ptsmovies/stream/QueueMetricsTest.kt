@@ -5,15 +5,15 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class QueueMetricsTest {
-    @Test fun reportedEtaWinsOverEstimate() {
+    @Test fun showsReportedEtaAndTransferSpeed() {
         val m = queueMetrics(JSONObject("""{"stage":"downloading","progress":50,"speed_bps":100,"file_size":10000,"eta_seconds":12}"""))
         assertEquals(12L, m.eta); assertEquals(100L, m.speed); assertTrue(m.active)
     }
-    @Test fun estimatesUseTheCorrectStageSize() {
+    @Test fun missingEtaIsNotInventedFromPotentiallyDifferentStageSizes() {
         val job = JSONObject("""{"stage":"to_pi","progress":50,"speed_bps":100,"file_size":10000,"out_size":2000}""")
-        assertEquals(10L, queueMetrics(job).eta)
+        assertNull(queueMetrics(job).eta)
         job.put("stage", "downloading")
-        assertEquals(50L, queueMetrics(job).eta)
+        assertNull(queueMetrics(job).eta)
         job.put("stage", "compressing")
         assertNull(queueMetrics(job).eta)
     }
