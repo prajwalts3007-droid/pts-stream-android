@@ -14,7 +14,7 @@ GitHub Actions builds a **debug test APK** on each commit; find it under the run
 
 Release-candidate tags (`v1-rc1`) produce a **prerelease** APK for manual testing. The native Updates page has separate Stable and Test channels; Stable excludes prereleases. RC builds default to Test; production builds default to Stable. A release-channel label is not a substitute for phone validation. Earlier builds with the old stable-only updater need one manual signed update.
 
-The v14 optimization-only stable-channel build retains the v13 layout. See [performance changes, fresh-install packaging checks and explicit device-validation limits](docs/PERFORMANCE-V14.md). The same standalone signed APK supports a fresh installation on Android 8+ or an in-place update from the existing signed app. Existing users should **not uninstall**: app-private downloads are deleted on uninstall.
+The v15 stable-channel build keeps the v13 interface and adds the requested download-location controls. It moves catalogue, queue, download-index and progress state to owner-scoped SQLite, reduces UI-thread and minimized-time work, and releases decoder/artwork/repository memory; see [performance changes and explicit device-validation limits](docs/PERFORMANCE-V15.md). v14 notes remain in [PERFORMANCE-V14.md](docs/PERFORMANCE-V14.md). The same standalone signed APK supports a fresh installation on Android 8+ or an in-place update from the existing signed app. Existing users should **not uninstall**: app-private downloads are deleted on uninstall.
 
 ## Constraints before production release
 

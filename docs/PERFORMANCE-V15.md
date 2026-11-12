@@ -72,3 +72,16 @@ improvement, runtime clean-install/upgrade, SAF provider/device test, PiP/OEM/co
 execution or pixel-perfect certification is implied by host tests. The interface
 is intentionally retained, except the requested destination controls; real-phone
 acceptance remains necessary after installation.
+
+## Published artifact (v15)
+
+- APK: https://github.com/prajwalts3007-droid/pts-stream-android/releases/download/v15/PTS-Stream-v15.apk
+- Source: `8db6e1b1ad006ff0bd12f5ae5cc09d0d64c9699c` (tag `v15`)
+- 3,793,965 bytes; SHA-256 `c4b07776413e73c3df8fe955d480e66308c763fbe6452cf51b79e344762fbf1d`
+- versionCode 15 / versionName 1.0.15, package `online.ptsmovies.stream`, API 26-35
+- Unchanged signer `96b14e2e5f2a67dbbb9b2d091c62c800ff61d0a91e5c2e234dd35a28efac4ed7`
+- 36,088 bytes (+0.96%) larger than v14: the extra storage/migration code is not an
+  optimization of APK size, and size is not evidence of runtime cost either way.
+- Host validation on the tagged commit: 100 JVM tests per variant (200 executions),
+  0 failures; lint 0 errors, 94 warnings, 1 hint per variant. Release packaging
+  report hash equals the published asset. No phone execution is claimed.
