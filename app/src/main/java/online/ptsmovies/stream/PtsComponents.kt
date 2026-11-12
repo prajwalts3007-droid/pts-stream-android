@@ -167,6 +167,7 @@ fun PtsCard(
     borderColor: Color = Pts.line,
     padding: Dp = 18.dp,
     onClick: (() -> Unit)? = null,
+    spacing: Dp = 8.dp,
     content: @Composable ColumnScope.() -> Unit
 ) {
     val shape = CardShape
@@ -180,7 +181,7 @@ fun PtsCard(
             .border(2.dp, borderColor, shape)
             .then(if (onClick != null) Modifier.clickable(interactionSource = interaction, indication = LocalIndication.current, onClick = onClick) else Modifier)
             .padding(padding),
-        verticalArrangement = Arrangement.spacedBy(8.dp),
+        verticalArrangement = Arrangement.spacedBy(spacing),
         content = content
     )
 }
@@ -552,7 +553,7 @@ fun PtsPosterShelf(label: String, titles: List<Title>, progress: Map<Long, Resum
 @Composable
 fun PtsHero(title: Title, marked: Boolean, onOpen: () -> Unit, onPlay: () -> Unit, onToggleWatch: () -> Unit) {
     BoxWithConstraints(
-        Modifier.fillMaxWidth().heightIn(min = 310.dp).clip(RoundedCornerShape(26.dp)).background(Color(0xFF201944)).clickable(onClick = onOpen)
+        Modifier.fillMaxWidth().testTag("featured-card-${title.id}").heightIn(min = 310.dp).clip(RoundedCornerShape(26.dp)).background(Color(0xFF201944)).clickable(onClick = onOpen)
             .border(2.dp, Pts.line, RoundedCornerShape(26.dp))
     ) {
         val wide = maxWidth >= 540.dp

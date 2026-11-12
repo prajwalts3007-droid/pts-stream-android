@@ -446,8 +446,9 @@ class MainActivity : ComponentActivity() {
             } catch (_: androidx.credentials.exceptions.GetCredentialCancellationException) { /* User cancelled; keep password login available. */ }
             catch (e: CancellationException) { throw e }
             catch (e: androidx.credentials.exceptions.GetCredentialException) {
-                startupError = "Google sign-in was rejected (${e.type}). Check that this app's signing certificate is registered in the Google Cloud OAuth console. Use your password meanwhile; no account was created locally."
+                startupError = "Google sign-in could not complete (${e.type}). Google Play services or the app's Android OAuth registration may need attention. You can still use your password."
             }
+            catch (e: ApiException) { startupError = "Google account sign-in failed: ${e.message.orEmpty().take(200)}" }
             catch (e: Exception) { startupError = "Google sign-in is unavailable on this device (${e.javaClass.simpleName}). Use your password; no account was created locally." }
             finally { loading = false }
         }
@@ -511,6 +512,7 @@ class MainActivity : ComponentActivity() {
         downloads?.pauseAll()
         downloadWatch?.cancel()
         searchJob?.cancel()
+        searchGeneration++; searchQuery = ""; searchResults = emptyList(); searchError = ""; searchLoading = false
         fileJob?.cancel()
         fileOperation?.cancel()
         loading = true
@@ -541,6 +543,7 @@ class MainActivity : ComponentActivity() {
     private fun restrictToStream() {
         mode = "Stream"
         fileJob?.cancel(); fileOperation?.cancel(); searchJob?.cancel(); fileGeneration++
+        searchGeneration++; searchQuery = ""; searchResults = emptyList(); searchError = ""; searchLoading = false
         fileEditor = null; fileClipboard = null; filesEntries = emptyList(); filesEntriesKey = ""; filesLoading = false
         queueJobs = emptyList(); queueDone = emptyList(); metrics = null; users = emptyList(); ops = emptyList(); relayJobs = emptyList()
         opsRefresh.reset(); relayRefresh.reset()
@@ -735,29 +738,36 @@ class MainActivity : ComponentActivity() {
 
     private fun search(query: String) {
         if (!admin()) return
+        if (query.trim() != searchQuery.trim()) searchResults = emptyList()
         searchQuery = query
+        searchError = ""
         searchJob?.cancel()
         val generation = ++searchGeneration
+        val owner = account?.optLong("id")
+        val session = sessionGeneration
+        fun current() = generation == searchGeneration && searchQuery == query && admin() && account?.optLong("id") == owner && sessionGeneration == session
         if (query.trim().length < 2) { searchResults = emptyList(); searchLoading = false; searchError = ""; return }
+        searchLoading = true
         searchJob = scope.launch {
-            delay(380)
-            searchLoading = true
             try {
+                delay(380)
                 var last: Exception? = null
                 for (attempt in 0 until 3) {
                     try {
                         val results = api.json("/imdb/search?q=${java.net.URLEncoder.encode(query.trim(), "UTF-8")}").optJSONArray("results").objects()
-                        if (generation == searchGeneration && searchQuery == query) { searchResults = results; searchError = "" }
+                        if (current()) { searchResults = results; searchError = "" }
                         return@launch
                     } catch (e: CancellationException) { throw e }
                     catch (e: Exception) {
                         last = e
-                        if (generation != searchGeneration || searchQuery != query) return@launch
+                        if (!current()) return@launch
+                        if (!retryableIngestSearch(e)) break
                         if (attempt < 2) delay(700L * (attempt + 1))
                     }
                 }
-                if (generation == searchGeneration && searchQuery == query) {
-                    searchError = "Search is temporarily unavailable (${last?.message?.take(120) ?: "no response"}). Previous results are kept."
+                if (current()) {
+                    searchError = if (last is ApiException && last.status in listOf(401, 403)) "Search access could not be verified. Sign in again."
+                    else "Search is temporarily unavailable. Try again, or look up an IMDb ID."
                 }
             } finally {
                 if (generation == searchGeneration) searchLoading = false

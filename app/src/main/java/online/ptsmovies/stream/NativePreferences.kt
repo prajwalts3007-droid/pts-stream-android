@@ -23,8 +23,6 @@ class NativePreferences(context: Context) {
     fun lanAddress(value: String) { require(isPrivateV4(value)); prefs.edit().putString("lan_address", value).apply() }
     fun lanEnabled() = prefs.getBoolean("lan_enabled", true)
     fun lanEnabled(value: Boolean) { prefs.edit().putBoolean("lan_enabled", value).apply() }
-    fun lanScanAt() = prefs.getLong("lan_scan_at", 0)
-    fun lanScanAt(value: Long) { prefs.edit().putLong("lan_scan_at", value).apply() }
     /** Server auth config survives a cold start without a network round trip. Not a secret. */
     fun googleConfig(): Pair<Boolean, String> =
         prefs.getBoolean("google_config_known", false) to (prefs.getString("google_client_id", "") ?: "")
@@ -67,7 +65,7 @@ fun DownloadSettingsScreen(preferences: NativePreferences, onBack: () -> Unit, o
         PtsField(limit, { limit = it.filter(Char::isDigit) }, "Storage limit (GiB, 0 = available space)", Modifier.fillMaxWidth())
         PreferenceSwitch("Prefer local Pi", lan) { lan = it }
         PtsField(address, { address = it.trim(); addressEdited = true }, "Pi LAN address", Modifier.fillMaxWidth())
-        Text("The Pi is found automatically on this Wi-Fi network when its address changes after a reboot. Leave the field untouched unless you want to pin a fixed address.", color = Pts.muted, style = MaterialTheme.typography.bodySmall)
+        Text("If the saved address stops responding, the app checks nearby addresses on this Wi-Fi network for the trusted Pi. You can also enter its current address manually. Internet playback remains available if discovery fails.", color = Pts.muted, style = MaterialTheme.typography.bodySmall)
         PtsPrimaryButton("Save", Modifier.fillMaxWidth(), enabled = (limit.toIntOrNull() ?: -1) in 0..10000 && isPrivateV4(address)) {
             preferences.downloads(options.copy(limitGiB = limit.toInt()))
             if (addressEdited) preferences.lanAddress(address)

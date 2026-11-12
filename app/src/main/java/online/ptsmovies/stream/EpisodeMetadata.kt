@@ -26,9 +26,8 @@ fun normalizedName(value: String) = java.text.Normalizer.normalize(value, java.t
     .lowercase(java.util.Locale.ROOT).replace(metadataPunctuation, "")
 
 /**
- * Catalogue-specific source exclusions. Peaky Blinders' TVmaze episode order
- * does not line up with the files here, so stale matches are dropped instead
- * of being re-applied on the next library refresh.
+ * User-requested source exclusions. Cached Peaky Blinders TVmaze details must
+ * not be re-applied; catalogue names remain authoritative for that source.
  */
 internal fun metadataSourceBlocked(title: String, provider: String) =
     normalizedName(title) == "peakyblinders" && provider == "TVmaze"
@@ -98,11 +97,6 @@ class EpisodeMetadata(context: Context, private val fetchOverride: ((String) -> 
             return response.body!!.byteStream().use { it.readBytesBounded(3 * 1024 * 1024).toString(Charsets.UTF_8) }
         }
     }
-    /**
-     * Catalogue-specific source exclusions. Peaky Blinders' TVmaze episode order
-     * does not line up with the files here, so stale matches are dropped instead
-     * of being silently re-applied.
-     */
     private fun blocked(title: Title, provider: String) = metadataSourceBlocked(title.title, provider)
 
     fun cached(title: Title): EpisodeNames? = runCatching {

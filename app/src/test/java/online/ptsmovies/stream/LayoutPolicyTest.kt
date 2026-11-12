@@ -13,5 +13,5 @@ class LayoutPolicyTest {
     @Test fun listModeAlwaysRemainsOneColumn() { assertEquals(1, libraryColumns(1200f, 1f, true)) }
     @Test fun tinyWindowNeverCreatesZeroGridColumns() { assertEquals(1, libraryColumns(100f, 2f, false)) }
     @Test fun miniPlayerReservesTextSpaceOnNarrowOrLargeTextScreens() { assertTrue(compactMiniActions(320f, 1f)); assertTrue(compactMiniActions(480f, 1.5f)); assertFalse(compactMiniActions(480f, 1f)) }
-    @Test fun reducedMotionRemovesCustomAnimationDurations() { assertEquals(0, motionMillis(false, 220)); assertEquals(220, motionMillis(true, 220)) }
+    @Test fun reducedMotionRemovesCustomAnimationDurations() { assertEquals(0, motionMillis(false, 220)); assertEquals(308, motionMillis(true, 220)) }
 }

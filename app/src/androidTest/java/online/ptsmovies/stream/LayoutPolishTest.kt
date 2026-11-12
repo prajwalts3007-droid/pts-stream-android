@@ -45,14 +45,16 @@ class LayoutPolishTest {
         ui.onNodeWithText("VPS").assertIsDisplayed(); ui.onNodeWithText("Raspberry Pi").assertIsDisplayed()
     }
 
-    @Test fun featuredCardAndPlayHaveSameDestinationButMyListRemainsIndependent() {
+    @Test fun featuredPosterOpensDetailsButPlayAndMyListRemainIndependent() {
         val title=Title(9,"movie","Featured example",2026,"","",emptyList(),emptyList(),"hevc","mp4")
-        var opened=0; var marked=0
-        ui.setContent { PtsTheme("dark") { PtsHero(title,false,{opened++},{opened++},{marked++}) } }
-        ui.onNodeWithText("Featured example").performClick()
+        var opened=0; var played=0; var marked=0
+        val library=Library(listOf(title),emptySet(),emptyMap())
+        ui.setContent { PtsTheme("dark") { StreamHomeScreen(library,{opened++},{played++},{marked++},{}) } }
+        ui.onNodeWithTag("featured-card-9").performClick()
+        ui.runOnIdle { assertEquals(1,opened); assertEquals(0,played) }
         ui.onNodeWithText("Play").performClick()
         ui.onNodeWithText("My list").performClick()
-        ui.runOnIdle { assertEquals(2,opened); assertEquals(1,marked) }
+        ui.runOnIdle { assertEquals(1,opened); assertEquals(1,played); assertEquals(1,marked) }
     }
 
     @Test fun libraryIconsStayBesideSearchWithoutVisibleLabels() {
@@ -78,9 +80,9 @@ class LayoutPolishTest {
         ui.runOnIdle { assertEquals("grid", view.value); assertEquals("Signal", query.value) }
     }
 
-    @Test fun homeSearchShowsOnlyItsFilterIconBesideSearch() {
-        ui.setContent { PtsTheme("dark") { Box(Modifier.width(288.dp)) { LibrarySearchBar("", {}, {}) } } }
-        ui.onNodeWithContentDescription("Library filters").assertIsDisplayed()
+    @Test fun homeSearchHasNoFilterOrViewToggle() {
+        ui.setContent { PtsTheme("dark") { StreamHomeScreen(Library(emptyList(),emptySet(),emptyMap()),{},{},{},{}) } }
+        ui.onNodeWithContentDescription("Library filters").assertDoesNotExist()
         ui.onNodeWithTag("library-view-action").assertDoesNotExist()
         ui.onNodeWithText("Relevance").assertDoesNotExist()
     }

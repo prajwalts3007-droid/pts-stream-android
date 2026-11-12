@@ -42,7 +42,7 @@ class NativeIngestTest {
         var queued = false
         ui.setContent { PtsTheme {
             val api = remember { PtsApi(base, CookieJar.NO_COOKIES) }
-            NativeIngest(api, "Generated", {}, listOf(result), false) { queued = true }
+            NativeIngest(api, "Generated", {}, listOf(result), false, onQueued = { queued = true })
         } }
         ui.onNodeWithText("Generated ingest series").performScrollTo().performClick()
         ui.onNode(hasSetTextAction() and hasAnyAncestor(hasTestTag("ingest-zip-source"))).performScrollTo().performTextReplacement("https://example.invalid/generated.zip")

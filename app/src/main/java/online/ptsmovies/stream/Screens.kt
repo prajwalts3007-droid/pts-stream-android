@@ -692,7 +692,7 @@ fun QueueScreen(
         if (visible.isEmpty()) {
             item { PtsEmpty("No ${stageName.lowercase()} jobs", icon = PtsIcons.Queue) }
         }
-        items(visible) { job ->
+        items(visible, key = { it.optString("job_id") }) { job ->
             QueueJobRow(
                 job = job,
                 onDelete = { deleteJob = job }, onRetry = { retryJob = job }, onEdit = { editJob = job }, busy = busy
@@ -721,31 +721,27 @@ private fun StageTile(label: String, count: Int, active: Boolean, stage: String,
 @Composable
 private fun QueueJobRow(job: JSONObject, onDelete: () -> Unit, onRetry: () -> Unit, onEdit: () -> Unit, busy: Boolean) {
     val stage = job.optString("stage", "queued")
-    val progress = (job.optDouble("progress", 0.0) / 100).toFloat().takeIf { it.isFinite() }?.coerceIn(0f, 1f) ?: 0f
+    val metrics = queueMetrics(job)
+    val progress = metrics.progress
     val failed = stage == "failed"
     val done = stage == "done"
-    val speed = job.optLong("speed_bps", 0).takeIf { it > 0 && !done && !failed }
-    val eta = job.optLong("eta_seconds", 0).takeIf { it > 0 && !done && !failed } ?: run {
-        val total = job.optLong("out_size", 0).takeIf { it > 0 } ?: job.optLong("file_size", 0)
-        if (speed != null && total > 0 && progress > 0f && progress < 1f) {
-            ((total * (1f - progress)) / speed).toLong().takeIf { it > 0 }
-        } else null
-    }
+    val speed = metrics.speed
+    val eta = metrics.eta
     val tags = buildList {
         if (job.optInt("season") > 0) add("S%02dE%02d".format(job.optInt("season"), job.optInt("episode")))
         if (job.optInt("year") > 0) add(job.optInt("year").toString())
         add(if (job.optString("type") == "series") "series" else "movie")
     }
-    PtsCard(Modifier.fillMaxWidth(), padding = 10.dp, borderColor = when { failed -> Pts.danger.copy(alpha = .7f); done -> Pts.ok.copy(alpha = .6f); else -> Pts.line }) {
+    PtsCard(Modifier.fillMaxWidth(), padding = 10.dp, spacing = 4.dp, borderColor = when { failed -> Pts.danger.copy(alpha = .7f); done -> Pts.ok.copy(alpha = .6f); else -> Pts.line }) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(1.dp)) {
                 Text(job.optString("title").ifBlank { job.optString("job_id") }, style = MaterialTheme.typography.titleSmall, color = Pts.text, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 Text(tags.joinToString(" · "), style = MaterialTheme.typography.labelSmall, color = Pts.muted, maxLines = 1)
             }
             if (!busy) {
-                if (failed) PtsIconAction(PtsIcons.Retry, "Retry job", onRetry, size = 38.dp)
-                PtsIconAction(PtsIcons.Edit, "Change download link", onEdit, size = 38.dp)
-                PtsIconAction(PtsIcons.Close, "Remove", onDelete, tint = Pts.danger, size = 38.dp)
+                if (failed) PtsIconAction(PtsIcons.Retry, "Retry job", onRetry, size = 48.dp)
+                PtsIconAction(PtsIcons.Edit, "Change download link", onEdit, size = 48.dp)
+                PtsIconAction(PtsIcons.Close, "Remove", onDelete, tint = Pts.danger, size = 48.dp)
             }
         }
         PtsProgressBar(if (done) 1f else progress, tint = when { failed -> Pts.danger; done -> Pts.ok; stage == "downloading" -> Pts.spark; else -> Pts.accent })
@@ -762,10 +758,11 @@ private fun QueueJobRow(job: JSONObject, onDelete: () -> Unit, onRetry: () -> Un
                 Text(formatRate(speed), style = MaterialTheme.typography.labelSmall, color = Pts.muted, maxLines = 1)
                 Spacer(Modifier.width(8.dp))
             }
-            if (eta != null) Text("${formatDuration(eta)} left", style = MaterialTheme.typography.labelSmall, color = Pts.muted, maxLines = 1)
+            if (metrics.active) Text(if (eta != null) "ETA ${formatDuration(eta)}" else "ETA —", style = MaterialTheme.typography.labelSmall, color = Pts.muted, maxLines = 1)
         }
         val note = listOf(job.optString("message"), job.optString("error")).filter { it.isNotBlank() }.distinct().joinToString("\n")
-        if (note.isNotBlank()) Text(note, style = MaterialTheme.typography.bodySmall, color = if (failed) Pts.danger else Pts.muted, maxLines = 2, overflow = TextOverflow.Ellipsis)
+        var expanded by rememberSaveable(job.optString("job_id")) { mutableStateOf(false) }
+        if (note.isNotBlank()) Text(note, Modifier.clickable(onClickLabel = if (expanded) "Collapse job message" else "Show full job message") { expanded = !expanded }, style = MaterialTheme.typography.bodySmall, color = if (failed) Pts.danger else Pts.muted, maxLines = if (expanded) Int.MAX_VALUE else 2, overflow = TextOverflow.Ellipsis)
     }
 }
 
