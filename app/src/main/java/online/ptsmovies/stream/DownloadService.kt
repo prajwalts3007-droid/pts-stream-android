@@ -47,7 +47,7 @@ class DownloadRepository internal constructor(private val context: Context, priv
     private val jobs = linkedMapOf<String, Job>()
     private val calls = linkedMapOf<String, Call>()
     private val reservations = linkedMapOf<String, Long>()
-    private var statusCallback: ((DownloadTask?) -> Unit)? = null
+    @Volatile private var statusCallback: ((DownloadTask?) -> Unit)? = null
     private val uiOwners = java.util.concurrent.atomic.AtomicInteger()
     fun attachUi() { uiOwners.incrementAndGet() }
     fun detachUi() { uiOwners.updateAndGet { (it - 1).coerceAtLeast(0) } }
@@ -139,7 +139,11 @@ class DownloadRepository internal constructor(private val context: Context, priv
         reconcile()
         }
     }
-    fun detachService() { if (offMain { detachService() }) return; synchronized(lock) { statusCallback = null; pauseAll() } }
+    /** Clears ownership synchronously; persistence runs on process work, not a scope teardown may cancel. */
+    fun detachService() {
+        statusCallback = null
+        DurableWork.scope.launch { if (statusCallback == null) pauseAll() }
+    }
     fun remove(saved: SavedVideo) { if (offMain { remove(saved) }) return; store.remove(saved); DownloadNotifications.remove(context, owner, saved.key); update { s -> s.copy(saved = store.list(), tasks = s.tasks.filterNot { it.key == saved.key }) } }
     fun refresh() { if (offMain { refresh() }) return; update { it.copy(saved = store.list()) } }
     fun enqueueSeason(title: Title, episodes: List<Episode>) { enqueueBatch(title, episodes) }
@@ -276,9 +280,9 @@ class DownloadService : Service() {
     }
     override fun onTimeout(startId: Int, fgsType: Int) { repository?.pauseAll(); stopSelf() }
     override fun onDestroy() {
+        repository?.detachService()
         observer?.cancel(); scope.cancel()
         runCatching { getSystemService(android.net.ConnectivityManager::class.java).unregisterNetworkCallback(network) }
-        repository?.detachService()
         repository?.owner?.let { if (DeviceState(this).account()?.optLong("id") != it) DownloadNotifications.clear(this, it) }
         super.onDestroy()
     }

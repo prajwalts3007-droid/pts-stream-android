@@ -12,7 +12,9 @@ import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 import java.io.File
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeout
 
 /** Host Android runtime tests only: no emulator, no production account or media. */
 @RunWith(RobolectricTestRunner::class)
@@ -109,6 +111,22 @@ class StorageMigrationTest {
         val repo = DownloadRepository(context, PtsApi("https://example.invalid", CookieJar.NO_COOKIES), 71013, foreground = {})
         repo.attachService(); assertFalse(repo.releaseIfIdle())
         repo.detachService(); assertTrue(repo.releaseIfIdle())
+    }
+    @Test fun serviceTeardownReleasesOwnershipBeforeScopeTeardown() = runBlocking(Dispatchers.IO) {
+        val repo = DownloadRepository(context, PtsApi("https://example.invalid", CookieJar.NO_COOKIES), 71015, foreground = {})
+        repo.attachService(); assertFalse(repo.releaseIfIdle())
+        repo.detachService()
+        withTimeout(5_000) { while (!repo.releaseIfIdle()) delay(20) }
+        assertTrue(repo.releaseIfIdle())
+    }
+    @Test fun serviceTeardownDoesNotPauseANewlyAttachedService() = runBlocking(Dispatchers.IO) {
+        val owner = 71016L
+        val repo = DownloadRepository(context, PtsApi("https://example.invalid", CookieJar.NO_COOKIES), owner, foreground = {})
+        val title = title(1); repo.enqueueSeason(title, title.episodes.take(1))
+        repo.attachService(); repo.detachService(); repo.attachService()
+        delay(300)
+        assertEquals("queued", repo.state.value.tasks.single().status)
+        repo.detachService()
     }
     @Test fun bulkEnqueuePersistsOneCheckpointAndSharesMetadata() = runBlocking(Dispatchers.IO) {
         val owner = 71014L; val db = StateDatabase.get(context)
