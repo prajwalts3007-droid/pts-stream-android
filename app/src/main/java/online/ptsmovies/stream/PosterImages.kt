@@ -24,13 +24,15 @@ internal object PosterImages {
     @Volatile private var instance: ImageLoader? = null
     fun loader(context: Context): ImageLoader = instance ?: synchronized(this) {
         instance ?: ImageLoader.Builder(context.applicationContext)
-            .memoryCache { MemoryCache.Builder(context.applicationContext).maxSizePercent(.12).build() }
+            .memoryCache { MemoryCache.Builder(context.applicationContext).maxSizeBytes(
+                minOf(12 * 1024 * 1024, (context.getSystemService(android.app.ActivityManager::class.java).memoryClass * 1024L * 1024 / 20).toInt())).build() }
             .diskCache { DiskCache.Builder().directory(context.applicationContext.cacheDir.resolve("public-posters")).maxSizeBytes(64L * 1024 * 1024).build() }
             // Public artwork never borrows the account/media client's cookies or LAN routing.
             .okHttpClient(OkHttpClient.Builder().cookieJar(CookieJar.NO_COOKIES).followSslRedirects(false)
                 .connectTimeout(10, TimeUnit.SECONDS).callTimeout(25, TimeUnit.SECONDS).build())
             .build().also { instance = it }
     }
+    fun trim(level: Int) { instance?.memoryCache?.trimMemory(level) }
 }
 
 @Composable

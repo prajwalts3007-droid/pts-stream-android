@@ -34,7 +34,8 @@ fun indexLibrary(titles: List<Title>): List<SearchEntry> = titles.map { title ->
     SearchEntry(title, searchWords(title.title), title.episodes.map { searchWords("${it.title} s${it.season} e${it.episode} s${it.season.toString().padStart(2, '0')}e${it.episode.toString().padStart(2, '0')} s${it.season}e${it.episode}") }, searchWords(title.genres.joinToString(" ")))
 }
 
-fun searchScore(entry: SearchEntry, query: String): Int {
+fun searchScore(entry: SearchEntry, query: String, check: () -> Unit = {}): Int {
+    check()
     if (query.isBlank()) return 1
     if (entry.name == query) return 10000
     if (entry.name.startsWith(query)) return 9000
@@ -46,7 +47,7 @@ fun searchScore(entry: SearchEntry, query: String): Int {
     val nameWords = entry.name.split(' ')
     if (tokens.all { token -> nameWords.any { closeSearchWord(token, it) } }) return 3500
     // Mixed series name + episode name queries are useful, too.
-    if (entry.episodes.any { episode -> tokens.all { token -> (nameWords + episode.split(' ')).any { closeSearchWord(token, it) } } }) return 2500
+    if (entry.episodes.any { episode -> check(); tokens.all { token -> (nameWords + episode.split(' ')).any { closeSearchWord(token, it) } } }) return 2500
     return 0
 }
 
@@ -54,9 +55,9 @@ fun addedMillis(value: String): Long = runCatching { java.time.Instant.parse(val
     runCatching { java.time.LocalDateTime.parse(value.replace(' ', 'T')).toInstant(java.time.ZoneOffset.UTC).toEpochMilli() }.getOrDefault(0)
 }
 
-fun searchLibrary(index: List<SearchEntry>, text: String, sort: LibrarySort): List<Title> {
+fun searchLibrary(index: List<SearchEntry>, text: String, sort: LibrarySort, check: () -> Unit = {}): List<Title> {
     val query = searchWords(text.take(160))
-    val results = index.mapIndexedNotNull { order, entry -> searchScore(entry, query).takeIf { it > 0 }?.let { Triple(entry, it, order) } }
+    val results = index.mapIndexedNotNull { order, entry -> check(); searchScore(entry, query, check).takeIf { it > 0 }?.let { Triple(entry, it, order) } }
     val comparator = when (sort) {
         LibrarySort.RELEVANCE -> compareByDescending<Triple<SearchEntry, Int, Int>> { it.second }.thenBy { it.third }
         LibrarySort.RECENT -> compareByDescending<Triple<SearchEntry, Int, Int>> { it.first.added }.thenBy { it.third }

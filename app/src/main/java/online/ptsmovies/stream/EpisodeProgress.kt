@@ -38,19 +38,24 @@ fun mergeEpisodeRecords(current: List<JSONObject>, sent: List<JSONObject>, remot
 /** Owner-scoped, offline-first episode records. Separate from legacy title resume. */
 class EpisodeProgress(private val context: Context, val owner: Long) {
     private val prefs = context.getSharedPreferences("episode_progress_$owner", Context.MODE_PRIVATE)
+    private val database = StateDatabase.get(context)
+    init {
+        database.migrate(owner, "episode_records", { prefs.getString("records", null) }, { if (prefs.contains("records")) prefs.edit().remove("records").commit() })
+        if (database.read(owner, "episode_records") == null) database.write(owner, "episode_records", "[]")
+    }
     private val lock get() = locks.getOrPut(owner) { Any() }
     companion object {
         private val locks = java.util.concurrent.ConcurrentHashMap<Long, Any>()
         private val syncLocks = java.util.concurrent.ConcurrentHashMap<Long, Mutex>()
     }
     private val legacy = ProgressJournal(context, owner)
-    private var parsedSource: String? = null
-    private var parsedEntries = emptyList<JSONObject>()
+    @Volatile private var parsedSource: String? = null
+    @Volatile private var parsedEntries = emptyList<JSONObject>()
     private var completionSource: List<JSONObject>? = null
     private var completionLegacy = emptySet<String>()
     private var completionSnapshot = emptySet<String>()
     private fun entries(): List<JSONObject> {
-        val source = prefs.getString("records", "[]") ?: "[]"
+        val source = database.read(owner, "episode_records") ?: "[]"
         if (source != parsedSource) {
             parsedEntries = runCatching { JSONArray(source) }.getOrDefault(JSONArray()).let { a -> (0 until a.length()).map { a.getJSONObject(it) } }
             parsedSource = source
@@ -58,7 +63,7 @@ class EpisodeProgress(private val context: Context, val owner: Long) {
         return parsedEntries
     }
     private fun key(o: JSONObject) = "${o.optLong("title_id")}_${o.optLong("episode_id")}"
-    fun completed(): Set<String> = synchronized(lock) {
+    fun completed(): Set<String> {
         val records = entries()
         val old = legacy.completed()
         if (completionSource !== records || completionLegacy != old) {
@@ -66,10 +71,10 @@ class EpisodeProgress(private val context: Context, val owner: Long) {
             completionSnapshot = old.filterNot { it in keys }.toSet() + records.filter { it.optBoolean("completed") }.map(::key)
             completionSource = records; completionLegacy = old
         }
-        completionSnapshot
+        return completionSnapshot
     }
-    fun resume(title: Long, episode: Long): Resume? = synchronized(lock) {
-        entries().firstOrNull { key(it) == "${title}_$episode" }?.let {
+    fun resume(title: Long, episode: Long): Resume? {
+        return entries().firstOrNull { key(it) == "${title}_$episode" }?.let {
             if (it.optBoolean("completed")) Resume(episode, 0, it.optLong("duration")) else Resume(episode, it.optLong("position"), it.optLong("duration"))
         }
     }
@@ -77,7 +82,10 @@ class EpisodeProgress(private val context: Context, val owner: Long) {
     internal fun recordBatch(edits: List<EpisodeEdit>) = synchronized(lock) {
         if (owner <= 0 || edits.none { it.title > 0 && it.episode >= 0 }) return@synchronized
         val now = System.currentTimeMillis() + prefs.getLong("clock_offset", 0)
-        prefs.edit().putString("records", JSONArray(applyEpisodeEdits(entries(), edits, now)).toString()).commit()
+        val next = synchronized(lock) { applyEpisodeEdits(entries(), edits, now) }
+        val serialized = JSONArray(next).toString()
+        database.write(owner, "episode_records", serialized)
+        parsedSource = serialized; parsedEntries = next
     }
     fun status(): String = prefs.getString("status", "Not synced yet") ?: "Not synced yet"
     suspend fun sync(api: PtsApi) = withContext(Dispatchers.IO) {
@@ -96,7 +104,9 @@ class EpisodeProgress(private val context: Context, val owner: Long) {
                 val merged = mergeEpisodeRecords(current, pending, remote)
                 val server = response.optLong("server_time")
                 val serialized = JSONArray(merged).toString()
-                prefs.edit().apply { if (serialized != prefs.getString("records", "[]")) putString("records", serialized) }
+                if (serialized != database.read(owner, "episode_records")) database.write(owner, "episode_records", serialized)
+                parsedSource = serialized; parsedEntries = merged
+                prefs.edit()
                     .putLong("clock_offset", if (server > 0) server - System.currentTimeMillis() else prefs.getLong("clock_offset",0))
                     .putString("status", if (merged.any { it.optBoolean("pending") }) "More changes waiting to sync" else "Episode progress synced").commit()
             }

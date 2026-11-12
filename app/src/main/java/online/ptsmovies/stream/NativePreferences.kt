@@ -37,7 +37,7 @@ fun onWifi(context: Context): Boolean {
 }
 
 @Composable
-fun DownloadSettingsScreen(preferences: NativePreferences, onBack: () -> Unit, onSaved: () -> Unit) {
+fun DownloadSettingsScreen(preferences: NativePreferences, onBack: () -> Unit, onSaved: () -> Unit, onLocation: () -> Unit = {}, location: String = "Private app storage") {
     var options by remember { mutableStateOf(preferences.downloads()) }
     var limit by remember { mutableStateOf(options.limitGiB.toString()) }
     var address by remember { mutableStateOf(preferences.lanAddress()) }
@@ -45,6 +45,9 @@ fun DownloadSettingsScreen(preferences: NativePreferences, onBack: () -> Unit, o
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
         PtsSecondaryButton("Back", onClick = onBack)
         PtsPage("Downloads & network")
+        Text("Download location · $location", color = Pts.text, style = MaterialTheme.typography.bodySmall)
+        PtsSecondaryButton("Change download folder", Modifier.fillMaxWidth(), onClick = onLocation)
+        Text("Existing downloads stay where they are. Selected-folder downloads use private resumable staging first; changing folders does not move or delete files.", color = Pts.muted, style = MaterialTheme.typography.bodySmall)
         PreferenceSwitch("Wi-Fi downloads only", options.wifiOnly) { options = options.copy(wifiOnly = it) }
         PreferenceSwitch("Remove completed downloads after playback closes", options.removeWatched) { options = options.copy(removeWatched = it) }
         Text("Smart episode downloads", style = MaterialTheme.typography.titleSmall, color = Pts.text)

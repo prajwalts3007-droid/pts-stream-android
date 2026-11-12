@@ -45,7 +45,7 @@ class PtsApi(private val baseUrl: String = BASE, cookieJar: CookieJar? = null) {
         .addInterceptor(MediaRouting()).followRedirects(false).connectTimeout(15, TimeUnit.SECONDS)
         .readTimeout(45, TimeUnit.SECONDS).build()
 
-    private fun request(path: String, body: JSONObject? = null, method: String = if (body == null) "GET" else "POST"): JSONObject {
+    private suspend fun request(path: String, body: JSONObject? = null, method: String = if (body == null) "GET" else "POST"): JSONObject {
         val url = baseUrl.trimEnd('/') + "/api/v1" + path
         val builder = Request.Builder().url(url).header("Accept", "application/json")
         if (method != "GET") {
@@ -56,14 +56,10 @@ class PtsApi(private val baseUrl: String = BASE, cookieJar: CookieJar? = null) {
             else builder.method(method, (body ?: JSONObject()).toString().toRequestBody("application/json".toMediaType()))
         }
         val client = if (path == "/admin/github") http.newBuilder().readTimeout(105, TimeUnit.SECONDS).build() else http
-        client.newCall(builder.build()).execute().use { response ->
-            val text = response.body?.string().orEmpty()
-            if (!response.isSuccessful) throw ApiException(response.code, "HTTP ${response.code}: ${text.take(180)}", runCatching { JSONObject(text) }.getOrNull())
-            return if (text.isBlank()) JSONObject() else JSONObject(text)
-        }
+        return client.newCall(builder.build()).awaitJson()
     }
 
-    private fun get(path: String) = request(path)
+    private suspend fun get(path: String) = request(path)
     suspend fun json(path: String, method: String = "GET", body: JSONObject? = null): JSONObject =
         withContext(Dispatchers.IO) { request(path, body, method) }
     suspend fun me(): JSONObject = withContext(Dispatchers.IO) { get("/auth/me").getJSONObject("user") }

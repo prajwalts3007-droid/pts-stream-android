@@ -21,12 +21,12 @@ import org.json.JSONObject
 import java.util.concurrent.ConcurrentHashMap
 
 data class DownloadTask(val title: Title, val episode: Episode?, val status: String = "queued",
-    val bytes: Long = 0, val total: Long = 0, val speed: Long = 0, val error: String = "", val route: String = "") {
+    val bytes: Long = 0, val total: Long = 0, val speed: Long = 0, val error: String = "", val route: String = "", val destination: String? = null) {
     val key get() = "${title.id}_${episode?.id ?: 0}"
     val label get() = episode?.let { "${title.title} · S${it.season}E${it.episode}" } ?: title.title
     val progress get() = TransferProgress(bytes, total, speed)
     fun json() = JSONObject().put("title", title.toJson()).put("episode", episode?.toJson()).put("status", status)
-        .put("bytes", bytes).put("total", total).put("error", error)
+        .put("bytes", bytes).put("total", total).put("error", error).put("destination", destination)
 }
 data class DownloadSnapshot(val tasks: List<DownloadTask> = emptyList(), val saved: List<SavedVideo> = emptyList())
 
@@ -35,50 +35,68 @@ class DownloadRepository internal constructor(private val context: Context, priv
     private val wifi: () -> Boolean = { onWifi(context) }, private val foreground: (() -> Unit)? = null) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val prefs = context.getSharedPreferences("download_jobs_$owner", Context.MODE_PRIVATE)
+    private val database = StateDatabase.get(context)
     val store = OfflineStore(context, api, owner)
     private val lock = Any()
+    private fun offMain(action: () -> Unit): Boolean {
+        if (android.os.Looper.myLooper() != android.os.Looper.getMainLooper()) return false
+        scope.launch { action() }; return true
+    }
     private val mutable = MutableStateFlow(DownloadSnapshot())
     val state: StateFlow<DownloadSnapshot> = mutable.asStateFlow()
     private val jobs = linkedMapOf<String, Job>()
     private val calls = linkedMapOf<String, Call>()
     private val reservations = linkedMapOf<String, Long>()
     private var statusCallback: ((DownloadTask?) -> Unit)? = null
+    private val uiOwners = java.util.concurrent.atomic.AtomicInteger()
+    fun attachUi() { uiOwners.incrementAndGet() }
+    fun detachUi() { uiOwners.updateAndGet { (it - 1).coerceAtLeast(0) } }
+    fun attachService() = synchronized(lock) { statusCallback = {} }
+    fun releaseIfIdle(): Boolean = synchronized(lock) {
+        if (uiOwners.get() > 0 || statusCallback != null || jobs.isNotEmpty() || mutable.value.tasks.any { transferIsActive(it.status) }) false
+        else { scope.cancel(); true }
+    }
     init {
-        val array = runCatching { JSONArray(prefs.getString("jobs", "[]")) }.getOrDefault(JSONArray())
         val saved = store.list()
-        val tasks = (0 until array.length()).mapNotNull { i -> runCatching {
-            val o = array.getJSONObject(i)
-            DownloadTask(parseTitle(o.getJSONObject("title")), o.optJSONObject("episode")?.let { parseEpisode(it) },
-                if (o.optString("status") in listOf("queued", "preparing", "downloading", "waiting_wifi", "cancelling")) "paused" else o.optString("status"),
-                o.optLong("bytes"), o.optLong("total"), error = o.optString("error"))
-        }.getOrNull() }.filter { it.status != "complete" || saved.any { s -> s.key == it.key } }
+        val migrated = database.read(owner, "download_queue") ?: prefs.getString("jobs", "[]")!!
+        val tasks = parseQueue(migrated).map { if (transferIsActive(it.status)) it.copy(status = "paused") else it }
+            .filter { it.status != "complete" || saved.any { s -> s.key == it.key } }
+        database.write(owner, "download_queue", compactQueue(tasks))
+        if (prefs.contains("jobs")) prefs.edit().remove("jobs").commit()
         mutable.value = DownloadSnapshot(tasks, saved)
     }
     private var checkpointAt = 0L
     private fun update(checkpoint: Boolean = true, transform: (DownloadSnapshot) -> DownloadSnapshot) = synchronized(lock) {
         val next = transform(mutable.value)
         if (next == mutable.value) return@synchronized
-        mutable.value = next
         val now = android.os.SystemClock.elapsedRealtime()
         // Serializing every episode's full title metadata twice per 250ms report stalls fast LAN
         // transfers. State transitions persist immediately; resumable byte counters checkpoint
         // at most every two seconds. Resume validates the actual partial length and validator.
         if (checkpoint || now - checkpointAt >= 2000) {
-            prefs.edit().putString("jobs", JSONArray(next.tasks.map { it.json() }).toString()).apply()
+            database.write(owner, "download_queue", compactQueue(next.tasks))
             checkpointAt = now
         }
+        mutable.value = next
     }
     private fun task(key: String, checkpoint: Boolean = true, transform: (DownloadTask) -> DownloadTask) { update(checkpoint) { s -> s.copy(tasks = s.tasks.map { if (it.key == key) transform(it) else it }) } }
     fun enqueue(title: Title, episode: Episode?, smart: Boolean = false) {
-        if (episode?.container == "hls" || (episode == null && title.container == "hls")) {
+        enqueueBatch(title, listOf(episode), smart)
+    }
+    private fun enqueueBatch(title: Title, episodes: List<Episode?>, smart: Boolean = false) {
+        if (episodes.any { it?.container == "hls" || (it == null && title.container == "hls") }) {
             val user = DeviceState(context).account()
             require(!smart) { "Smart downloads do not automatically prepare HLS media" }
             require(canRequestOfflinePreparation(owner, user?.optLong("id") ?: 0, user?.optString("role"))) { "Sign in to prepare an offline download" }
         }
-        val t = DownloadTask(title, episode)
-        if (!smart) prefs.edit().putStringSet("smart_blocked", prefs.getStringSet("smart_blocked", emptySet())!! - t.key).apply()
-        if (mutable.value.saved.any { it.key == t.key } || mutable.value.tasks.any { it.key == t.key && it.status in listOf("queued", "preparing", "downloading", "waiting_wifi", "cancelling") }) return
-        update { s -> s.copy(tasks = s.tasks.filterNot { it.key == t.key } + t) }
+        val destination = context.getSharedPreferences("download_destination_$owner", Context.MODE_PRIVATE).getString("tree", null)
+        val newTasks = episodes.distinctBy { it?.id ?: 0 }.map { DownloadTask(title, it, destination = destination) }
+        if (!smart) prefs.edit().putStringSet("smart_blocked", prefs.getStringSet("smart_blocked", emptySet())!! - newTasks.map { it.key }.toSet()).apply()
+        update { s ->
+            val skip = s.saved.mapTo(hashSetOf()) { it.key } + s.tasks.filter { transferIsActive(it.status) }.map { it.key }
+            val add = newTasks.filterNot { it.key in skip }; val keys = add.mapTo(hashSetOf()) { it.key }
+            s.copy(tasks = s.tasks.filterNot { it.key in keys } + add)
+        }
         startService()
     }
     private fun startService() {
@@ -90,14 +108,18 @@ class DownloadRepository internal constructor(private val context: Context, priv
         if (mutable.value.tasks.none { it.key == key && it.status in listOf("paused", "failed") }) return
         task(key) { it.copy(status = "queued", speed = 0, error = "") }; startService()
     }
-    fun pause(key: String): Unit = synchronized(lock) {
+    fun pause(key: String) {
+        if (offMain { pause(key) }) return
+        synchronized(lock) {
         val status = mutable.value.tasks.firstOrNull { it.key == key }?.status
         if (status !in listOf("queued", "preparing", "downloading", "waiting_wifi")) return@synchronized
         task(key) { it.copy(status = "paused", speed = 0) }
         jobs[key]?.cancel(); calls[key]?.cancel()
         if (jobs.isEmpty()) reconcile()
+        }
     }
     fun cancel(key: String) {
+        if (offMain { cancel(key) }) return
         prefs.edit().putStringSet("smart_blocked", prefs.getStringSet("smart_blocked", emptySet())!! + key).apply()
         val metadata = mutable.value.tasks.firstOrNull { it.key == key } ?: return
         val running = synchronized(lock) { jobs[key] }
@@ -109,15 +131,18 @@ class DownloadRepository internal constructor(private val context: Context, priv
             update { s -> s.copy(tasks = s.tasks.filterNot { it.key == key }, saved = store.list()) }
         }
     }
-    fun pauseAll(): Unit = synchronized(lock) {
+    fun pauseAll() {
+        if (offMain { pauseAll() }) return
+        synchronized(lock) {
         update { s -> s.copy(tasks = s.tasks.map { if (it.status in listOf("queued", "preparing", "downloading", "waiting_wifi")) it.copy(status = "paused", speed = 0) else it }) }
         jobs.values.forEach { it.cancel() }; calls.values.forEach { it.cancel() }
         reconcile()
+        }
     }
-    fun detachService(): Unit = synchronized(lock) { statusCallback = null; pauseAll() }
-    fun remove(saved: SavedVideo) { store.remove(saved); DownloadNotifications.remove(context, owner, saved.key); update { s -> s.copy(saved = store.list(), tasks = s.tasks.filterNot { it.key == saved.key }) } }
-    fun refresh() { update { it.copy(saved = store.list()) } }
-    fun enqueueSeason(title: Title, episodes: List<Episode>) { episodes.filter { ep -> store.find(title, ep) == null }.forEach { enqueue(title, it) } }
+    fun detachService() { if (offMain { detachService() }) return; synchronized(lock) { statusCallback = null; pauseAll() } }
+    fun remove(saved: SavedVideo) { if (offMain { remove(saved) }) return; store.remove(saved); DownloadNotifications.remove(context, owner, saved.key); update { s -> s.copy(saved = store.list(), tasks = s.tasks.filterNot { it.key == saved.key }) } }
+    fun refresh() { if (offMain { refresh() }) return; update { it.copy(saved = store.list()) } }
+    fun enqueueSeason(title: Title, episodes: List<Episode>) { enqueueBatch(title, episodes) }
     fun smartNext(title: Title, current: Episode?, completed: Set<String>) {
         if (current == null || DeviceState(context).account()?.optLong("id") != owner) return
         val count = NativePreferences(context).downloads().smartEpisodes
@@ -125,7 +150,9 @@ class DownloadRepository internal constructor(private val context: Context, priv
         smartEpisodes(title, current, count, completed, skip).forEach { enqueue(title, it, smart = true) }
     }
     fun runNext(onStatus: (DownloadTask?) -> Unit) { synchronized(lock) { statusCallback = onStatus }; reconcile() }
-    fun reconcile(): Unit = synchronized(lock) {
+    fun reconcile() {
+        if (offMain { reconcile() }) return
+        synchronized(lock) {
         val callback = statusCallback ?: return@synchronized
         val options = NativePreferences(context).downloads()
         if (options.wifiOnly && !wifi()) {
@@ -147,7 +174,7 @@ class DownloadRepository internal constructor(private val context: Context, priv
                         } else null
                         currentCoroutineContext().ensureActive()
                         task(next.key) { if (it.status == "preparing") it.copy(status = "downloading") else it }
-                        store.save(next.title, next.episode, resume = true, onCall = { call -> synchronized(lock) {
+                        store.save(next.title, next.episode, resume = true, destinationUri = next.destination, onCall = { call -> synchronized(lock) {
                             if (call != null) calls[next.key] = call else calls.remove(next.key)
                         } }, admit = { total, offset -> synchronized(lock) {
                             val limit = NativePreferences(context).downloads().limitGiB.toLong() * 1024 * 1024 * 1024
@@ -177,14 +204,18 @@ class DownloadRepository internal constructor(private val context: Context, priv
             }
         }
         callback(mutable.value.tasks.firstOrNull { it.status in listOf("downloading", "preparing") } ?: mutable.value.tasks.firstOrNull { it.status == "waiting_wifi" })
+        }
     }
 }
 
 object DeviceDownloads {
     private val repositories = ConcurrentHashMap<String, DownloadRepository>()
-    fun forOwner(context: Context, api: PtsApi, owner: Long) = repositories.getOrPut("${api.resolveUrl("")}|$owner") {
+    @Synchronized fun forOwner(context: Context, api: PtsApi, owner: Long) = repositories.getOrPut("${api.resolveUrl("")}|$owner") {
         DownloadRepository(context.applicationContext, api, owner)
     }
+    @Synchronized fun forUi(context: Context, api: PtsApi, owner: Long) = forOwner(context, api, owner).also { it.attachUi() }
+    @Synchronized fun forService(context: Context, api: PtsApi, owner: Long) = forOwner(context, api, owner).also { it.attachService() }
+    @Synchronized fun trimInactive() { repositories.entries.removeIf { entry -> entry.value.state.value.tasks.none { transferIsActive(it.status) } && entry.value.releaseIfIdle() } }
 }
 
 class DownloadService : Service() {
@@ -193,6 +224,7 @@ class DownloadService : Service() {
     private var observer: Job? = null
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
     private var lastStartId = 0
+    private val starts = kotlinx.coroutines.sync.Mutex()
     private val manager get() = getSystemService(NotificationManager::class.java)
     private val network = object : android.net.ConnectivityManager.NetworkCallback() {
         override fun onAvailable(network: android.net.Network) { repository?.reconcile() }
@@ -213,13 +245,17 @@ class DownloadService : Service() {
         if (owner <= 0 || DeviceState(this).account()?.optLong("id") != owner) { if (owner > 0) DownloadNotifications.clear(this, owner); stopSelf(startId); return START_NOT_STICKY }
         lastStartId = startId
         if (repository?.owner != null && repository?.owner != owner) { observer?.cancel(); repository?.detachService(); DownloadNotifications.clear(this, repository!!.owner); notifications = null }
-        val repo = DeviceDownloads.forOwner(this, ApiProvider.create(), owner)
-        if (repository !== repo || observer?.isActive != true) {
+        scope.launch(Dispatchers.IO) { starts.lock(); try {
+        val repo = DeviceDownloads.forService(this@DownloadService, ApiProvider.create(), owner)
+        if (DeviceState(this@DownloadService).account()?.optLong("id") != owner) { repo.detachService(); withContext(Dispatchers.Main) { stopSelf(startId) }; return@launch }
+        val key = intent?.getStringExtra("key").orEmpty()
+        when (intent?.action) { "PAUSE" -> repo.pause(key); "RESUME" -> repo.resume(key); "CANCEL" -> repo.cancel(key) }
+        repo.runNext { }
+        withContext(Dispatchers.Main) { if (repository !== repo || observer?.isActive != true) {
             repository = repo
             DownloadNotifications.clear(this, owner)
             notifications = DownloadNotifications(this, owner).also { it.seed(repo.state.value.tasks) }
             startForeground(DownloadNotifications.SUMMARY_ID, notifications!!.summary(repo.state.value.tasks))
-            repo.runNext { /* Full snapshots, not whichever episode reported last, drive notifications. */ }
             observer = scope.launch {
                 repo.state.collect { snapshot ->
                     if (DeviceState(this@DownloadService).account()?.optLong("id") != owner) {
@@ -231,10 +267,11 @@ class DownloadService : Service() {
                     }
                 }
             }
+        } }
+        } catch (e: CancellationException) { throw e }
+          catch (_: Exception) { withContext(Dispatchers.Main) { stopSelf(startId) } }
+          finally { starts.unlock() }
         }
-        val key = intent?.getStringExtra("key").orEmpty()
-        when (intent?.action) { "PAUSE" -> repo.pause(key); "RESUME" -> repo.resume(key); "CANCEL" -> repo.cancel(key) }
-        repo.reconcile()
         return START_NOT_STICKY
     }
     override fun onTimeout(startId: Int, fgsType: Int) { repository?.pauseAll(); stopSelf() }

@@ -8,12 +8,17 @@ import java.security.KeyStore
 import java.security.cert.CertificateFactory
 import java.util.concurrent.TimeUnit
 import okio.buffer
+import kotlinx.coroutines.launch
 import javax.net.ssl.SSLContext
 import javax.net.ssl.TrustManagerFactory
 import javax.net.ssl.X509TrustManager
 
 class PtsApplication : Application() {
     override fun onCreate() { super.onCreate(); environment = applicationContext }
+    override fun onTrimMemory(level: Int) {
+        super.onTrimMemory(level); PosterImages.trim(level)
+        if (level >= TRIM_MEMORY_UI_HIDDEN) DurableWork.scope.launch { DeviceDownloads.trimInactive(); StateDatabase.get(this@PtsApplication).trim(DeviceState(this@PtsApplication).account()?.optLong("id")) }
+    }
     companion object { @Volatile var environment: Context? = null; private set }
 }
 

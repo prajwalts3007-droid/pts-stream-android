@@ -9,6 +9,11 @@ import kotlinx.coroutines.withContext
 /** Offline edits keep the latest value per title. Never replay another owner's journal. */
 class ProgressJournal(private val context: Context, private val owner: Long) {
     private val prefs = context.getSharedPreferences("progress_journal_$owner", Context.MODE_PRIVATE)
+    private val database = StateDatabase.get(context)
+    init {
+        database.migrate(owner, "progress_pending", { prefs.getString("pending", null) }, { if (prefs.contains("pending")) prefs.edit().remove("pending").commit() })
+        if (database.read(owner, "progress_pending") == null) database.write(owner, "progress_pending", "[]")
+    }
     private val lock get() = locks.getOrPut(owner) { Any() }
     companion object { private val locks = java.util.concurrent.ConcurrentHashMap<Long, Any>() }
     private var parsedSource: String? = null
@@ -21,7 +26,7 @@ class ProgressJournal(private val context: Context, private val owner: Long) {
         Unit
     }
     fun pending(): List<JSONObject> = synchronized(lock) {
-        val source = prefs.getString("pending", "[]") ?: "[]"
+        val source = database.read(owner, "progress_pending") ?: "[]"
         if (source != parsedSource) {
             val a = runCatching { JSONArray(source) }.getOrDefault(JSONArray())
             parsedPending = (0 until a.length()).map { a.getJSONObject(it) }
@@ -33,7 +38,7 @@ class ProgressJournal(private val context: Context, private val owner: Long) {
         if (clear) prefs.edit().putStringSet("cleared_titles", (clearedTitles() + title).map { it.toString() }.toSet()).commit()
         val value = JSONObject().put("title_id", title).put("episode_id", episode ?: 0).put("position", position)
             .put("duration", duration).put("clear", clear).put("revision", java.util.UUID.randomUUID().toString())
-        prefs.edit().putString("pending", JSONArray(pending().filterNot { it.optLong("title_id") == title } + value).toString()).commit()
+        database.write(owner, "progress_pending", JSONArray(pending().filterNot { it.optLong("title_id") == title } + value).toString())
         Unit
     }
     suspend fun flush(api: PtsApi) = withContext(Dispatchers.IO) { flushPending(api) }
@@ -43,7 +48,7 @@ class ProgressJournal(private val context: Context, private val owner: Long) {
             if (value.optBoolean("clear")) api.json("/stream/progress/clear", "POST", JSONObject().put("title_id", value.getLong("title_id")))
             else api.progress(value.getLong("title_id"), value.optLong("episode_id"), value.optLong("position"), value.optLong("duration"))
             synchronized(lock) {
-                prefs.edit().putString("pending", JSONArray(pending().filterNot { it.optString("revision") == value.optString("revision") }).toString()).commit()
+                database.write(owner, "progress_pending", JSONArray(pending().filterNot { it.optString("revision") == value.optString("revision") }).toString())
             }
         }
     }

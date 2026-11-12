@@ -9,7 +9,7 @@ on:
       version_code:
         description: Version code for private signed validation
         required: true
-        default: '14'
+        default: '15'
 permissions:
   contents: read
 jobs:

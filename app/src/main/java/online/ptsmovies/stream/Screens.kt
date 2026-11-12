@@ -345,6 +345,7 @@ fun TitleScreen(
     completed: Set<String> = emptySet(), onEpisodeComplete: ((Episode, Boolean) -> Unit)? = null
 ) {
     val episodes = remember(title) { title.episodes.sortedWith(compareBy({ it.season }, { it.episode })) }
+    val seasonSelection = rememberSeasonSelection(title, resume = resume)
     LazyColumn(
         modifier = Modifier.testTag("title-details"),
         contentPadding = PaddingValues(start = 16.dp, end = 16.dp, bottom = 24.dp),
@@ -389,10 +390,8 @@ fun TitleScreen(
         }
         if (title.kind == "series") {
             item { PtsSecondaryButton("Download episodes", Modifier.fillMaxWidth(), icon = PtsIcons.Download) { onDownload(null) } }
-            item {
-                SeasonEpisodes(title, resume = resume, savedKeys = savedKeys, downloading = downloading,
-                    onPlay = { onPlay(it) }, onDownload = { onDownload(it) }, completed = completed, onCompleted = onEpisodeComplete)
-            }
+            episodeSection(title, seasonSelection, resume = resume, savedKeys = savedKeys, downloading = downloading,
+                onPlay = { onPlay(it) }, onDownload = { onDownload(it) }, completed = completed, onCompleted = onEpisodeComplete)
         } else {
             item {
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {

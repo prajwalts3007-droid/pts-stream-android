@@ -6,9 +6,10 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import org.json.JSONArray
 import org.json.JSONObject
+import kotlinx.coroutines.launch
 
 /** Device preferences are deliberately separate from server account/playback preferences. */
-class DeviceState(context: Context) {
+class DeviceState(private val context: Context) {
     private val prefs = context.getSharedPreferences("native_ui", Context.MODE_PRIVATE)
     var theme by mutableStateOf(prefs.getString("theme", "system") ?: "system")
         private set
@@ -19,14 +20,30 @@ class DeviceState(context: Context) {
     fun sort(tab: String, value: String) { if (LibrarySort.entries.any { it.name == value }) prefs.edit().putString("sort_$tab", value).apply() }
     fun account(): JSONObject? = runCatching { JSONObject(prefs.getString("account", "")!!) }.getOrNull()
     fun account(user: JSONObject) { prefs.edit().putString("account", user.toString()).apply() }
-    fun library(owner: Long): Library? = runCatching { parseLibrary(JSONObject(prefs.getString("library_$owner", "")!!)) }.getOrNull()
-    fun library(owner: Long, value: Library) { prefs.edit().putString("library_$owner", value.toJson().toString()).apply() }
-    fun librarySerialized(owner: Long, value: String) { prefs.edit().putString("library_$owner", value).apply() }
+    fun library(owner: Long): Library? = runCatching {
+        val db = StateDatabase.get(context)
+        val source = db.read(owner, "catalogue")
+        if (source == null) {
+            val legacy = prefs.getString("library_$owner", null) ?: return@runCatching null
+            parseLibrary(JSONObject(legacy)).also { library(owner, it) }
+        } else {
+            val root = JSONObject(source)
+            val ids = root.getJSONArray("title_ids")
+            db.overlay(owner, parseLibrary(root).copy(titles = (0 until ids.length()).mapNotNull { db.title(owner, ids.getLong(it)) }))
+        }
+    }.getOrNull()
+    fun library(owner: Long, value: Library, observedAt: Long = 0) {
+        val db = StateDatabase.get(context)
+        db.catalogue(owner, value, observedAt)
+        if (prefs.contains("library_$owner")) prefs.edit().remove("library_$owner").commit()
+    }
+    fun librarySerialized(owner: Long, value: String) { library(owner, parseLibrary(JSONObject(value))) }
     fun navigation(): JSONObject = runCatching { JSONObject(prefs.getString("navigation", "{}")!!) }.getOrDefault(JSONObject())
     fun navigation(value: JSONObject) { prefs.edit().putString("navigation", value.toString()).apply() }
     fun clearSession() {
         val owner = account()?.optLong("id")
-        prefs.edit().remove("account").remove("navigation").apply { if (owner != null) remove("library_$owner") }.commit()
+        prefs.edit().remove("account").remove("navigation").apply { if (owner != null) remove("library_$owner") }.apply()
+        if (owner != null) DurableWork.scope.launch { if (account() == null) StateDatabase.get(context).remove(owner, "catalogue") }
     }
 }
 

@@ -3,6 +3,9 @@ package online.ptsmovies.stream
 import androidx.compose.runtime.*
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 
 private data class IndexedTitles(val source: List<Title>, val index: List<SearchEntry>)
 private data class QueryTitles(val source: List<Title>, val result: List<Title>)
@@ -12,13 +15,16 @@ internal val LocalLibraryIndexes = staticCompositionLocalOf<LibraryIndexCache?> 
 @Composable
 internal fun rememberLibraryResults(titles: List<Title>, query: String, sort: LibrarySort, filter: LibraryFilter,
     completed: Set<String>, saved: Set<String>): List<Title>? {
+    // Opening Home/browse must not normalize every episode for an unused search.
+    if (query.isBlank() && sort == LibrarySort.RELEVANCE && filter == LibraryFilter()) return titles
     val indexes = LocalLibraryIndexes.current ?: remember { LibraryIndexCache() }
     val indexed by produceState<IndexedTitles?>(null, titles, indexes) {
         value = IndexedTitles(titles, indexes.get(titles))
     }
     val computed by produceState<QueryTitles?>(null, indexed, query, sort, filter, completed, saved) {
         val current = indexed?.takeIf { it.source == titles } ?: return@produceState
-        value = withContext(Dispatchers.Default) { QueryTitles(titles, filterLibrary(searchLibrary(current.index, query, sort), filter, completed, saved)) }
+        if (query.isNotBlank()) delay(140)
+        value = withContext(Dispatchers.Default) { val context = currentCoroutineContext(); QueryTitles(titles, filterLibrary(searchLibrary(current.index, query, sort) { context.ensureActive() }, filter, completed, saved)) }
     }
     return computed?.takeIf { it.source == titles }?.result
         ?: titles.takeIf { query.isBlank() && sort == LibrarySort.RELEVANCE && filter == LibraryFilter() }

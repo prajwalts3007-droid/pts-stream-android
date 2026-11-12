@@ -20,6 +20,39 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
+import androidx.compose.foundation.lazy.LazyListScope
+import androidx.compose.foundation.lazy.items
+
+internal data class SeasonSelection(val seasons: List<Int>, val season: Int, val episodes: List<Episode>, val select: (Int) -> Unit)
+@Composable
+internal fun rememberSeasonSelection(title: Title, active: Episode? = null, resume: Resume? = null): SeasonSelection {
+    val seasons = remember(title.episodes) { title.episodes.map { it.season }.distinct().sorted() }
+    var season by rememberSaveable(title.id) { mutableIntStateOf(active?.season ?: title.episodes.firstOrNull { it.id == resume?.episodeId }?.season ?: seasons.firstOrNull() ?: 1) }
+    LaunchedEffect(active?.id) { active?.let { season = it.season } }
+    LaunchedEffect(seasons) { if (season !in seasons) season = seasons.firstOrNull() ?: 1 }
+    return SeasonSelection(seasons, season, remember(title.episodes, season) { title.episodes.filter { it.season == season }.sortedBy { it.episode } }, { season = it })
+}
+
+internal fun LazyListScope.episodeSection(title: Title, selection: SeasonSelection, active: Episode? = null, resume: Resume? = null,
+    savedKeys: Set<String> = emptySet(), downloading: String = "", completed: Set<String> = emptySet(),
+    onPlay: (Episode) -> Unit, onDownload: (Episode) -> Unit, onCompleted: ((Episode, Boolean) -> Unit)? = null) {
+    item(key = "episode-header") {
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text("Episodes", Modifier.weight(1f), style = MaterialTheme.typography.titleMedium, color = Pts.text)
+            SeasonDropdown(selection.seasons, selection.season, selection.select)
+        }
+    }
+    item(key = "episode-count") { Text("${selection.episodes.size} episodes", style = MaterialTheme.typography.bodySmall, color = Pts.muted) }
+    if (selection.episodes.isEmpty()) item { PtsEmpty("No episodes available", icon = PtsIcons.Series) }
+    items(selection.episodes, key = { "episode-${it.id}" }, contentType = { "episode" }) { ep ->
+        Column {
+            if (ep.id == active?.id) Text("NOW PLAYING", Modifier.padding(bottom = 4.dp), style = MaterialTheme.typography.labelSmall, color = Pts.accent)
+            EpisodeRow(title, ep, resume?.takeIf { it.episodeId == ep.id }, "${title.id}_${ep.id}" in savedKeys,
+                downloading, { onPlay(ep) }, { onDownload(ep) }, "${title.id}_${ep.id}" in completed,
+                onCompleted?.let { action -> { action(ep, "${title.id}_${ep.id}" !in completed) } })
+        }
+    }
+}
 
 /** Same start/end guards as web plResumePosition; completed clips must not reopen on their final frame. */
 fun resumePosition(resume: Resume?, episodeId: Long, duration: Long = 0L): Long {
