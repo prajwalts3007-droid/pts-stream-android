@@ -23,6 +23,14 @@ class NativePreferences(context: Context) {
     fun lanAddress(value: String) { require(isPrivateV4(value)); prefs.edit().putString("lan_address", value).apply() }
     fun lanEnabled() = prefs.getBoolean("lan_enabled", true)
     fun lanEnabled(value: Boolean) { prefs.edit().putBoolean("lan_enabled", value).apply() }
+    fun lanScanAt() = prefs.getLong("lan_scan_at", 0)
+    fun lanScanAt(value: Long) { prefs.edit().putLong("lan_scan_at", value).apply() }
+    /** Server auth config survives a cold start without a network round trip. Not a secret. */
+    fun googleConfig(): Pair<Boolean, String> =
+        prefs.getBoolean("google_config_known", false) to (prefs.getString("google_client_id", "") ?: "")
+    fun googleConfig(known: Boolean, clientId: String) {
+        prefs.edit().putBoolean("google_config_known", known).putString("google_client_id", clientId).apply()
+    }
 }
 
 fun isPrivateV4(address: String): Boolean {
@@ -41,6 +49,7 @@ fun DownloadSettingsScreen(preferences: NativePreferences, onBack: () -> Unit, o
     var options by remember { mutableStateOf(preferences.downloads()) }
     var limit by remember { mutableStateOf(options.limitGiB.toString()) }
     var address by remember { mutableStateOf(preferences.lanAddress()) }
+    var addressEdited by remember { mutableStateOf(false) }
     var lan by remember { mutableStateOf(preferences.lanEnabled()) }
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
         PtsSecondaryButton("Back", onClick = onBack)
@@ -57,9 +66,12 @@ fun DownloadSettingsScreen(preferences: NativePreferences, onBack: () -> Unit, o
         PtsSegmented((1..3).map { it.toString() to it.toString() }, options.concurrent.toString(), { options = options.copy(concurrent = it.toInt()) })
         PtsField(limit, { limit = it.filter(Char::isDigit) }, "Storage limit (GiB, 0 = available space)", Modifier.fillMaxWidth())
         PreferenceSwitch("Prefer local Pi", lan) { lan = it }
-        PtsField(address, { address = it.trim() }, "Pi LAN address", Modifier.fillMaxWidth())
+        PtsField(address, { address = it.trim(); addressEdited = true }, "Pi LAN address", Modifier.fillMaxWidth())
+        Text("The Pi is found automatically on this Wi-Fi network when its address changes after a reboot. Leave the field untouched unless you want to pin a fixed address.", color = Pts.muted, style = MaterialTheme.typography.bodySmall)
         PtsPrimaryButton("Save", Modifier.fillMaxWidth(), enabled = (limit.toIntOrNull() ?: -1) in 0..10000 && isPrivateV4(address)) {
-            preferences.downloads(options.copy(limitGiB = limit.toInt())); preferences.lanAddress(address); preferences.lanEnabled(lan); onSaved()
+            preferences.downloads(options.copy(limitGiB = limit.toInt()))
+            if (addressEdited) preferences.lanAddress(address)
+            preferences.lanEnabled(lan); onSaved()
         }
     }
 }

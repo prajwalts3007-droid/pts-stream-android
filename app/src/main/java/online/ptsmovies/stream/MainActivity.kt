@@ -220,6 +220,7 @@ class MainActivity : ComponentActivity() {
     private var metricsRefreshing by mutableStateOf(false)
     private var queueReloadPending = false
     private var googleClientId by mutableStateOf("")
+    private var googleConfigKnown by mutableStateOf(false)
     private val episodeNames by lazy { EpisodeMetadata(this) }
     private var queueDone by mutableStateOf(emptyList<JSONObject>())
     private var queueStage by mutableStateOf("queued")
@@ -229,7 +230,9 @@ class MainActivity : ComponentActivity() {
     private var searchQuery by mutableStateOf("")
     private var searchResults by mutableStateOf(emptyList<JSONObject>())
     private var searchLoading by mutableStateOf(false)
+    private var searchError by mutableStateOf("")
     private var searchJob: Job? = null
+    private var searchGeneration = 0
 
     private var filesDevice by mutableStateOf("vps")
     private var filesPath by mutableStateOf("")
@@ -295,7 +298,11 @@ class MainActivity : ComponentActivity() {
             window.isNavigationBarContrastEnforced = false
         }
         scope.launch { lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) { if (!startupRestored) { restoreSession(); startupRestored = true } } }
-        scope.launch { try { val cfg = api.json("/auth/config"); googleClientId = if (cfg.optBoolean("google_enabled")) cfg.optString("google_client_id") else "" } catch (_: Exception) { } }
+        val cachedGoogle = NativePreferences(this).googleConfig()
+        googleConfigKnown = cachedGoogle.first
+        googleClientId = if (cachedGoogle.first) cachedGoogle.second else ""
+        scope.launch { refreshAuthConfig() }
+        LanDiscovery.refresh(this)
         startAccountSync()
         setContent {
             val dark = device.theme == "dark" || (device.theme == "system" && androidx.compose.foundation.isSystemInDarkTheme())
@@ -323,7 +330,7 @@ class MainActivity : ComponentActivity() {
                     }
                     when {
                         loading -> PtsLoading()
-                        account == null -> LoginScreen(startupError, busy = false, googleEnabled = googleClientId.isNotBlank(), onGoogle = { signInGoogle(it) }) { user, pass, remember -> signIn(user, pass, remember) }
+                        account == null -> LoginScreen(startupError, busy = false, googleEnabled = googleClientId.isNotBlank() || !googleConfigKnown, onGoogle = { signInGoogle(it) }) { user, pass, remember -> signIn(user, pass, remember) }
                         !fullPlayer -> AppShell()
                     }
                     // Stable sibling/key: resizing to the in-app mini-player never
@@ -405,11 +412,30 @@ class MainActivity : ComponentActivity() {
         refreshLibrary(); loadPlaybackPrefs()
     }
 
+    private suspend fun refreshAuthConfig(): Boolean = try {
+        val cfg = api.json("/auth/config")
+        val enabled = cfg.optBoolean("google_enabled")
+        googleClientId = if (enabled) cfg.optString("google_client_id") else ""
+        googleConfigKnown = true
+        NativePreferences(this).googleConfig(true, googleClientId)
+        true
+    } catch (e: CancellationException) {
+        throw e
+    } catch (_: Exception) {
+        false
+    }
+
     private fun signInGoogle(remember: Boolean) {
-        if (googleClientId.isBlank() || loading) return
+        if (loading) return
         scope.launch {
             loading = true; startupError = ""
             try {
+                if (googleClientId.isBlank()) refreshAuthConfig()
+                if (googleClientId.isBlank()) {
+                    startupError = if (!googleConfigKnown) "Google sign-in could not load the server configuration. Check your connection, or use your password."
+                    else "Google sign-in is not enabled by the server. Use your password."
+                    return@launch
+                }
                 val option = com.google.android.libraries.identity.googleid.GetSignInWithGoogleOption.Builder(googleClientId).build()
                 val request = androidx.credentials.GetCredentialRequest.Builder().addCredentialOption(option).build()
                 val result = androidx.credentials.CredentialManager.create(this@MainActivity).getCredential(this@MainActivity, request)
@@ -419,7 +445,10 @@ class MainActivity : ComponentActivity() {
                 finishSignIn(api.googleLogin(token, remember))
             } catch (_: androidx.credentials.exceptions.GetCredentialCancellationException) { /* User cancelled; keep password login available. */ }
             catch (e: CancellationException) { throw e }
-            catch (_: Exception) { startupError = "Google sign-in is unavailable on this device or its Android OAuth registration is missing. Use your password; no account was created locally." }
+            catch (e: androidx.credentials.exceptions.GetCredentialException) {
+                startupError = "Google sign-in was rejected (${e.type}). Check that this app's signing certificate is registered in the Google Cloud OAuth console. Use your password meanwhile; no account was created locally."
+            }
+            catch (e: Exception) { startupError = "Google sign-in is unavailable on this device (${e.javaClass.simpleName}). Use your password; no account was created locally." }
             finally { loading = false }
         }
     }
@@ -708,14 +737,31 @@ class MainActivity : ComponentActivity() {
         if (!admin()) return
         searchQuery = query
         searchJob?.cancel()
-        if (query.trim().length < 2) { searchResults = emptyList(); searchLoading = false; return }
+        val generation = ++searchGeneration
+        if (query.trim().length < 2) { searchResults = emptyList(); searchLoading = false; searchError = ""; return }
         searchJob = scope.launch {
             delay(380)
             searchLoading = true
             try {
-                searchResults = api.json("/imdb/search?q=${java.net.URLEncoder.encode(query.trim(), "UTF-8")}").optJSONArray("results").objects()
-            } catch (e: Exception) { toast("Search: ${e.message}") }
-            finally { searchLoading = false }
+                var last: Exception? = null
+                for (attempt in 0 until 3) {
+                    try {
+                        val results = api.json("/imdb/search?q=${java.net.URLEncoder.encode(query.trim(), "UTF-8")}").optJSONArray("results").objects()
+                        if (generation == searchGeneration && searchQuery == query) { searchResults = results; searchError = "" }
+                        return@launch
+                    } catch (e: CancellationException) { throw e }
+                    catch (e: Exception) {
+                        last = e
+                        if (generation != searchGeneration || searchQuery != query) return@launch
+                        if (attempt < 2) delay(700L * (attempt + 1))
+                    }
+                }
+                if (generation == searchGeneration && searchQuery == query) {
+                    searchError = "Search is temporarily unavailable (${last?.message?.take(120) ?: "no response"}). Previous results are kept."
+                }
+            } finally {
+                if (generation == searchGeneration) searchLoading = false
+            }
         }
     }
 
@@ -1032,7 +1078,7 @@ class MainActivity : ComponentActivity() {
                     updatesOpen -> NativeUpdateScreen(NativeUpdates.get(this@MainActivity), { NativeUpdates.get(this@MainActivity).install(this@MainActivity) }, { updatesOpen = false })
                     profileOpen -> ProfileScreen(streamUser, savedVideos.size, { profileOpen = false; downloadsOpen = true }, {
                         openUpdates()
-                    }, { enterMode(it) }, { signOut() }, avatar = api.imageUrl(user.optString("avatar")), imageLoader = images,
+                    }, { signOut() }, avatar = api.imageUrl(user.optString("avatar")), imageLoader = images,
                         theme = device.theme, onTheme = { device.theme(it) }, onEdit = { editProfile = true },
                         onPhoto = { selectPhoto.launch("image/*") }, onRemovePhoto = {
                             scope.launch { try { account = api.json("/auth/avatar", "DELETE").getJSONObject("user"); device.account(account!!); toast("Photo removed", true) }
@@ -1054,7 +1100,7 @@ class MainActivity : ComponentActivity() {
                             scope.launch { try { api.json("/queue/${java.net.URLEncoder.encode(id, "UTF-8")}", "DELETE"); loadQueue() } catch (e: Exception) { toast(e.message ?: "Delete failed") } }
                         }, onCancelStage = { stage, ids -> cancelStage(stage, ids) }, onRetry = { id -> changeQueue(id) },
                             onEdit = { job, link -> changeQueue(job.optString("job_id"), link) }, busy = queueBusy, refreshing = queueRefreshing)
-                        "Download" -> NativeIngest(api, searchQuery, { search(it) }, searchResults, searchLoading, { loadQueue() })
+                        "Download" -> NativeIngest(api, searchQuery, { search(it) }, searchResults, searchLoading, { loadQueue() }, searchError)
                         else -> NativeAdminSettings(user, api, { openUpdates() }, { signOut() }, playbackPrefs, { key, value -> playerPreference(key, value) })
                     }
                     mode == "Files" && admin() -> if (filesTab == "Transfers") {
@@ -1112,7 +1158,7 @@ class MainActivity : ComponentActivity() {
                                 val next = if (title.kind == "series") title.episodes.firstOrNull { it.id == resume?.episodeId }
                                     ?: title.episodes.minWithOrNull(compareBy({ it.season }, { it.episode })) else null
                                 play(title, next)
-                            }, { toggleWatch(it) }, onSeeAll = { streamTab = it }, onMarkPlayed = { markPlayed(it) }, initialSort = device.sort("Home"), onSortChange = { device.sort("Home", it) }, completed = completed, saved = savedVideos.map { it.key }.toSet())
+                            }, { toggleWatch(it) }, onSeeAll = { streamTab = it }, onMarkPlayed = { markPlayed(it) }, completed = completed, saved = savedVideos.map { it.key }.toSet())
                             "Movies" -> BrowseScreen("Movies", movieTitles, lib.progress, lib.watch,
                                     browseQueries["Movies"].orEmpty(), { browseQueries["Movies"] = it }, { selected = it }, { toggleWatch(it) }, device.view("Movies"), { device.view("Movies", it) }, completed, savedKeys, device.sort("Movies"), { device.sort("Movies", it) })
                             "Series" -> BrowseScreen("Series", seriesTitles, lib.progress, lib.watch,

@@ -25,6 +25,14 @@ private val episodeNumberOnly = Regex("(?i)^s\\d+e\\d+$")
 fun normalizedName(value: String) = java.text.Normalizer.normalize(value, java.text.Normalizer.Form.NFKD)
     .lowercase(java.util.Locale.ROOT).replace(metadataPunctuation, "")
 
+/**
+ * Catalogue-specific source exclusions. Peaky Blinders' TVmaze episode order
+ * does not line up with the files here, so stale matches are dropped instead
+ * of being re-applied on the next library refresh.
+ */
+internal fun metadataSourceBlocked(title: String, provider: String) =
+    normalizedName(title) == "peakyblinders" && provider == "TVmaze"
+
 fun isGeneratedEpisodeName(name: String, series: String): Boolean {
     val trimmed = name.replace(episodePrefix, "")
     return name.isBlank() || trimmed.isBlank() || normalizedName(trimmed) == normalizedName(series) || episodeNumberOnly.matches(name.trim())
@@ -90,10 +98,21 @@ class EpisodeMetadata(context: Context, private val fetchOverride: ((String) -> 
             return response.body!!.byteStream().use { it.readBytesBounded(3 * 1024 * 1024).toString(Charsets.UTF_8) }
         }
     }
+    /**
+     * Catalogue-specific source exclusions. Peaky Blinders' TVmaze episode order
+     * does not line up with the files here, so stale matches are dropped instead
+     * of being silently re-applied.
+     */
+    private fun blocked(title: Title, provider: String) = metadataSourceBlocked(title.title, provider)
+
     fun cached(title: Title): EpisodeNames? = runCatching {
         val record = JSONObject(prefs.getString(key(title), "")!!)
         val source = record.getJSONObject("source")
-        EpisodeNames(MetadataMatch(source.getString("provider"), source.getString("id"), source.getString("name"), source.optInt("year")),
+        val provider = source.getString("provider")
+        if (blocked(title, provider)) {
+            prefs.edit().remove(key(title)).apply()
+            null
+        } else EpisodeNames(MetadataMatch(provider, source.getString("id"), source.getString("name"), source.optInt("year")),
             record.getJSONArray("episodes").let { rows -> (0 until rows.length()).map { val e = rows.getJSONObject(it); EpisodeName(e.getInt("season"), e.getInt("episode"), e.getString("name"), e.optString("description")) } })
     }.getOrNull()
     private fun store(title: Title, names: EpisodeNames?) {
@@ -112,6 +131,7 @@ class EpisodeMetadata(context: Context, private val fetchOverride: ((String) -> 
         tv + wiki
     }
     suspend fun choose(title: Title, source: MetadataMatch): EpisodeNames = withContext(Dispatchers.IO) {
+        require(!blocked(title, source.provider)) { "This metadata source does not match this title. Choose another source." }
         val names = if (source.provider == "TVmaze") {
             require(source.id.matches(Regex("[0-9]+")))
             parseTvmazeNames(JSONArray(get("https://api.tvmaze.com/shows/${source.id}/episodes")))
@@ -135,7 +155,7 @@ class EpisodeMetadata(context: Context, private val fetchOverride: ((String) -> 
                 }.singleOrNull()?.optString("id").orEmpty()
             }.getOrDefault("")
             // Automatic matching is strict: same show name and debut year, not first search result.
-            val exact = found.filter { it.provider == "TVmaze" && ((normalizedName(it.name) == normalizedName(title.title) && it.year == title.year && title.year > 0) || (imdb.startsWith("tt") && it.imdb == imdb)) }.singleOrNull()
+            val exact = found.filter { it.provider == "TVmaze" && !blocked(title, it.provider) && ((normalizedName(it.name) == normalizedName(title.title) && it.year == title.year && title.year > 0) || (imdb.startsWith("tt") && it.imdb == imdb)) }.singleOrNull()
             if (exact != null) runCatching { choose(title, exact) }.getOrNull()?.let { return@withLock applyEpisodeNames(title, it) }
             // Wikipedia infobox title/year must match before its public episode tables are accepted.
             for (candidate in found.filter { it.provider == "Wikipedia" }.take(2)) {

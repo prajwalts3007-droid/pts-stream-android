@@ -2,6 +2,7 @@ package online.ptsmovies.stream
 
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
@@ -9,6 +10,7 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.*
@@ -20,7 +22,7 @@ import org.json.JSONObject
 
 /** Native counterpart of web renderMediaCard / ZIP preflight / duplicate replacement. */
 @Composable
-fun NativeIngest(api: PtsApi, query: String, onQuery: (String) -> Unit, results: List<JSONObject>, searching: Boolean, onQueued: () -> Unit) {
+fun NativeIngest(api: PtsApi, query: String, onQuery: (String) -> Unit, results: List<JSONObject>, searching: Boolean, onQueued: () -> Unit, searchError: String = "") {
     val scope = rememberCoroutineScope(); val context = LocalContext.current
     var selected by remember { mutableStateOf<JSONObject?>(null) }
     var rows by remember { mutableStateOf(emptyList<IngestEpisode>()) }
@@ -77,7 +79,7 @@ fun NativeIngest(api: PtsApi, query: String, onQuery: (String) -> Unit, results:
         onConfirm = { paste = null; import(text) }, onDismiss = { paste = null }) { PtsField(text, { paste = it }, "Links", Modifier.fillMaxWidth(), singleLine = false) } }
     duplicate?.let { (payload, labels) -> PtsConfirmDialog("Already added", "$labels\n\nDownload again with the new link? The file on the Pi will be overwritten.", "Replace", destructive = true,
         onConfirm = { duplicate = null; submit(JSONObject(payload.toString()).put("force", true)) }, onDismiss = { duplicate = null }) }
-    submission?.let { payload -> PtsConfirmDialog("Add to queue?", "Submit ${payload.getJSONArray("items").length()} selected source(s) for ${payload.optString("title")}? Only submit media you are authorized to copy. Server source and ZIP checks still apply.", "Add",
+    submission?.let { payload -> PtsConfirmDialog("Add to queue?", "Submit ${payload.getJSONArray("items").length()} selected source(s) for ${payload.optString("title")}? Server source and ZIP checks still apply.", "Add",
         onConfirm = { submission = null; submit(payload) }, onDismiss = { submission = null }) }
     LazyColumn(Modifier.testTag("native-ingest"), contentPadding = PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         item { PtsPage("Ingest") }
@@ -90,15 +92,38 @@ fun NativeIngest(api: PtsApi, query: String, onQuery: (String) -> Unit, results:
         if (busy || searching) item { LinearProgressIndicator(Modifier.fillMaxWidth()) }
         if (error.isNotBlank()) item { PtsErrorBanner(error) }
         if (notice.isNotBlank()) item { Text(notice, color = Pts.ok) }
-        if (selected == null) itemsIndexed(results) { _, result ->
-            PtsCard(Modifier.fillMaxWidth(), onClick = { selected = result; rows = emptyList(); movieLink = ""; zipLink = ""; error = "" }) {
-                Text(result.optString("title"), color = Pts.text, style = MaterialTheme.typography.titleMedium)
-                Text("${result.optInt("year")} · ${result.optString("type")}", color = Pts.muted)
+        if (selected == null) {
+            if (searchError.isNotBlank()) item {
+                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    PtsErrorBanner(searchError)
+                    PtsSecondaryButton("Retry search", enabled = query.trim().length >= 2 && !searching) { onQuery(query) }
+                }
+            }
+            if (results.isEmpty() && !searching && query.trim().length >= 2 && searchError.isBlank()) item {
+                Text("No matching titles. Try the full title or an IMDb ID.", color = Pts.muted, style = MaterialTheme.typography.bodySmall)
+            }
+            itemsIndexed(results) { _, result ->
+                PtsCard(Modifier.fillMaxWidth(), onClick = { selected = result; rows = emptyList(); movieLink = ""; zipLink = ""; error = "" }) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Box(Modifier.width(52.dp).aspectRatio(2f / 3f).clip(PosterShape).background(Pts.soft)) {
+                            PtsPosterImage(api.imageUrl(result.optString("poster")), result.optString("title"), Modifier.fillMaxSize())
+                        }
+                        Column(Modifier.weight(1f).padding(start = 12.dp)) {
+                            Text(result.optString("title"), color = Pts.text, style = MaterialTheme.typography.titleMedium)
+                            Text("${result.optInt("year")} · ${result.optString("type")}", color = Pts.muted)
+                            val stars = result.optString("stars")
+                            if (stars.isNotBlank()) Text(stars, color = Pts.muted, style = MaterialTheme.typography.bodySmall, maxLines = 2)
+                        }
+                    }
+                }
             }
         }
         selected?.let { title ->
             item { Row(verticalAlignment = Alignment.CenterVertically) {
-                Column(Modifier.weight(1f)) { Text(title.optString("title"), color = Pts.text, style = MaterialTheme.typography.titleLarge); Text("${title.optInt("year")} · ${title.optString("type")}", color = Pts.muted) }
+                Box(Modifier.width(52.dp).aspectRatio(2f / 3f).clip(PosterShape).background(Pts.soft)) {
+                    PtsPosterImage(api.imageUrl(title.optString("poster")), title.optString("title"), Modifier.fillMaxSize())
+                }
+                Column(Modifier.weight(1f).padding(start = 12.dp)) { Text(title.optString("title"), color = Pts.text, style = MaterialTheme.typography.titleLarge); Text("${title.optInt("year")} · ${title.optString("type")}", color = Pts.muted) }
                 PtsIconAction(PtsIcons.Close, "Clear selected title", { selected = null; rows = emptyList() })
             } }
             if (title.optString("type") == "series") {

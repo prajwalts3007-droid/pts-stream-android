@@ -51,7 +51,7 @@ fun CompactDownloads(saved: List<SavedVideo>, tasks: List<DownloadTask>, onPlay:
             val pending = tasks.filter { it.title.id == id && it.status != "complete" }
             val title = metadata[id]
             val series = title?.kind == "series" || videos.any { it.season > 0 }
-            PtsCard(Modifier.fillMaxWidth().animateItem(fadeInSpec = if (motion) androidx.compose.animation.core.tween(160) else null, placementSpec = if (motion) androidx.compose.animation.core.tween(220) else null, fadeOutSpec = if (motion) androidx.compose.animation.core.tween(100) else null), padding = 10.dp, onClick = if (series) ({ folder = id }) else null) {
+            PtsCard(Modifier.fillMaxWidth().animateItem(fadeInSpec = motionSpec(motion, 160), placementSpec = motionPlacementSpec(motion, 220), fadeOutSpec = motionSpec(motion, 100)), padding = 10.dp, onClick = if (series) ({ folder = id }) else null) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     DownloadPoster(videos.firstOrNull()?.poster ?: title?.poster, imageLoader)
                     Column(Modifier.weight(1f).padding(horizontal = 12.dp), verticalArrangement = Arrangement.spacedBy(5.dp)) {

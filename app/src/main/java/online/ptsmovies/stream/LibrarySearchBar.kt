@@ -14,11 +14,11 @@ import androidx.compose.ui.unit.dp
 /** One compact row; descriptions stay accessible without visible button labels. */
 @Composable
 internal fun LibrarySearchBar(query: String, onQuery: (String) -> Unit, onFilters: () -> Unit,
-    view: String? = null, onViewChange: (String) -> Unit = {}, filtersActive: Boolean = false) {
+    view: String? = null, onViewChange: (String) -> Unit = {}, filtersActive: Boolean = false, filtersEnabled: Boolean = true) {
     Row(Modifier.fillMaxWidth().testTag("library-search-row"), verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(4.dp)) {
         PtsSearchField(query, { onQuery(it.take(160)) }, "Titles or episode names", Modifier.weight(1f).testTag("library-search-input"))
-        Box(Modifier.testTag("library-filter-action").semantics(mergeDescendants = true) { stateDescription = if (filtersActive) "Filters active" else "No active filters" }) {
+        if (filtersEnabled) Box(Modifier.testTag("library-filter-action").semantics(mergeDescendants = true) { stateDescription = if (filtersActive) "Filters active" else "No active filters" }) {
             PtsIconAction(PtsIcons.Filter, "Library filters", onFilters, tint = Pts.accent)
             if (filtersActive) Box(Modifier.align(Alignment.TopEnd).padding(7.dp).size(7.dp).background(Pts.accent, CircleShape).testTag("active-filter-dot"))
         }

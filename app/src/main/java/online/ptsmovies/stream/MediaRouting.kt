@@ -85,7 +85,10 @@ class MediaRouting internal constructor(private val endpointOverride: (() -> Lan
                 healthy = linkedCall(client.newBuilder().readTimeout(750, TimeUnit.MILLISECONDS).build(), Request.Builder().url(endpoint.base.newBuilder().encodedPath("/lan-health").build()).build(), parent).use { it.isSuccessful && it.body?.string() == "pts-pi-lan-v1" }
                 checkedAt = now
             }
-            if (!healthy) return null
+            if (!healthy) {
+                if (endpointOverride == null) PtsApplication.environment?.let { LanDiscovery.maybeDiscover(it) }
+                return null
+            }
             val headers = Headers.Builder()
             listOf("Range", "If-Range", "Accept", "User-Agent").forEach { name -> request.header(name)?.let { headers.add(name, it) } }
             val url = endpoint.base.newBuilder().encodedPath(request.url.encodedPath).encodedQuery(request.url.encodedQuery).build()
@@ -94,7 +97,9 @@ class MediaRouting internal constructor(private val endpointOverride: (() -> Lan
             else response.newBuilder().request(request).build()
         } catch (e: Exception) {
             if (parent.isCanceled()) throw java.io.IOException("Media request cancelled", e)
-            healthy = false; checkedAt = android.os.SystemClock.elapsedRealtime(); null
+            healthy = false; checkedAt = android.os.SystemClock.elapsedRealtime()
+            if (endpointOverride == null) PtsApplication.environment?.let { LanDiscovery.maybeDiscover(it) }
+            null
         }
     }
     override fun intercept(chain: Interceptor.Chain): Response {

@@ -22,11 +22,18 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.*
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 
 internal val LocalPtsMotion = staticCompositionLocalOf<Boolean?> { null }
 @Composable @ReadOnlyComposable internal fun ptsMotionEnabled() = LocalPtsMotion.current ?: true
-internal fun motionMillis(enabled: Boolean, milliseconds: Int) = if (enabled) milliseconds else 0
+/** One dial for perceived speed. The previous timings read as abrupt on 60 Hz phones. */
+internal const val MOTION_SCALE = 1.4f
+internal fun motionMillis(enabled: Boolean, milliseconds: Int) = if (enabled) (milliseconds * MOTION_SCALE).toInt() else 0
+internal fun motionSpec(enabled: Boolean, milliseconds: Int): FiniteAnimationSpec<Float>? =
+    if (enabled) tween(motionMillis(true, milliseconds), easing = FastOutSlowInEasing) else null
+internal fun motionPlacementSpec(enabled: Boolean, milliseconds: Int): FiniteAnimationSpec<IntOffset>? =
+    if (enabled) tween(motionMillis(true, milliseconds), easing = FastOutSlowInEasing) else null
 
 /** Entry only: never cross-compose two screens, repeat their effects, or recreate a decoder. */
 @Composable
@@ -35,7 +42,7 @@ internal fun Modifier.ptsPageMotion(route: Any): Modifier {
     val reveal = remember { Animatable(1f) }
     val distance = with(LocalDensity.current) { 8.dp.toPx() }
     LaunchedEffect(route, motion) {
-        if (motion) { reveal.snapTo(0f); reveal.animateTo(1f, tween(200, easing = FastOutSlowInEasing)) }
+        if (motion) { reveal.snapTo(0f); reveal.animateTo(1f, tween(motionMillis(true, 200), easing = FastOutSlowInEasing)) }
         else reveal.snapTo(1f)
     }
     return graphicsLayer {
@@ -85,7 +92,7 @@ private fun RefreshGlyph(refreshing: Boolean, modifier: Modifier = Modifier) {
     val motion = ptsMotionEnabled()
     val rotation = if (refreshing && motion) {
         val transition = rememberInfiniteTransition(label = "refresh-active")
-        val angle by transition.animateFloat(0f, 360f, infiniteRepeatable(tween(850, easing = LinearEasing)), label = "refresh-rotation")
+        val angle by transition.animateFloat(0f, 360f, infiniteRepeatable(tween(1250, easing = LinearEasing)), label = "refresh-rotation")
         angle
     } else 0f
     Icon(PtsIcons.Refresh, null, modifier.graphicsLayer { rotationZ = rotation }, tint = if (refreshing) Pts.accent else Pts.muted)

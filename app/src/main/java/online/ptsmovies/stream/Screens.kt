@@ -138,21 +138,11 @@ fun StreamHomeScreen(
     onPlay: (Title) -> Unit,
     onToggleWatch: (Title) -> Unit,
     onSeeAll: (String) -> Unit,
-    onMarkPlayed: (Title) -> Unit = {}, initialSort: String = LibrarySort.RELEVANCE.name, onSortChange: (String) -> Unit = {},
+    onMarkPlayed: (Title) -> Unit = {},
     completed: Set<String> = emptySet(), saved: Set<String> = emptySet()
 ) {
     var query by rememberSaveable { mutableStateOf("") }
-    var sortName by rememberSaveable { mutableStateOf(initialSort) }
-    var filtersOpen by remember { mutableStateOf(false) }
-    var year by rememberSaveable { mutableIntStateOf(0) }
-    var language by rememberSaveable { mutableStateOf("") }
-    var unwatched by rememberSaveable { mutableStateOf(false) }
-    var downloaded by rememberSaveable { mutableStateOf(false) }
-    val selection = LibraryFilter(year, language, unwatched, downloaded)
-    val sort = LibrarySort.entries.firstOrNull { it.name == sortName } ?: LibrarySort.RELEVANCE
-    if (filtersOpen) LibraryFiltersDialog(library.titles, selection, { next -> year = next.year; language = next.language; unwatched = next.unwatched; downloaded = next.downloaded },
-        { filtersOpen = false }, sort, { sortName = it.name; onSortChange(it.name) })
-    val queryResults = rememberLibraryResults(library.titles, query, sort, selection, completed, saved)
+    val queryResults = rememberLibraryResults(library.titles, query, LibrarySort.RELEVANCE, LibraryFilter(), completed, saved)
     val results = queryResults.orEmpty()
     val shelves = remember(results, library.progress, library.titles) { homeShelves(results, library.progress, library.titles) }
     val featured = shelves.featured
@@ -167,7 +157,7 @@ fun StreamHomeScreen(
         contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 12.dp, bottom = 20.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
-        item { LibrarySearchBar(query, { query = it }, { filtersOpen = true }, filtersActive = libraryFiltersActive(selection, sort)) }
+        item { LibrarySearchBar(query, { query = it }, {}, filtersEnabled = false) }
         if (queryResults == null) item { androidx.compose.material3.LinearProgressIndicator(Modifier.fillMaxWidth(), color = Pts.accent) }
         else if (query.isNotBlank()) {
             item { Text("${results.size} results", style = MaterialTheme.typography.bodySmall, color = Pts.muted) }
@@ -180,7 +170,7 @@ fun StreamHomeScreen(
                 }
             } }
         } else if (results.isEmpty()) {
-            item { PtsEmpty(if (library.titles.isEmpty()) "Your library is empty" else "No matching titles", "Adjust Library filters to change the results.", icon = PtsIcons.Film) }
+            item { PtsEmpty(if (library.titles.isEmpty()) "Your library is empty" else "No matching titles", if (library.titles.isEmpty()) "New titles appear after the next library sync." else "Try a different search.", icon = PtsIcons.Film) }
         } else {
             if (featured.isNotEmpty()) {
                 item {
@@ -189,7 +179,7 @@ fun StreamHomeScreen(
                     Column(verticalArrangement = Arrangement.spacedBy(9.dp)) {
                         HorizontalPager(state = pager, pageSpacing = 12.dp, modifier = Modifier.fillMaxWidth()) { index ->
                             val t = featured[index]
-                            PtsHero(t, t.id in library.watch, { onPlay(t) }, { onPlay(t) }, { onToggleWatch(t) })
+                            PtsHero(t, t.id in library.watch, { onOpen(t) }, { onPlay(t) }, { onToggleWatch(t) })
                         }
                         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Center) {
                             repeat(featured.size) { index ->
@@ -310,7 +300,7 @@ fun BrowseScreen(
             }
         }
         items(filtered, key = { it.id }) { t ->
-            val placement = Modifier.animateItem(fadeInSpec = if (motion) tween(160) else null, placementSpec = if (motion) tween(220) else null, fadeOutSpec = if (motion) tween(100) else null)
+            val placement = Modifier.animateItem(fadeInSpec = motionSpec(motion, 160), placementSpec = motionPlacementSpec(motion, 220), fadeOutSpec = motionSpec(motion, 100))
             if (view == "grid") PtsPosterCard(t, progress[t.id], t.id in watch, modifier = placement, width = null, onOpen = { onOpen(t) }, onToggleWatch = { onToggleWatch(t) })
             else PtsTitleListRow(t, t.id in watch, { onOpen(t) }, { onToggleWatch(t) }, placement)
         }
@@ -454,7 +444,7 @@ fun DownloadsScreen(saved: List<SavedVideo>, onPlay: (SavedVideo) -> Unit, onDel
 }
 
 @Composable
-fun ProfileScreen(user: JSONObject, savedCount: Int, onDownloads: () -> Unit, onUpdate: () -> Unit, onSection: (String) -> Unit, onSignOut: () -> Unit,
+fun ProfileScreen(user: JSONObject, savedCount: Int, onDownloads: () -> Unit, onUpdate: () -> Unit, onSignOut: () -> Unit,
     avatar: String? = null, imageLoader: coil.ImageLoader? = null, theme: String = "dark", onTheme: (String) -> Unit = {},
     onEdit: () -> Unit = {}, onPhoto: () -> Unit = {}, onRemovePhoto: () -> Unit = {}, onPlayback: () -> Unit = {}, onDownloadSettings: () -> Unit = {}, onAbout: () -> Unit = {}, onSync: () -> Unit = {}, onPassword: () -> Unit = {}) {
     val name = user.optString("name").ifBlank { user.optString("username") }
@@ -490,18 +480,6 @@ fun ProfileScreen(user: JSONObject, savedCount: Int, onDownloads: () -> Unit, on
                 if (avatar != null) PtsButtonPair(first = { PtsSecondaryButton("Change photo", it, onClick = onPhoto) },
                     second = { PtsSecondaryButton("Remove photo", it, onClick = onRemovePhoto) })
                 else PtsSecondaryButton("Change photo", Modifier.fillMaxWidth(), onClick = onPhoto)
-            }
-        }
-        if (role == "admin") {
-            item {
-                PtsCard(Modifier.fillMaxWidth()) {
-                    Text("Sections", style = MaterialTheme.typography.titleMedium, color = Pts.text)
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        PtsSecondaryButton("Hub", Modifier.weight(1f)) { onSection("Hub") }
-                        PtsSecondaryButton("Files", Modifier.weight(1f)) { onSection("Files") }
-                        PtsSecondaryButton("Stream", Modifier.weight(1f)) { onSection("Stream") }
-                    }
-                }
             }
         }
         item {
@@ -678,7 +656,7 @@ fun QueueScreen(
     }
     LazyColumn(
         contentPadding = PaddingValues(start = 16.dp, end = 16.dp, bottom = 20.dp),
-        verticalArrangement = Arrangement.spacedBy(10.dp)
+        verticalArrangement = Arrangement.spacedBy(8.dp)
     ) {
         item {
             PtsPage("Queue") {
@@ -743,33 +721,51 @@ private fun StageTile(label: String, count: Int, active: Boolean, stage: String,
 @Composable
 private fun QueueJobRow(job: JSONObject, onDelete: () -> Unit, onRetry: () -> Unit, onEdit: () -> Unit, busy: Boolean) {
     val stage = job.optString("stage", "queued")
-    val progress = (job.optDouble("progress", 0.0) / 100).toFloat().takeIf { it.isFinite() } ?: 0f
+    val progress = (job.optDouble("progress", 0.0) / 100).toFloat().takeIf { it.isFinite() }?.coerceIn(0f, 1f) ?: 0f
     val failed = stage == "failed"
     val done = stage == "done"
+    val speed = job.optLong("speed_bps", 0).takeIf { it > 0 && !done && !failed }
+    val eta = job.optLong("eta_seconds", 0).takeIf { it > 0 && !done && !failed } ?: run {
+        val total = job.optLong("out_size", 0).takeIf { it > 0 } ?: job.optLong("file_size", 0)
+        if (speed != null && total > 0 && progress > 0f && progress < 1f) {
+            ((total * (1f - progress)) / speed).toLong().takeIf { it > 0 }
+        } else null
+    }
     val tags = buildList {
         if (job.optInt("season") > 0) add("S%02dE%02d".format(job.optInt("season"), job.optInt("episode")))
         if (job.optInt("year") > 0) add(job.optInt("year").toString())
         add(if (job.optString("type") == "series") "series" else "movie")
     }
-    PtsCard(Modifier.fillMaxWidth(), padding = 13.dp, borderColor = when { failed -> Pts.danger.copy(alpha = .7f); done -> Pts.ok.copy(alpha = .6f); else -> Pts.line }) {
+    PtsCard(Modifier.fillMaxWidth(), padding = 10.dp, borderColor = when { failed -> Pts.danger.copy(alpha = .7f); done -> Pts.ok.copy(alpha = .6f); else -> Pts.line }) {
         Row(verticalAlignment = Alignment.CenterVertically) {
-            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(1.dp)) {
                 Text(job.optString("title").ifBlank { job.optString("job_id") }, style = MaterialTheme.typography.titleSmall, color = Pts.text, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                Text("· ${tags.joinToString(" · ")}", style = MaterialTheme.typography.labelSmall, color = Pts.muted, maxLines = 1)
+                Text(tags.joinToString(" · "), style = MaterialTheme.typography.labelSmall, color = Pts.muted, maxLines = 1)
             }
             if (!busy) {
-                if (failed) PtsIconAction(PtsIcons.Retry, "Retry job", onRetry, size = 40.dp)
-                PtsIconAction(PtsIcons.Edit, "Change download link", onEdit, size = 40.dp)
-                PtsIconAction(PtsIcons.Close, "Remove", onDelete, tint = Pts.danger, size = 40.dp)
+                if (failed) PtsIconAction(PtsIcons.Retry, "Retry job", onRetry, size = 38.dp)
+                PtsIconAction(PtsIcons.Edit, "Change download link", onEdit, size = 38.dp)
+                PtsIconAction(PtsIcons.Close, "Remove", onDelete, tint = Pts.danger, size = 38.dp)
             }
         }
         PtsProgressBar(if (done) 1f else progress, tint = when { failed -> Pts.danger; done -> Pts.ok; stage == "downloading" -> Pts.spark; else -> Pts.accent })
         Row(verticalAlignment = Alignment.CenterVertically) {
-            Text(stageLabel(stage), style = MaterialTheme.typography.labelMedium, color = when { failed -> Pts.danger; done -> Pts.ok; else -> Pts.text })
-            Spacer(Modifier.weight(1f))
-            if (progress > 0) Text("${(progress * 100).toInt()}%", style = MaterialTheme.typography.labelSmall, color = Pts.muted)
+            Text(
+                buildString {
+                    append(stageLabel(stage))
+                    if (progress > 0) append(" · ${(progress * 100).toInt()}%")
+                },
+                Modifier.weight(1f), style = MaterialTheme.typography.labelSmall,
+                color = when { failed -> Pts.danger; done -> Pts.ok; else -> Pts.text }, maxLines = 1, overflow = TextOverflow.Ellipsis
+            )
+            if (speed != null) {
+                Text(formatRate(speed), style = MaterialTheme.typography.labelSmall, color = Pts.muted, maxLines = 1)
+                Spacer(Modifier.width(8.dp))
+            }
+            if (eta != null) Text("${formatDuration(eta)} left", style = MaterialTheme.typography.labelSmall, color = Pts.muted, maxLines = 1)
         }
-        ShortSynopsis(listOf(job.optString("message"), job.optString("error")).filter { it.isNotBlank() }.distinct().joinToString("\n"))
+        val note = listOf(job.optString("message"), job.optString("error")).filter { it.isNotBlank() }.distinct().joinToString("\n")
+        if (note.isNotBlank()) Text(note, style = MaterialTheme.typography.bodySmall, color = if (failed) Pts.danger else Pts.muted, maxLines = 2, overflow = TextOverflow.Ellipsis)
     }
 }
 

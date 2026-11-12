@@ -119,7 +119,7 @@ fun NativeFilesScreen(
             val isDir = entry.optBoolean("is_dir")
             val shape = RoundedCornerShape(topStart = if (index == 0) 14.dp else 0.dp, topEnd = if (index == 0) 14.dp else 0.dp,
                 bottomStart = if (index == entries.lastIndex) 14.dp else 0.dp, bottomEnd = if (index == entries.lastIndex) 14.dp else 0.dp)
-            Box(Modifier.fillMaxWidth().animateItem(fadeInSpec = if (motion) androidx.compose.animation.core.tween(160) else null, placementSpec = if (motion) androidx.compose.animation.core.tween(220) else null, fadeOutSpec = if (motion) androidx.compose.animation.core.tween(100) else null).testTag("file-row-$filename").background(Pts.card, shape).border(1.dp, if (filename in selected) Pts.accent else Pts.line, shape).clickable {
+            Box(Modifier.fillMaxWidth().animateItem(fadeInSpec = motionSpec(motion, 160), placementSpec = motionPlacementSpec(motion, 220), fadeOutSpec = motionSpec(motion, 100)).testTag("file-row-$filename").background(Pts.card, shape).border(1.dp, if (filename in selected) Pts.accent else Pts.line, shape).clickable {
                 if (selecting) selected = if (filename in selected) selected - filename else selected + filename
                 else if (isDir) onPath(filePath(path, filename)) else menu = entry
             }.padding(10.dp)) {

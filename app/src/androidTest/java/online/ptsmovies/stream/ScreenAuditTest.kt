@@ -70,7 +70,7 @@ class ScreenAuditTest {
                                 6 -> BrowseScreen("Movies", library.titles.filter { it.kind == "movie" }, library.progress, library.watch, "", {}, {}, {})
                                 7 -> TitleScreen(series, library.progress[1], true, emptySet(), "", {}, {}, {}, {})
                                 8 -> DownloadsScreen(emptyList(), {}, {})
-                                9 -> ProfileScreen(admin, 0, {}, {}, {}, {})
+                                9 -> ProfileScreen(admin, 0, {}, {}, {})
                                 10 -> NativeAdminSettings(admin, remember { PtsApi(mockBaseUrl, okhttp3.CookieJar.NO_COOKIES) }, {}, {})
                                 11 -> SearchScreen("Open Road", {}, listOf(JSONObject("""{"title":"The Open Road","year":2025,"type":"series"}""")), false)
                             }
@@ -130,9 +130,15 @@ class ScreenAuditTest {
         ui.onNodeWithText("Nothing saved yet").assertDoesNotExist()
     }
 
-    @Test fun nonAdminProfileHasNoSectionControls() {
+    @Test fun profileHasNoDuplicateSectionControls() {
         val viewer = JSONObject(admin.toString()).put("role", "user")
-        ui.setContent { PtsTheme { ProfileScreen(viewer, 0, {}, {}, {}, {}) } }
+        ui.setContent { PtsTheme { ProfileScreen(viewer, 0, {}, {}, {}) } }
+        ui.onNodeWithText("Sections").assertDoesNotExist()
+        ui.onNodeWithText("My Downloads").assertExists()
+    }
+
+    @Test fun adminProfileAlsoHasNoDuplicateSectionControls() {
+        ui.setContent { PtsTheme { ProfileScreen(admin, 0, {}, {}, {}) } }
         ui.onNodeWithText("Sections").assertDoesNotExist()
         ui.onNodeWithText("My Downloads").assertExists()
     }
