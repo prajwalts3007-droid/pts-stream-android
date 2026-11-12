@@ -1,6 +1,15 @@
-# Native Android follow-up fixes (unreleased)
+# Native Android follow-up fixes — v16 Stable
 
-Scope: Kotlin/Compose Android application only. No web UI, Pi configuration, backend deployment, production ingestion job, or compression setting changes. No release tag or public APK is created by this work.
+Scope: Kotlin/Compose Android application only. No web UI, Pi configuration, backend deployment, production ingestion job, or compression setting changes.
+
+## Published artifact and OTA
+
+- [Stable release v16](https://github.com/prajwalts3007-droid/pts-stream-android/releases/tag/v16), tagged source `485a889269c06cde395fdf73b4a054a46b522c6c`.
+- [Standalone signed APK](https://github.com/prajwalts3007-droid/pts-stream-android/releases/download/v16/PTS-Stream-v16.apk): 3,793,969 bytes; package `online.ptsmovies.stream`, versionCode 16 / versionName 1.0.16; same release signing key.
+- Public APK SHA-256: `5b5ecdb71bdda73f1adece0c274a4f1543b6bd6045b48655689a062caaf9a05e`, equal to the tag-build CI packaging report. Signature, package/version, baseline profiles and 16 KiB alignment were independently rechecked after public download.
+- Main source audit `43292307634`, debug build `43292307667`, and signed release/publication workflow `43293047097`: success. The audit ran 114 tests per variant (228 executions); zero test failures and zero lint errors (96 warnings and one hint per variant). Device regressions were compiled, not executed.
+- The earlier manually dispatched Actions APK has a different whole-file checksum, but every ZIP entry's uncompressed contents match the public tag-built APK. Use the public release checksum above for OTA/download verification.
+- Anonymous `releases/latest` now returns v16 with the expected APK asset URL/digest. On v15 or older, use **Profile → Check for updates → Stable → Check for updates**. If 1.0.16 is already installed from Actions, no newer update is expected. Installation still requires Android consent; do not uninstall the existing app.
 
 ## Requested changes
 
@@ -27,7 +36,7 @@ The SHA-1 was extracted from the public signed v15 APK; it is not a private key.
 
 ## Validation boundary
 
-GitHub Actions runs host unit tests, lint, builds the debug APK, and **compiles** Compose/device regression tests without an emulator. Compiling those tests does not execute taps, measure phone performance, establish Pi discovery on the user's network, or establish Google authentication on the phone. No published v16 APK should be inferred from the branch name.
+GitHub Actions runs host unit tests, lint, builds the debug APK, and **compiles** Compose/device regression tests without an emulator. Compiling those tests does not execute taps, measure phone performance, establish Pi discovery on the user's network, or establish Google authentication on the phone. Stable publication is verified above; it is not evidence of physical-device validation.
 
 Required real-device checks after an approved build: in-place upgrade, featured card versus Play navigation, Home/Browse filter separation, admin dock access, ingest cancellation and posters, queue ETA/large text, Wi-Fi DHCP change and fallback, Google error/success, playback/PiP and existing downloads.
 
