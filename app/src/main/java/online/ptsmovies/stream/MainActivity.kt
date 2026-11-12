@@ -123,7 +123,7 @@ class MainActivity : ComponentActivity() {
         DurableWork.scope.launch {
             try {
                 edit(stores)
-                withContext(Dispatchers.Main) { if (account?.optLong("id") == stores.owner) { episodeProgressRevision++; after() } }
+                withContext(Dispatchers.Main) { if (!isDestroyed && account?.optLong("id") == stores.owner) { episodeProgressRevision++; after() } }
             } catch (e: Exception) { withContext(Dispatchers.Main) { if (!isDestroyed) toast("Could not save progress: ${e.message}") } }
         }
     }
@@ -1407,9 +1407,10 @@ class MainActivity : ComponentActivity() {
                            setStyle(androidx.media3.ui.CaptionStyleCompat(
                                when (appearance.subtitleColor) { "yellow" -> android.graphics.Color.YELLOW; "cyan" -> android.graphics.Color.CYAN; else -> android.graphics.Color.WHITE },
                                android.graphics.Color.TRANSPARENT, android.graphics.Color.TRANSPARENT,
-                               if (appearance.outline) androidx.media3.ui.CaptionStyleCompat.EDGE_TYPE_OUTLINE else androidx.media3.ui.CaptionStyleCompat.EDGE_TYPE_NONE,
-                               android.graphics.Color.BLACK, null))
-                       }
+                                if (appearance.outline) androidx.media3.ui.CaptionStyleCompat.EDGE_TYPE_OUTLINE else androidx.media3.ui.CaptionStyleCompat.EDGE_TYPE_NONE,
+                                android.graphics.Color.BLACK, null))
+                            captionStyle[0] = view to appearance
+                        }
                      if (view.tag !== exo) {
                          view.tag = exo
                          // Decode only after the native surface has dimensions. A new source
@@ -1552,8 +1553,7 @@ class MainActivity : ComponentActivity() {
                                 format.language?.let { playerPreference("audio_lang", it) }
                                 showTracks = false
                             }
-                            captionStyle[0] = view to appearance
-                        }
+                         }
                     }
                     Text("Subtitles", style = MaterialTheme.typography.labelMedium, color = Pts.muted)
                     PtsSecondaryButton("Off", Modifier.fillMaxWidth()) {
@@ -1648,8 +1648,10 @@ class MainActivity : ComponentActivity() {
             streamTab = nav.optString("stream").takeIf { it in setOf("Home", "Movies", "Series", "Watchlist") } ?: "Home"
             filesPath = nav.optString("path"); filesDevice = nav.optString("device", "vps")
             selected = library?.titles?.firstOrNull { it.id == nav.optLong("title") }
+                ?: savedVideos.firstOrNull { it.titleId == nav.optLong("title") }?.titleMetadata()
                 ?: nav.optJSONObject("selected")?.let { runCatching { parseTitle(it) }.getOrNull() }
             playbackTitle = library?.titles?.firstOrNull { it.id == nav.optLong("playback_title_id") }
+                ?: savedVideos.firstOrNull { it.titleId == nav.optLong("playback_title_id") }?.titleMetadata()
                 ?: nav.optJSONObject("playback_title")?.let { runCatching { parseTitle(it) }.getOrNull() } ?: selected
             miniPlayer = nav.optBoolean("mini_player")
             episode = playbackTitle?.episodes?.firstOrNull { it.id == nav.optLong("episode") }

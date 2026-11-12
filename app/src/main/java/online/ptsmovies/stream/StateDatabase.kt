@@ -18,12 +18,14 @@ internal class StateDatabase private constructor(context: Context) : SQLiteOpenH
         db.execSQL("CREATE TABLE resume (owner INTEGER NOT NULL, id INTEGER NOT NULL, episode INTEGER NOT NULL, position INTEGER NOT NULL, duration INTEGER NOT NULL, cleared INTEGER NOT NULL, changed INTEGER NOT NULL, PRIMARY KEY(owner,id))")
     }
     override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) { error("Explicit migration required") }
-    fun read(owner: Long, name: String): String? = documents["$owner/$name"] ?: readableDatabase.rawQuery("SELECT value FROM documents WHERE owner=? AND name=?", arrayOf(owner.toString(), name)).use { if (it.moveToFirst()) it.getString(0).also { value -> documents["$owner/$name"] = value } else null }
-    fun write(owner: Long, name: String, value: String) {
+    fun read(owner: Long, name: String): String? = documents["$owner/$name"] ?: synchronized(this) {
+        documents["$owner/$name"] ?: readableDatabase.rawQuery("SELECT value FROM documents WHERE owner=? AND name=?", arrayOf(owner.toString(), name)).use { if (it.moveToFirst()) it.getString(0).also { value -> documents["$owner/$name"] = value } else null }
+    }
+    @Synchronized fun write(owner: Long, name: String, value: String) {
         writableDatabase.insertWithOnConflict("documents", null, ContentValues().apply { put("owner", owner); put("name", name); put("value", value) }, SQLiteDatabase.CONFLICT_REPLACE).also { check(it != -1L) { "Could not persist device state" } }
         documents["$owner/$name"] = value
     }
-    fun remove(owner: Long, name: String) { writableDatabase.delete("documents", "owner=? AND name=?", arrayOf(owner.toString(), name)); documents.remove("$owner/$name") }
+    @Synchronized fun remove(owner: Long, name: String) { writableDatabase.delete("documents", "owner=? AND name=?", arrayOf(owner.toString(), name)); documents.remove("$owner/$name") }
     fun trim(activeOwner: Long?) { documents.keys.removeIf { key -> !key.startsWith("$activeOwner/") || key.endsWith("/download_queue") || key.endsWith("/offline_index") || key.endsWith("/catalogue") } }
     fun title(owner: Long, id: Long): Title? = readableDatabase.rawQuery("SELECT value FROM titles WHERE owner=? AND id=?", arrayOf(owner.toString(), id.toString())).use { if (it.moveToFirst()) parseTitle(JSONObject(it.getString(0))) else null }
     fun resume(owner: Long, id: Long, episode: Long, position: Long, duration: Long, clear: Boolean) {
@@ -44,7 +46,7 @@ internal class StateDatabase private constructor(context: Context) : SQLiteOpenH
             db.setTransactionSuccessful()
         } finally { db.endTransaction() }
     }
-    fun catalogue(owner: Long, library: Library, observedAt: Long = 0) {
+    @Synchronized fun catalogue(owner: Long, library: Library, observedAt: Long = 0) {
         val rows = library.titles.distinctBy { it.id }.map { it.id to it.toJson().toString() }
         val value = library.copy(titles = emptyList()).toJson().put("title_ids", org.json.JSONArray(library.titles.map { it.id })).toString()
         val db = writableDatabase

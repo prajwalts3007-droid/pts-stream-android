@@ -253,8 +253,8 @@ class DownloadService : Service() {
         repo.runNext { }
         withContext(Dispatchers.Main) { if (repository !== repo || observer?.isActive != true) {
             repository = repo
-            DownloadNotifications.clear(this, owner)
-            notifications = DownloadNotifications(this, owner).also { it.seed(repo.state.value.tasks) }
+            DownloadNotifications.clear(this@DownloadService, owner)
+            notifications = DownloadNotifications(this@DownloadService, owner).also { it.seed(repo.state.value.tasks) }
             startForeground(DownloadNotifications.SUMMARY_ID, notifications!!.summary(repo.state.value.tasks))
             observer = scope.launch {
                 repo.state.collect { snapshot ->

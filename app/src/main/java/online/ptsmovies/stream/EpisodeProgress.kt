@@ -49,18 +49,18 @@ class EpisodeProgress(private val context: Context, val owner: Long) {
         private val syncLocks = java.util.concurrent.ConcurrentHashMap<Long, Mutex>()
     }
     private val legacy = ProgressJournal(context, owner)
-    @Volatile private var parsedSource: String? = null
-    @Volatile private var parsedEntries = emptyList<JSONObject>()
+    private data class RecordSnapshot(val source: String?, val records: List<JSONObject>)
+    @Volatile private var parsed = RecordSnapshot(null, emptyList())
     private var completionSource: List<JSONObject>? = null
     private var completionLegacy = emptySet<String>()
     private var completionSnapshot = emptySet<String>()
     private fun entries(): List<JSONObject> {
         val source = database.read(owner, "episode_records") ?: "[]"
-        if (source != parsedSource) {
-            parsedEntries = runCatching { JSONArray(source) }.getOrDefault(JSONArray()).let { a -> (0 until a.length()).map { a.getJSONObject(it) } }
-            parsedSource = source
-        }
-        return parsedEntries
+        val previous = parsed
+        if (source == previous.source) return previous.records
+        val records = JSONArray(source).let { a -> (0 until a.length()).map { a.getJSONObject(it) } }
+        parsed = RecordSnapshot(source, records)
+        return records
     }
     private fun key(o: JSONObject) = "${o.optLong("title_id")}_${o.optLong("episode_id")}"
     fun completed(): Set<String> {
@@ -82,10 +82,10 @@ class EpisodeProgress(private val context: Context, val owner: Long) {
     internal fun recordBatch(edits: List<EpisodeEdit>) = synchronized(lock) {
         if (owner <= 0 || edits.none { it.title > 0 && it.episode >= 0 }) return@synchronized
         val now = System.currentTimeMillis() + prefs.getLong("clock_offset", 0)
-        val next = synchronized(lock) { applyEpisodeEdits(entries(), edits, now) }
+        val next = applyEpisodeEdits(entries(), edits, now)
         val serialized = JSONArray(next).toString()
         database.write(owner, "episode_records", serialized)
-        parsedSource = serialized; parsedEntries = next
+        parsed = RecordSnapshot(serialized, next)
     }
     fun status(): String = prefs.getString("status", "Not synced yet") ?: "Not synced yet"
     suspend fun sync(api: PtsApi) = withContext(Dispatchers.IO) {
@@ -105,7 +105,7 @@ class EpisodeProgress(private val context: Context, val owner: Long) {
                 val server = response.optLong("server_time")
                 val serialized = JSONArray(merged).toString()
                 if (serialized != database.read(owner, "episode_records")) database.write(owner, "episode_records", serialized)
-                parsedSource = serialized; parsedEntries = merged
+                parsed = RecordSnapshot(serialized, merged)
                 prefs.edit()
                     .putLong("clock_offset", if (server > 0) server - System.currentTimeMillis() else prefs.getLong("clock_offset",0))
                     .putString("status", if (merged.any { it.optBoolean("pending") }) "More changes waiting to sync" else "Episode progress synced").commit()

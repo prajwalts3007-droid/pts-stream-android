@@ -82,4 +82,19 @@ class StorageMigrationTest {
         db.resume(owner, 1, 101, 12, 30, false)
         assertEquals(before, db.read(owner, "catalogue")); assertEquals(12L, device.library(owner)?.progress?.get(1)?.seconds)
     }
+    @Test fun newCatalogueReconcilesOldAcknowledgedResumeWithoutMaskingRemoteProgress() {
+        val owner = 71010L; val db = StateDatabase.get(context)
+        db.resume(owner, 1, 101, 12, 300, false)
+        val remote = Library(listOf(title(1)), emptySet(), mapOf(1L to Resume(101, 99, 300)))
+        db.catalogue(owner, remote, System.currentTimeMillis() + 1)
+        assertEquals(99L, DeviceState(context).library(owner)?.progress?.get(1)?.seconds)
+    }
+    @Test fun unsupportedQueueMigrationKeepsLegacySource() {
+        val owner = 71011L; val source = "{\"version\":99,\"titles\":{},\"tasks\":[]}"
+        val prefs = context.getSharedPreferences("download_jobs_$owner", 0)
+        prefs.edit().putString("jobs", source).commit()
+        try { DownloadRepository(context, PtsApi("https://example.invalid", CookieJar.NO_COOKIES), owner, foreground = {}); fail("Expected explicit migration failure") }
+        catch (_: IllegalArgumentException) { }
+        assertEquals(source, prefs.getString("jobs", null)); assertNull(StateDatabase.get(context).read(owner, "download_queue"))
+    }
 }

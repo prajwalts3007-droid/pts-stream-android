@@ -256,7 +256,7 @@ class OfflineStore(private val context: Context, private val api: PtsApi, privat
         } catch (_: Exception) { /* Poster failure never destroys a completed media transfer. */ }
     }
 
-    fun usedBytes(): Long = root.listFiles()?.sumOf { if (it.isFile) it.length() else 0L } ?: 0L
+    fun usedBytes(): Long = (root.listFiles()?.sumOf { if (it.isFile) it.length() else 0L } ?: 0L) + list().filter { it.documentUri != null }.sumOf { it.bytes }
     fun freeBytes(): Long = (root.usableSpace - 64L * 1024 * 1024).coerceAtLeast(0)
     suspend fun hydrate(titles: List<Title>) = withContext(Dispatchers.IO) {
         val savedIds = list().map { it.titleId }.toSet()
