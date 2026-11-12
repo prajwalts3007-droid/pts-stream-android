@@ -61,9 +61,10 @@ def verify(apk, version, build_tools):
         assert not any(n.lower().endswith(('.mp4', '.mkv', '.m3u8', '.ts', '.jks', '.keystore')) for n in names), 'Fixture media or private signing file packaged'
         native = {n: load_alignments(archive.read(n)) for n in names if n.endswith('.so')}
         assert any('/arm64-v8a/' in n for n in native), 'Universal APK must support modern ARM phones'
-        anchor = archive.read('res/raw/pts_lan_certificate.pem')
         source_anchor = Path('app/src/main/res/raw/pts_lan_certificate.pem').read_bytes()
-        assert anchor == source_anchor, 'LAN trust anchor was changed or removed'
+        # AAPT/R8 may shorten resource paths; compare bytes rather than assuming
+        # the source filename survives resource optimization.
+        assert any(info.file_size == len(source_anchor) and archive.read(info) == source_anchor for info in archive.infolist()), 'LAN trust anchor was changed or removed'
     return {'package': 'online.ptsmovies.stream', 'version_code': version, 'min_android_api': 26, 'target_android_api': 35,
             'bytes': apk.stat().st_size, 'sha256': hashlib.sha256(apk.read_bytes()).hexdigest(),
             'signer_sha256': digest[1], 'native_load_alignments': native, 'zip_16k_alignment': True,
