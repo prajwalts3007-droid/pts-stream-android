@@ -103,8 +103,18 @@ class MainActivity : ComponentActivity() {
     private var sleepAtEnd by mutableStateOf(false)
     private val preferenceMutex = Mutex()
     private val progressMutex = Mutex()
-    private fun journal() = account?.optLong("id")?.let { ProgressJournal(this, it) }
-    private fun episodeProgress() = account?.optLong("id")?.let { EpisodeProgress(this, it) }
+    private data class ProgressStores(val owner: Long, val journal: ProgressJournal, val episodes: EpisodeProgress)
+    private var progressStores: ProgressStores? = null
+    private fun stores(): ProgressStores? {
+        val owner = account?.optLong("id") ?: return null
+        if (progressStores?.owner != owner) progressStores = ProgressStores(owner, ProgressJournal(applicationContext, owner), EpisodeProgress(applicationContext, owner))
+        return progressStores
+    }
+    private fun journal() = stores()?.journal
+    private fun episodeProgress() = stores()?.episodes
+    private val libraryRefresh = RefreshGate()
+    private val opsRefresh = RefreshGate()
+    private val relayRefresh = RefreshGate()
     private var episodeProgressRevision by mutableIntStateOf(0)
     private val selectPhoto = registerForActivityResult(ActivityResultContracts.GetContent()) { uri ->
         if (uri != null) scope.launch {
@@ -249,6 +259,8 @@ class MainActivity : ComponentActivity() {
             val fullPlayer = playing && (!miniPlayer || inPip)
             val watching = fullPlayer || (dark && selected != null && mode == "Stream" && !profileOpen && !downloadsOpen && !updatesOpen)
             PtsTheme(if (watching) "watch" else device.theme) {
+              val indexes = remember(account?.optLong("id")) { LibraryIndexCache() }
+              CompositionLocalProvider(LocalLibraryIndexes provides indexes) {
                 val bar = if (fullPlayer) Color.Black else Pts.bg
                 val light = !fullPlayer && MaterialTheme.colorScheme.background.luminance() > .5f
                 SideEffect {
@@ -282,6 +294,7 @@ class MainActivity : ComponentActivity() {
                         }
                     }
                 }
+              }
             }
         }
     }
@@ -367,25 +380,42 @@ class MainActivity : ComponentActivity() {
     private suspend fun refreshLibrary() {
         val owner = account?.optLong("id") ?: return
         val generation = sessionGeneration
+        val ticket = libraryRefresh.begin(queueLatest = true) ?: return
+        val previousTitles = library?.titles
         try {
-            try { progressMutex.withLock { if (owner == account?.optLong("id")) journal()?.flush(api) } } catch (_: Exception) { }
             val fresh = api.library()
-            episodeProgress()?.sync(api)
             val result = withContext(Dispatchers.IO) {
-                ProgressJournal(this@MainActivity, owner).overlay(fresh).let { lib -> lib.copy(titles = lib.titles.map { applyEpisodeNames(it, episodeNames.cached(it)) }) }
+                ProgressJournal(this@MainActivity, owner).overlay(fresh).let { lib ->
+                    val named = lib.titles.map { applyEpisodeNames(it, episodeNames.cached(it)) }
+                    lib.copy(titles = if (previousTitles != null && previousTitles == named) previousTitles else named)
+                }
             }
             if (generation != sessionGeneration || owner != account?.optLong("id")) return
-            episodeProgressRevision++
             val current = playbackTitle?.id?.takeIf { playing }
-            library = if (current != null && library?.progress?.containsKey(current) == true) result.copy(progress = result.progress + (current to library!!.progress.getValue(current))) else result
-            saveLibraryCache(owner, library!!)
+            val next = if (current != null && library?.progress?.containsKey(current) == true) result.copy(progress = result.progress + (current to library!!.progress.getValue(current))) else result
+            if (next != library) { library = next; saveLibraryCache(owner, next) }
             val repository = downloads
-            scope.launch { if (repository?.owner == owner) { repository.store.hydrate(result.titles); repository.refresh() } }
+            if (previousTitles !== result.titles) scope.launch { if (repository?.owner == owner) { repository.store.hydrate(result.titles); repository.refresh() } }
             selected?.let { old -> library?.titles?.firstOrNull { it.id == old.id }?.let { selected = it } }
             playbackTitle?.let { old -> library?.titles?.firstOrNull { it.id == old.id }?.let { playbackTitle = it } }
+            val progress = episodeProgress()
+            val log = journal()
+            scope.launch {
+                if (generation == sessionGeneration && owner == account?.optLong("id")) {
+                    try { progressMutex.withLock { if (generation == sessionGeneration && owner == account?.optLong("id")) log?.flush(api) } }
+                    catch (e: CancellationException) { throw e }
+                    catch (_: Exception) { /* Offline edits remain durable; library display does not wait for uploads. */ }
+                    if (generation != sessionGeneration || owner != account?.optLong("id")) return@launch
+                    progress?.sync(api)
+                    if (generation == sessionGeneration && owner == account?.optLong("id")) episodeProgressRevision++
+                }
+            }
         } catch (e: CancellationException) { throw e }
         catch (e: Exception) {
             toast("Library unavailable: ${e.message}")
+        } finally {
+            val again = libraryRefresh.finish(ticket)
+            if (again && generation == sessionGeneration && owner == account?.optLong("id") && lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED)) scope.launch { refreshLibrary() }
         }
     }
 
@@ -393,6 +423,7 @@ class MainActivity : ComponentActivity() {
         val signedOutOwner = account?.optLong("id")
         stopService(Intent(this, JobAlertsService::class.java))
         sessionGeneration++
+        libraryRefresh.reset(); opsRefresh.reset(); relayRefresh.reset(); progressStores = null
         roleVerified = false; librarySave?.cancel()
         persistNavigation()
         downloads?.pauseAll()
@@ -430,6 +461,7 @@ class MainActivity : ComponentActivity() {
         fileJob?.cancel(); fileOperation?.cancel(); searchJob?.cancel(); fileGeneration++
         fileEditor = null; fileClipboard = null; filesEntries = emptyList(); filesEntriesKey = ""; filesLoading = false
         queueJobs = emptyList(); queueDone = emptyList(); metrics = null; users = emptyList(); ops = emptyList(); relayJobs = emptyList()
+        opsRefresh.reset(); relayRefresh.reset()
         stopService(Intent(this, JobAlertsService::class.java))
     }
 
@@ -650,6 +682,7 @@ class MainActivity : ComponentActivity() {
 
     private fun loadOps() {
         if (!admin()) return
+        val ticket = opsRefresh.begin(queueLatest = true) ?: return
         val owner = account?.optLong("id"); val generation = sessionGeneration
         scope.launch {
             try {
@@ -658,14 +691,22 @@ class MainActivity : ComponentActivity() {
                 val finished = next.any { op -> op.optString("state") != "running" && ops.none { it.optString("id") == op.optString("id") && it.optString("state") == op.optString("state") } }
                 ops = next
                 if (finished && mode == "Files" && filesTab == "Browse") loadFiles()
-            } catch (_: Exception) { }
+            } catch (e: CancellationException) { throw e }
+            catch (_: Exception) { }
+            finally { val again = opsRefresh.finish(ticket); if (again && admin() && generation == sessionGeneration && mode == "Files") loadOps() }
         }
     }
 
     private fun loadRelay() {
         if (!admin()) return
+        val ticket = relayRefresh.begin(queueLatest = true) ?: return
         val owner = account?.optLong("id"); val generation = sessionGeneration
-        scope.launch { try { val result = api.json("/relay").optJSONArray("jobs").objects(); if (admin() && owner == account?.optLong("id") && generation == sessionGeneration) relayJobs = result } catch (_: Exception) { } }
+        scope.launch {
+            try { val result = api.json("/relay").optJSONArray("jobs").objects(); if (admin() && owner == account?.optLong("id") && generation == sessionGeneration) relayJobs = result }
+            catch (e: CancellationException) { throw e }
+            catch (_: Exception) { }
+            finally { val again = relayRefresh.finish(ticket); if (again && admin() && generation == sessionGeneration && mode == "Files") loadRelay() }
+        }
     }
 
     private fun loadPlaybackPrefs() {
@@ -684,7 +725,7 @@ class MainActivity : ComponentActivity() {
 
     private fun markPlayed(title: Title) {
         val active = episode?.takeIf { playbackTitle?.id == title.id && playing }
-        if (title.kind == "series" && active == null) title.episodes.forEach { episodeProgress()?.record(title.id, it.id, 0, it.duration.toLong(), true) }
+        if (title.kind == "series" && active == null) episodeProgress()?.recordBatch(title.episodes.map { EpisodeEdit(title.id, it.id, 0, it.duration.toLong(), true) })
         else episodeProgress()?.record(title.id, active?.id ?: 0, 0, active?.duration?.toLong() ?: 0, true)
         episodeProgressRevision++
         clearedProgress.add(title.id)
@@ -696,12 +737,13 @@ class MainActivity : ComponentActivity() {
 
     private fun recordProgress(title: Long, ep: Long?, position: Long, duration: Long, clear: Boolean = false) {
         val owner = account?.optLong("id") ?: return
-        val log = ProgressJournal(this, owner)
-        if (!clear) EpisodeProgress(this, owner).record(title, ep ?: 0, position, duration, duration > 0 && position >= duration * 95 / 100)
+        val log = journal() ?: return
+        val progress = episodeProgress() ?: return
+        if (!clear) progress.record(title, ep ?: 0, position, duration, duration > 0 && position >= duration * 95 / 100)
         log.put(title, ep, position, duration, clear)
         library = library?.let { log.overlay(it) }
         library?.let { saveLibraryCache(owner, it) }
-        scope.launch { progressMutex.withLock { if (owner == account?.optLong("id")) { try { log.flush(api) } catch (_: Exception) { }; EpisodeProgress(this@MainActivity, owner).sync(api) } } }
+        scope.launch { progressMutex.withLock { if (owner == account?.optLong("id")) { try { log.flush(api) } catch (_: Exception) { }; progress.sync(api) } } }
     }
 
     private fun markEpisode(title: Title, ep: Episode, completed: Boolean) {
@@ -1580,15 +1622,17 @@ class MainActivity : ComponentActivity() {
             lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
                 while (true) {
                     if (account != null && !loading) {
+                        val owner = account?.optLong("id"); val generation = sessionGeneration
                         try {
                             val user = api.me()
+                            if (generation != sessionGeneration || owner != account?.optLong("id")) continue
                             if (user.optLong("id") != account?.optLong("id")) { downloads?.pauseAll(); device.clearSession(); account = null; library = null; playing = false; continue }
                             val wasAdmin = admin()
                             account = user; roleVerified = true; device.account(user)
                             if (!admin() && (wasAdmin || mode != "Stream")) restrictToStream()
                             refreshLibrary(); loadPlaybackPrefs(); downloads?.refresh()
                         } catch (e: CancellationException) { throw e }
-                        catch (e: ApiException) { if (e.status == 401) { downloads?.pauseAll(); device.clearSession(); account = null; library = null; playing = false } }
+                        catch (e: ApiException) { if (e.status == 401 && generation == sessionGeneration && owner == account?.optLong("id")) { downloads?.pauseAll(); device.clearSession(); account = null; library = null; playing = false; roleVerified = false; restrictToStream() } }
                         catch (_: Exception) { /* A temporary outage must not destroy the saved session/UI. */ }
                     }
                     delay(30000)

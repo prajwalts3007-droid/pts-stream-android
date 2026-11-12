@@ -100,7 +100,7 @@ fun SeasonEpisodes(
         ?: title.episodes.firstOrNull { it.id == resume?.episodeId }?.season ?: seasons.firstOrNull() ?: 1) }
     LaunchedEffect(active?.id) { active?.let { season = it.season } }
     LaunchedEffect(seasons) { if (season !in seasons) season = seasons.firstOrNull() ?: 1 }
-    val episodes = title.episodes.filter { it.season == season }.sortedBy { it.episode }
+    val episodes = remember(title.episodes, season) { title.episodes.filter { it.season == season }.sortedBy { it.episode } }
     Column(Modifier.fillMaxWidth().ptsPageMotion("${title.id}/$season"), verticalArrangement = Arrangement.spacedBy(10.dp)) {
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             Text("Episodes", Modifier.weight(1f), style = MaterialTheme.typography.titleMedium, color = Pts.text)

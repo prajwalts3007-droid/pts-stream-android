@@ -6,13 +6,15 @@ import kotlinx.coroutines.withContext
 
 private data class IndexedTitles(val source: List<Title>, val index: List<SearchEntry>)
 private data class QueryTitles(val source: List<Title>, val result: List<Title>)
+internal val LocalLibraryIndexes = staticCompositionLocalOf<LibraryIndexCache?> { null }
 
 /** Large episode indexes and fuzzy/sort/filter scans never run during UI composition. */
 @Composable
 internal fun rememberLibraryResults(titles: List<Title>, query: String, sort: LibrarySort, filter: LibraryFilter,
     completed: Set<String>, saved: Set<String>): List<Title>? {
-    val indexed by produceState<IndexedTitles?>(null, titles) {
-        value = withContext(Dispatchers.Default) { IndexedTitles(titles, indexLibrary(titles)) }
+    val indexes = LocalLibraryIndexes.current ?: remember { LibraryIndexCache() }
+    val indexed by produceState<IndexedTitles?>(null, titles, indexes) {
+        value = IndexedTitles(titles, indexes.get(titles))
     }
     val computed by produceState<QueryTitles?>(null, indexed, query, sort, filter, completed, saved) {
         val current = indexed?.takeIf { it.source == titles } ?: return@produceState

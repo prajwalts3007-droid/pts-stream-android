@@ -28,7 +28,10 @@ class ApiContractTest {
             api = PtsApi(baseUrl, CookieJar.NO_COOKIES)
         }
     }
-    @After fun close() { server.shutdown() }
+    @After fun close() {
+        DeviceState(InstrumentationRegistry.getInstrumentation().targetContext).clearSession()
+        server.shutdown()
+    }
     private fun json(body: String) = MockResponse().setHeader("Content-Type", "application/json").setBody(body)
     private fun request() = checkNotNull(server.takeRequest(5, TimeUnit.SECONDS))
 
@@ -364,6 +367,7 @@ class ApiContractTest {
     @Test fun offlineProgressSurvivesReopenAndFlushesLatestEditOnly() = runBlocking {
         val context = InstrumentationRegistry.getInstrumentation().targetContext
         context.getSharedPreferences("progress_journal_90030", 0).edit().clear().commit()
+        DeviceState(context).account(JSONObject().put("id", 90030).put("role", "user"))
         val journal = ProgressJournal(context, 90030)
         journal.put(1, 7, 40, 300); journal.put(1, 7, 60, 300)
         assertEquals(1, journal.pending().size)
@@ -377,6 +381,7 @@ class ApiContractTest {
     @Test fun offlineClearOverridesProgressAndIsOwnerScoped() = runBlocking {
         val context = InstrumentationRegistry.getInstrumentation().targetContext
         context.getSharedPreferences("progress_journal_90031", 0).edit().clear().commit()
+        DeviceState(context).account(JSONObject().put("id", 90031).put("role", "user"))
         val journal = ProgressJournal(context, 90031)
         journal.put(1, 7, 40, 300); journal.put(1, 7, 0, 0, clear = true)
         journal.markCompleted("1_7")
@@ -393,10 +398,32 @@ class ApiContractTest {
     @Test fun failedProgressFlushKeepsJournalForNextConnection() = runBlocking {
         val context = InstrumentationRegistry.getInstrumentation().targetContext
         context.getSharedPreferences("progress_journal_90033", 0).edit().clear().commit()
+        DeviceState(context).account(JSONObject().put("id", 90033).put("role", "user"))
         val journal = ProgressJournal(context, 90033); journal.put(1, 0, 20, 300)
         server.enqueue(json("""{"csrf_token":"fixture"}""")); server.enqueue(MockResponse().setResponseCode(503))
         try { journal.flush(api); fail("Unavailable server") } catch (_: ApiException) { }
         assertEquals(1, journal.pending().size)
+    }
+
+    @Test fun obsoleteJournalDoesNotSendAnotherOwnersProgress() = runBlocking {
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        context.getSharedPreferences("progress_journal_90034", 0).edit().clear().commit()
+        DeviceState(context).account(JSONObject().put("id", 90035).put("role", "user"))
+        val journal = ProgressJournal(context, 90034); journal.put(1, 7, 60, 300)
+        journal.flush(api)
+        assertEquals(0, server.requestCount); assertEquals(1, journal.pending().size)
+    }
+
+    @Test fun cachedProgressSeesOtherStoreInstancesWithoutLosingDurableEdits() {
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        context.getSharedPreferences("episode_progress_90036", 0).edit().clear().commit()
+        val first = EpisodeProgress(context, 90036); val second = EpisodeProgress(context, 90036)
+        assertTrue(first.completed().isEmpty())
+        second.record(1, 7, 0, 300, true)
+        assertEquals(setOf("1_7"), first.completed())
+        second.record(1, 7, 60, 300, false)
+        assertTrue(first.completed().isEmpty()); assertEquals(60L, first.resume(1, 7)?.seconds)
+        assertEquals(60L, EpisodeProgress(context, 90036).resume(1, 7)?.seconds)
     }
 
     @Test fun pipelineConversionPreservesOriginalAndRejectsInvalidLimits() {

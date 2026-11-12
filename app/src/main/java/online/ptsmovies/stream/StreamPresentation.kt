@@ -19,13 +19,13 @@ fun libraryFiltersActive(filter: LibraryFilter, sort: LibrarySort, genre: String
     filter != LibraryFilter() || sort != LibrarySort.RELEVANCE || genre.isNotBlank()
 
 /** Track labels are not trusted language metadata: they often contain codecs/bitrate. */
-private val trackLanguages: Map<String, String> = buildMap {
+private val trackLanguages: Map<String, String> by lazy { buildMap {
     Locale.getISOLanguages().forEach { code ->
         put(code, code)
         runCatching { Locale.forLanguageTag(code).isO3Language }.getOrNull()?.let { put(it, code) }
     }
     putAll(mapOf("fre" to "fr", "ger" to "de", "chi" to "zh", "dut" to "nl", "cze" to "cs", "rum" to "ro", "gre" to "el"))
-}
+} }
 fun trackLanguageName(code: String?, locale: Locale = Locale.getDefault()): String {
     val normalized = code?.trim()?.replace('_', '-')?.let(::normalizeLanguage).orEmpty()
     if (normalized.isBlank() || normalized in setOf("und", "null", "zxx")) return "Unknown language"

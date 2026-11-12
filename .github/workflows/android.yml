@@ -5,6 +5,11 @@ on:
     tags: ['v*']
   pull_request:
   workflow_dispatch:
+    inputs:
+      version_code:
+        description: Version code for private signed validation
+        required: true
+        default: '14'
 permissions:
   contents: read
 jobs:
@@ -34,12 +39,22 @@ jobs:
           PTS_KEYSTORE_PASSWORD: ${{ secrets.PTS_KEYSTORE_PASSWORD }}
           PTS_KEY_ALIAS: ${{ secrets.PTS_KEY_ALIAS }}
           PTS_KEY_PASSWORD: ${{ secrets.PTS_KEY_PASSWORD }}
+          PTS_VALIDATION_VERSION: ${{ inputs.version_code }}
         run: |
           test -n "$PTS_KEYSTORE_B64" && test -n "$PTS_KEYSTORE_PASSWORD" || { echo 'Signing secrets missing'; exit 1; }
           printf %s "$PTS_KEYSTORE_B64" | base64 -d > "$PTS_KEYSTORE_FILE"
-          gradle --no-daemon :app:assembleRelease
-          "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify app/build/outputs/apk/release/app-release.apk
+          [[ "$PTS_VALIDATION_VERSION" =~ ^[1-9][0-9]*$ ]] || { echo 'A numeric version is required'; exit 1; }
+          gradle --no-daemon :app:assembleRelease -PptsVersionCode="$PTS_VALIDATION_VERSION"
+          python3 infra/verify_release_apk.py app/build/outputs/apk/release/app-release.apk --version "$PTS_VALIDATION_VERSION" --output app/build/reports/release-packaging.json
           echo 'Release APK signature verified'
+      - uses: actions/upload-artifact@v4
+        if: github.event_name == 'workflow_dispatch'
+        with:
+          name: optimized-release-validation
+          path: |
+            app/build/outputs/apk/release/*.apk
+            app/build/outputs/mapping/release/
+            app/build/reports/release-packaging.json
   release:
     if: startsWith(github.ref, 'refs/tags/v')
     needs: build
@@ -77,8 +92,14 @@ jobs:
           code="${code%%-*}"
           [[ "$code" =~ ^[1-9][0-9]*$ ]] || { echo 'Use numeric tags such as v2'; exit 1; }
           gradle --no-daemon :app:assembleRelease -PptsVersionCode="$code"
-          "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify app/build/outputs/apk/release/app-release.apk
+          python3 infra/verify_release_apk.py app/build/outputs/apk/release/app-release.apk --version "$code" --output app/build/reports/release-packaging.json
           mv app/build/outputs/apk/release/app-release.apk PTS-Stream-v"$code".apk
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-optimization-evidence
+          path: |
+            app/build/outputs/mapping/release/
+            app/build/reports/release-packaging.json
       - uses: softprops/action-gh-release@v2
         with:
           files: PTS-Stream-v*.apk

@@ -8,7 +8,7 @@ permissions:
 jobs:
   validate:
     runs-on: ubuntu-24.04
-    timeout-minutes: 25
+    timeout-minutes: 35
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-java@v5
@@ -19,7 +19,7 @@ jobs:
         with:
           gradle-version: '8.13'
       - name: Build app, compile device regressions, run host tests and lint (no emulator)
-        run: gradle --no-daemon :app:assembleDebug :app:assembleDebugAndroidTest :app:testDebugUnitTest :app:lintDebug
+        run: gradle --no-daemon :app:assembleDebug :app:assembleDebugAndroidTest :app:testDebugUnitTest :app:testReleaseUnitTest :app:lintDebug :app:lintRelease
       - name: Test isolated companion service and LAN relay
         run: PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s infra -p 'test_*.py' -v
       - uses: actions/upload-artifact@v4

@@ -3,6 +3,26 @@ package online.ptsmovies.stream
 import android.content.Context
 import org.json.JSONArray
 import org.json.JSONObject
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
+
+internal data class EpisodeEdit(val title: Long, val episode: Long, val position: Long, val duration: Long, val completed: Boolean)
+
+/** One durable write for bulk season/title changes, not one growing JSON rewrite per episode. */
+internal fun applyEpisodeEdits(current: List<JSONObject>, edits: List<EpisodeEdit>, now: Long): List<JSONObject> {
+    val records = current.associateByTo(linkedMapOf()) { "${it.optLong("title_id")}_${it.optLong("episode_id")}" }
+    edits.filter { it.title > 0 && it.episode >= 0 }.forEach { edit ->
+        val key = "${edit.title}_${edit.episode}"
+        val previous = records[key]
+        records[key] = JSONObject().put("title_id", edit.title).put("episode_id", edit.episode)
+            .put("position", edit.position.coerceIn(0, 604800)).put("duration", edit.duration.coerceIn(0, 604800))
+            .put("completed", edit.completed).put("changed_at", maxOf(now, (previous?.optLong("changed_at") ?: 0) + 1))
+            .put("event_id", java.util.UUID.randomUUID().toString()).put("pending", true)
+    }
+    return records.values.toList()
+}
 
 fun mergeEpisodeRecords(current: List<JSONObject>, sent: List<JSONObject>, remote: List<JSONObject>): List<JSONObject> {
     fun key(o: JSONObject) = "${o.optLong("title_id")}_${o.optLong("episode_id")}"
@@ -19,30 +39,51 @@ fun mergeEpisodeRecords(current: List<JSONObject>, sent: List<JSONObject>, remot
 class EpisodeProgress(private val context: Context, val owner: Long) {
     private val prefs = context.getSharedPreferences("episode_progress_$owner", Context.MODE_PRIVATE)
     private val lock get() = locks.getOrPut(owner) { Any() }
-    companion object { private val locks = java.util.concurrent.ConcurrentHashMap<Long, Any>() }
-    private fun entries(): List<JSONObject> = runCatching { JSONArray(prefs.getString("records", "[]")) }.getOrDefault(JSONArray()).let { a -> (0 until a.length()).map { a.getJSONObject(it) } }
+    companion object {
+        private val locks = java.util.concurrent.ConcurrentHashMap<Long, Any>()
+        private val syncLocks = java.util.concurrent.ConcurrentHashMap<Long, Mutex>()
+    }
+    private val legacy = ProgressJournal(context, owner)
+    private var parsedSource: String? = null
+    private var parsedEntries = emptyList<JSONObject>()
+    private var completionSource: List<JSONObject>? = null
+    private var completionLegacy = emptySet<String>()
+    private var completionSnapshot = emptySet<String>()
+    private fun entries(): List<JSONObject> {
+        val source = prefs.getString("records", "[]") ?: "[]"
+        if (source != parsedSource) {
+            parsedEntries = runCatching { JSONArray(source) }.getOrDefault(JSONArray()).let { a -> (0 until a.length()).map { a.getJSONObject(it) } }
+            parsedSource = source
+        }
+        return parsedEntries
+    }
     private fun key(o: JSONObject) = "${o.optLong("title_id")}_${o.optLong("episode_id")}"
     fun completed(): Set<String> = synchronized(lock) {
         val records = entries()
-        ProgressJournal(context, owner).completed().filter { old -> records.none { key(it) == old } }.toSet() + records.filter { it.optBoolean("completed") }.map(::key)
+        val old = legacy.completed()
+        if (completionSource !== records || completionLegacy != old) {
+            val keys = records.mapTo(hashSetOf(), ::key)
+            completionSnapshot = old.filterNot { it in keys }.toSet() + records.filter { it.optBoolean("completed") }.map(::key)
+            completionSource = records; completionLegacy = old
+        }
+        completionSnapshot
     }
     fun resume(title: Long, episode: Long): Resume? = synchronized(lock) {
         entries().firstOrNull { key(it) == "${title}_$episode" }?.let {
             if (it.optBoolean("completed")) Resume(episode, 0, it.optLong("duration")) else Resume(episode, it.optLong("position"), it.optLong("duration"))
         }
     }
-    fun record(title: Long, episode: Long, position: Long, duration: Long, done: Boolean) = synchronized(lock) {
-        if (owner <= 0 || title <= 0 || episode < 0) return@synchronized
-        val all = entries(); val previous = all.firstOrNull { key(it) == "${title}_$episode" }
+    fun record(title: Long, episode: Long, position: Long, duration: Long, done: Boolean) = recordBatch(listOf(EpisodeEdit(title, episode, position, duration, done)))
+    internal fun recordBatch(edits: List<EpisodeEdit>) = synchronized(lock) {
+        if (owner <= 0 || edits.none { it.title > 0 && it.episode >= 0 }) return@synchronized
         val now = System.currentTimeMillis() + prefs.getLong("clock_offset", 0)
-        val value = JSONObject().put("title_id", title).put("episode_id", episode).put("position", position.coerceIn(0, 604800))
-            .put("duration", duration.coerceIn(0, 604800)).put("completed", done)
-            .put("changed_at", maxOf(now, (previous?.optLong("changed_at") ?: 0) + 1))
-            .put("event_id", java.util.UUID.randomUUID().toString()).put("pending", true)
-        prefs.edit().putString("records", JSONArray(all.filterNot { key(it) == key(value) } + value).toString()).commit()
+        prefs.edit().putString("records", JSONArray(applyEpisodeEdits(entries(), edits, now)).toString()).commit()
     }
     fun status(): String = prefs.getString("status", "Not synced yet") ?: "Not synced yet"
-    suspend fun sync(api: PtsApi) {
+    suspend fun sync(api: PtsApi) = withContext(Dispatchers.IO) {
+        syncLocks.getOrPut(owner) { Mutex() }.withLock { syncRecords(api) }
+    }
+    private suspend fun syncRecords(api: PtsApi) {
         if (DeviceState(context).account()?.optLong("id") != owner) return
         try {
             val pending = synchronized(lock) { entries().filter { it.optBoolean("pending") }.take(100) }
@@ -54,7 +95,8 @@ class EpisodeProgress(private val context: Context, val owner: Long) {
                 val current = entries()
                 val merged = mergeEpisodeRecords(current, pending, remote)
                 val server = response.optLong("server_time")
-                prefs.edit().putString("records", JSONArray(merged).toString())
+                val serialized = JSONArray(merged).toString()
+                prefs.edit().apply { if (serialized != prefs.getString("records", "[]")) putString("records", serialized) }
                     .putLong("clock_offset", if (server > 0) server - System.currentTimeMillis() else prefs.getLong("clock_offset",0))
                     .putString("status", if (merged.any { it.optBoolean("pending") }) "More changes waiting to sync" else "Episode progress synced").commit()
             }
