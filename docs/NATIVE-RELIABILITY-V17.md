@@ -38,3 +38,12 @@ refresh, frame stalls/peak heap, long scrolling, and concurrent transfers before
 Do not infer device allocation savings from host timings or slower animations.
 
 Build is an Actions artifact only; no Stable release/tag is authorized by the build request.
+
+## Completed CI and signed artifact
+
+- Application source: `2d93387ba388c0ff6bd5a0d451d60820b9d2ed63` on `v17-fixes`.
+- [Final audit](https://github.com/prajwalts3007-droid/pts-stream-android/actions/runs/43745342685): success. 137 host tests per variant (274 executions), zero failures/errors. Lint: zero errors, 95 warnings and one hint per variant. Device regression APK compiled, not executed; isolated infra tests passed.
+- [Signed build](https://github.com/prajwalts3007-droid/pts-stream-android/actions/runs/43745586412): success, manually dispatched with versionCode 17 / versionName 1.0.17.
+- [Signed APK artifact](https://github.com/prajwalts3007-droid/pts-stream-android/actions/runs/43745586412/artifacts/14174541907), expires 2027-02-13. GitHub sign-in may be required. Extract `outputs/apk/release/app-release.apk` from the ZIP, not the separate debug artifact.
+- APK: 3,810,357 bytes; SHA-256 `034585033171ab37ae11724508c8ab9ba7f70aa31ca4e540499e868a3e0d4ac6`. Independent verification matches CI's packaging hash; package `online.ptsmovies.stream`, unchanged signer `96b14e2e5f2a67dbbb9b2d091c62c800ff61d0a91e5c2e234dd35a28efac4ed7`, standalone/non-debuggable release, API 26/35, baseline profiles and 16 KiB ZIP/native alignment. The new feature strings were also confirmed in release DEX.
+- Install over the existing signed app without uninstalling; physical upgrade/data preservation still needs phone verification. Stable remains v16; this artifact does not appear as a newer Stable OTA until separately published.
