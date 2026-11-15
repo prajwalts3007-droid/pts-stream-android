@@ -25,7 +25,7 @@ internal object PosterImages {
     fun loader(context: Context): ImageLoader = instance ?: synchronized(this) {
         instance ?: ImageLoader.Builder(context.applicationContext)
             .memoryCache { MemoryCache.Builder(context.applicationContext).maxSizeBytes(
-                minOf(12 * 1024 * 1024, (context.getSystemService(android.app.ActivityManager::class.java).memoryClass * 1024L * 1024 / 20).toInt())).build() }
+                minOf((if (NativePreferences(context).lowMemory()) 4 else 12) * 1024 * 1024, (context.getSystemService(android.app.ActivityManager::class.java).memoryClass * 1024L * 1024 / 20).toInt())).build() }
             .diskCache { DiskCache.Builder().directory(context.applicationContext.cacheDir.resolve("public-posters")).maxSizeBytes(64L * 1024 * 1024).build() }
             // Public artwork never borrows the account/media client's cookies or LAN routing.
             .okHttpClient(OkHttpClient.Builder().cookieJar(CookieJar.NO_COOKIES).followSslRedirects(false)
@@ -33,6 +33,7 @@ internal object PosterImages {
             .build().also { instance = it }
     }
     fun trim(level: Int) { instance?.memoryCache?.trimMemory(level) }
+    @Synchronized fun clearMemory() { instance?.shutdown(); instance = null }
 }
 
 @Composable
@@ -42,9 +43,10 @@ internal fun PtsPosterImage(url: String?, description: String?, modifier: Modifi
     val context = LocalContext.current
     val density = LocalDensity.current.density
     val motion = ptsMotionEnabled()
+    val lowMemory = LocalLowMemory.current
     BoxWithConstraints(modifier) {
-        val width = posterDecodeWidth((maxWidth.value * density).roundToInt(), hero)
-        val height = if (constraints.hasBoundedHeight) (maxHeight.value * density).roundToInt().coerceIn(96, 2304) else width * 3 / 2
+        val width = posterDecodeWidth((maxWidth.value * density).roundToInt(), hero).coerceAtMost(if (lowMemory) 480 else 2048)
+        val height = if (constraints.hasBoundedHeight) (maxHeight.value * density).roundToInt().coerceIn(96, if (lowMemory) 720 else 2304) else width * 3 / 2
         val request = remember(url, width, height, motion) {
             ImageRequest.Builder(context.applicationContext).data(posterRequestUrl(url, width)).size(width, height)
                 .precision(Precision.INEXACT).scale(Scale.FILL).crossfade(motionMillis(motion, 120)).build()

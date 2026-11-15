@@ -30,22 +30,23 @@ internal data class LanEndpoint(val client: OkHttpClient, val base: HttpUrl)
 internal data class MediaRoutePolicy(val preferLan: Boolean)
 class MediaRouting internal constructor(private val endpointOverride: (() -> LanEndpoint?)? = null) : Interceptor {
     @Volatile private var cachedAddress = ""
+    @Volatile private var cachedNetwork: android.net.Network? = null
     @Volatile private var local: OkHttpClient? = null
     @Volatile private var checkedAt = 0L
     @Volatile private var healthy = false
-    private fun lanClient(context: Context, address: String): OkHttpClient {
-        if (address == cachedAddress) local?.let { return it }
+    private fun lanClient(context: Context, address: String, network: android.net.Network): OkHttpClient {
+        if (address == cachedAddress && network == cachedNetwork) local?.let { return it }
         synchronized(this) {
-            if (address == cachedAddress) local?.let { return it }
+            if (address == cachedAddress && network == cachedNetwork) local?.let { return it }
             val certificate = context.resources.openRawResource(R.raw.pts_lan_certificate).use { CertificateFactory.getInstance("X.509").generateCertificate(it) }
             val store = KeyStore.getInstance(KeyStore.getDefaultType()).apply { load(null); setCertificateEntry("owned-pi", certificate) }
             val trust = TrustManagerFactory.getInstance(TrustManagerFactory.getDefaultAlgorithm()).apply { init(store) }.trustManagers.filterIsInstance<X509TrustManager>().single()
             val ssl = SSLContext.getInstance("TLS").apply { init(null, arrayOf(trust), null) }
-            return OkHttpClient.Builder().sslSocketFactory(ssl.socketFactory, trust)
+            return OkHttpClient.Builder().socketFactory(network.socketFactory).sslSocketFactory(ssl.socketFactory, trust)
                 .dns(object : Dns { override fun lookup(hostname: String): List<InetAddress> =
                     if (hostname == "media.ptsmovies.online") listOf(InetAddress.getByName(address)) else Dns.SYSTEM.lookup(hostname) })
                 .cookieJar(CookieJar.NO_COOKIES).followRedirects(false)
-                .connectTimeout(750, TimeUnit.MILLISECONDS).readTimeout(45, TimeUnit.SECONDS).build().also { local = it; cachedAddress = address; checkedAt = 0; healthy = false }
+                .connectTimeout(750, TimeUnit.MILLISECONDS).readTimeout(45, TimeUnit.SECONDS).build().also { local = it; cachedAddress = address; cachedNetwork = network; checkedAt = 0; healthy = false }
         }
     }
     private fun endpoint(): LanEndpoint? {
@@ -53,8 +54,11 @@ class MediaRouting internal constructor(private val endpointOverride: (() -> Lan
         val context = PtsApplication.environment ?: return null
         val prefs = NativePreferences(context)
         if (!prefs.lanEnabled() || !onWifi(context) || !isPrivateV4(prefs.lanAddress())) return null
+        val manager = context.getSystemService(android.net.ConnectivityManager::class.java)
+        val network = manager.activeNetwork ?: return null
+        if (manager.getNetworkCapabilities(network)?.hasTransport(android.net.NetworkCapabilities.TRANSPORT_VPN) == true) return null
         val base = Request.Builder().url("https://media.ptsmovies.online:4443/").build().url
-        return LanEndpoint(lanClient(context, prefs.lanAddress()), base)
+        return LanEndpoint(lanClient(context, prefs.lanAddress(), network), base)
     }
     private fun linkedCall(client: OkHttpClient, request: Request, parent: Call): Response {
         val child = client.newCall(request)
@@ -82,7 +86,7 @@ class MediaRouting internal constructor(private val endpointOverride: (() -> Lan
             val client = endpoint.client
             val now = android.os.SystemClock.elapsedRealtime()
             if (now - checkedAt > 15000 || checkedAt == 0L) {
-                healthy = linkedCall(client.newBuilder().readTimeout(750, TimeUnit.MILLISECONDS).build(), Request.Builder().url(endpoint.base.newBuilder().encodedPath("/lan-health").build()).build(), parent).use { it.isSuccessful && it.body?.string() == "pts-pi-lan-v1" }
+                healthy = linkedCall(client.newBuilder().readTimeout(750, TimeUnit.MILLISECONDS).callTimeout(1200, TimeUnit.MILLISECONDS).build(), Request.Builder().url(endpoint.base.newBuilder().encodedPath("/lan-health").build()).build(), parent).use { it.isSuccessful && it.body?.boundedText(32) == "pts-pi-lan-v1" }
                 checkedAt = now
             }
             if (!healthy) {

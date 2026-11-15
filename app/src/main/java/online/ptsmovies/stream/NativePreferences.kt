@@ -14,11 +14,13 @@ import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.unit.dp
 
 data class DownloadOptions(val wifiOnly: Boolean = true, val concurrent: Int = 1, val limitGiB: Int = 0, val removeWatched: Boolean = false,
-    val smartEpisodes: Int = 0)
+    val smartEpisodes: Int = 0, val chargingOnly: Boolean = false)
 class NativePreferences(context: Context) {
     private val prefs = context.getSharedPreferences("native_preferences", Context.MODE_PRIVATE)
-    fun downloads() = DownloadOptions(prefs.getBoolean("wifi_only", true), prefs.getInt("concurrent", 1).coerceIn(1, 3), prefs.getInt("storage_gib", 0).coerceAtLeast(0), prefs.getBoolean("remove_watched", false), prefs.getInt("smart_episodes", 0).coerceIn(0, 3))
-    fun downloads(value: DownloadOptions) { require(value.concurrent in 1..3 && value.limitGiB in 0..10000 && value.smartEpisodes in 0..3); prefs.edit().putBoolean("wifi_only", value.wifiOnly).putInt("concurrent", value.concurrent).putInt("storage_gib", value.limitGiB).putBoolean("remove_watched", value.removeWatched).putInt("smart_episodes", value.smartEpisodes).apply() }
+    fun downloads() = DownloadOptions(prefs.getBoolean("wifi_only", true), if (lowMemory()) 1 else prefs.getInt("concurrent", 1).coerceIn(1, 3), prefs.getInt("storage_gib", 0).coerceAtLeast(0), prefs.getBoolean("remove_watched", false), prefs.getInt("smart_episodes", 0).coerceIn(0, 3), prefs.getBoolean("charging_only", false))
+    fun downloads(value: DownloadOptions) { require(value.concurrent in 1..3 && value.limitGiB in 0..10000 && value.smartEpisodes in 0..3); prefs.edit().putBoolean("wifi_only", value.wifiOnly).putInt("concurrent", value.concurrent).putInt("storage_gib", value.limitGiB).putBoolean("remove_watched", value.removeWatched).putInt("smart_episodes", value.smartEpisodes).putBoolean("charging_only", value.chargingOnly).apply() }
+    fun lowMemory() = prefs.getBoolean("low_memory", false)
+    fun lowMemory(value: Boolean) { prefs.edit().putBoolean("low_memory", value).apply(); PosterImages.clearMemory() }
     fun lanAddress() = prefs.getString("lan_address", "192.168.29.75") ?: "192.168.29.75"
     fun lanAddress(value: String) { require(isPrivateV4(value)); prefs.edit().putString("lan_address", value).apply() }
     fun lanEnabled() = prefs.getBoolean("lan_enabled", true)
@@ -41,6 +43,11 @@ fun onWifi(context: Context): Boolean {
     val manager = context.getSystemService(ConnectivityManager::class.java)
     return manager.getNetworkCapabilities(manager.activeNetwork)?.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) == true
 }
+fun isCharging(context: Context): Boolean {
+    val battery = context.registerReceiver(null, android.content.IntentFilter(android.content.Intent.ACTION_BATTERY_CHANGED)) ?: return false
+    val status = battery.getIntExtra(android.os.BatteryManager.EXTRA_STATUS, -1)
+    return status == android.os.BatteryManager.BATTERY_STATUS_CHARGING || status == android.os.BatteryManager.BATTERY_STATUS_FULL
+}
 
 @Composable
 fun DownloadSettingsScreen(preferences: NativePreferences, onBack: () -> Unit, onSaved: () -> Unit, onLocation: () -> Unit = {}, location: String = "Private app storage") {
@@ -49,6 +56,7 @@ fun DownloadSettingsScreen(preferences: NativePreferences, onBack: () -> Unit, o
     var address by remember { mutableStateOf(preferences.lanAddress()) }
     var addressEdited by remember { mutableStateOf(false) }
     var lan by remember { mutableStateOf(preferences.lanEnabled()) }
+    var lowMemory by remember { mutableStateOf(preferences.lowMemory()) }
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
         PtsSecondaryButton("Back", onClick = onBack)
         PtsPage("Downloads & network")
@@ -56,18 +64,22 @@ fun DownloadSettingsScreen(preferences: NativePreferences, onBack: () -> Unit, o
         PtsSecondaryButton("Change download folder", Modifier.fillMaxWidth(), onClick = onLocation)
         Text("Existing downloads stay where they are. Selected-folder downloads use private resumable staging first; changing folders does not move or delete files.", color = Pts.muted, style = MaterialTheme.typography.bodySmall)
         PreferenceSwitch("Wi-Fi downloads only", options.wifiOnly) { options = options.copy(wifiOnly = it) }
+        PreferenceSwitch("Download only while charging", options.chargingOnly) { options = options.copy(chargingOnly = it) }
+        PreferenceSwitch("Low-memory mode", lowMemory) { lowMemory = it }
+        Text("Low-memory mode uses one download worker, smaller artwork and fewer decorative effects. Playback quality, gestures and PiP are unchanged.", color = Pts.muted, style = MaterialTheme.typography.bodySmall)
         PreferenceSwitch("Remove completed downloads after playback closes", options.removeWatched) { options = options.copy(removeWatched = it) }
         Text("Smart episode downloads", style = MaterialTheme.typography.titleSmall, color = Pts.text)
         PtsSegmented(listOf("0" to "Off", "1" to "Next 1", "2" to "Next 2", "3" to "Next 3"), options.smartEpisodes.toString(), { options = options.copy(smartEpisodes = it.toInt()) })
         Text("When you play an episode, queue the next unwatched MP4 episodes. Uses your Wi-Fi, storage and concurrency limits. Paused, failed or cancelled downloads are not automatically retried. Nothing is deleted unless you separately enable removal above.", color = Pts.muted, style = MaterialTheme.typography.bodySmall)
         Text("Concurrent downloads", style = MaterialTheme.typography.titleSmall, color = Pts.text)
-        PtsSegmented((1..3).map { it.toString() to it.toString() }, options.concurrent.toString(), { options = options.copy(concurrent = it.toInt()) })
+        PtsSegmented((1..if (lowMemory) 1 else 3).map { it.toString() to it.toString() }, if (lowMemory) "1" else options.concurrent.toString(), { options = options.copy(concurrent = it.toInt()) })
         PtsField(limit, { limit = it.filter(Char::isDigit) }, "Storage limit (GiB, 0 = available space)", Modifier.fillMaxWidth())
         PreferenceSwitch("Prefer local Pi", lan) { lan = it }
         PtsField(address, { address = it.trim(); addressEdited = true }, "Pi LAN address", Modifier.fillMaxWidth())
         Text("If the saved address stops responding, the app checks nearby addresses on this Wi-Fi network for the trusted Pi. You can also enter its current address manually. Internet playback remains available if discovery fails.", color = Pts.muted, style = MaterialTheme.typography.bodySmall)
         PtsPrimaryButton("Save", Modifier.fillMaxWidth(), enabled = (limit.toIntOrNull() ?: -1) in 0..10000 && isPrivateV4(address)) {
             preferences.downloads(options.copy(limitGiB = limit.toInt()))
+            preferences.lowMemory(lowMemory)
             if (addressEdited) preferences.lanAddress(address)
             preferences.lanEnabled(lan); onSaved()
         }
@@ -84,11 +96,16 @@ fun PreferenceSwitch(label: String, checked: Boolean, onChange: (Boolean) -> Uni
 }
 
 @Composable
-fun PlaybackPreferencesScreen(prefs: org.json.JSONObject, onChange: (String, Any) -> Unit, onBack: () -> Unit, embedded: Boolean = false) {
+fun PlaybackPreferencesScreen(prefs: org.json.JSONObject, onChange: (String, Any) -> Unit, onBack: () -> Unit, embedded: Boolean = false,
+    onSave: ((org.json.JSONObject) -> Unit)? = null, owner: Long = 0, syncStatus: String = "") {
+    var dirty by remember(owner) { mutableStateOf(false) }
     var audio by remember { mutableStateOf(prefs.optString("audio_lang")) }
     var subtitles by remember { mutableStateOf(prefs.optString("subtitle_lang")) }
     var autoplay by remember { mutableStateOf(prefs.optBoolean("autoplay", true)) }
     var rememberZoom by remember { mutableStateOf(prefs.optString("zoom_mode") == "remember") }
+    LaunchedEffect(owner, prefs.toString()) {
+        if (!dirty) { audio = prefs.optString("audio_lang"); subtitles = prefs.optString("subtitle_lang"); autoplay = prefs.optBoolean("autoplay", true); rememberZoom = prefs.optString("zoom_mode") == "remember" }
+    }
     val context = androidx.compose.ui.platform.LocalContext.current
     val local = remember { context.getSharedPreferences("playback_local", Context.MODE_PRIVATE) }
     var size by remember { mutableStateOf(local.getFloat("subtitle_size", 1f)) }
@@ -96,18 +113,20 @@ fun PlaybackPreferencesScreen(prefs: org.json.JSONObject, onChange: (String, Any
     Column(if (embedded) Modifier.fillMaxWidth() else Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
         if (!embedded) PtsSecondaryButton("Back", onClick = onBack)
         if (!embedded) Text("Playback preferences", style = MaterialTheme.typography.titleLarge, color = Pts.text)
-        PtsField(audio, { audio = it }, "Audio language (en, hi, ta…)", Modifier.fillMaxWidth())
-        PtsField(subtitles, { subtitles = it }, "Subtitle language (blank = off)", Modifier.fillMaxWidth())
-        PreferenceSwitch("Autoplay next episode", autoplay) { autoplay = it }
-        PreferenceSwitch("Remember zoom", rememberZoom) { rememberZoom = it }
+        if (syncStatus.isNotBlank()) Text(syncStatus, color = Pts.muted, style = MaterialTheme.typography.bodySmall)
+        PtsField(audio, { dirty = true; audio = it }, "Audio language (en, hi, ta…)", Modifier.fillMaxWidth())
+        PtsField(subtitles, { dirty = true; subtitles = it }, "Subtitle language (blank = off)", Modifier.fillMaxWidth())
+        PreferenceSwitch("Autoplay next episode", autoplay) { dirty = true; autoplay = it }
+        PreferenceSwitch("Remember zoom", rememberZoom) { dirty = true; rememberZoom = it }
         PtsSegmented(listOf("fit" to "Fit", "fill" to "Fill"), fit, { fit = it; local.edit().putString("fit_mode", fit).apply() })
         Text("Subtitle size", color = Pts.text)
         PtsSegmented(listOf("0.8" to "Small", "1.0" to "Medium", "1.3" to "Large"), size.toString(), {
             size = it.toFloat(); local.edit().putFloat("subtitle_size", size).apply()
         })
         PtsPrimaryButton("Save", Modifier.fillMaxWidth()) {
-            onChange("audio_lang", audio.trim()); onChange("subtitle_lang", subtitles.trim())
-            onChange("autoplay", autoplay); onChange("zoom_mode", if (rememberZoom) "remember" else "reset"); onBack()
+            val changes = org.json.JSONObject().put("audio_lang", audio.trim()).put("subtitle_lang", subtitles.trim()).put("autoplay", autoplay).put("zoom_mode", if (rememberZoom) "remember" else "reset")
+            if (onSave != null) onSave(changes) else changes.keys().forEach { onChange(it, changes.get(it)) }
+            dirty = false; onBack()
         }
     }
 }

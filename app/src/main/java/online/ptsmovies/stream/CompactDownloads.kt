@@ -22,7 +22,9 @@ import coil.compose.AsyncImage
 @Composable
 fun CompactDownloads(saved: List<SavedVideo>, tasks: List<DownloadTask>, onPlay: (SavedVideo) -> Unit,
     onDelete: (SavedVideo) -> Unit, onPause: (String) -> Unit, onResume: (String) -> Unit, onCancel: (String) -> Unit,
-    titles: List<Title> = emptyList(), imageLoader: coil.ImageLoader? = null, onBack: () -> Unit = {}) {
+    titles: List<Title> = emptyList(), imageLoader: coil.ImageLoader? = null, onBack: () -> Unit = {},
+    onPauseAll: () -> Unit = {}, onResumeAll: () -> Unit = {}, onRecover: (String?) -> Unit = {},
+    unavailable: List<UnavailableDownload> = emptyList(), storage: String = "", onSettings: () -> Unit = {}, onRefresh: () -> Unit = {}) {
     var folder by rememberSaveable { mutableStateOf<Long?>(null) }
     var season by rememberSaveable { mutableStateOf<Int?>(null) }
     var confirm by remember { mutableStateOf<List<SavedVideo>>(emptyList()) }
@@ -45,6 +47,22 @@ fun CompactDownloads(saved: List<SavedVideo>, tasks: List<DownloadTask>, onPlay:
                 if (selection.isNotEmpty()) PtsIconAction(PtsIcons.Trash, "Delete folder", { confirm = selection })
             }
         }
+        if (folder == null) item {
+            PtsCard(Modifier.fillMaxWidth(), padding = 12.dp) {
+                Text("Storage & recovery", color = Pts.text, style = MaterialTheme.typography.titleMedium)
+                if (storage.isNotBlank()) Text(storage, color = Pts.muted, style = MaterialTheme.typography.bodySmall)
+                Text("Selected-folder downloads stage privately first. Export to internal shared storage temporarily needs about twice the video size; other folder providers may also need extra space.", color = Pts.muted, style = MaterialTheme.typography.bodySmall)
+                PtsButtonPair(first = { PtsSecondaryButton("Pause all", it, enabled = tasks.any { transferCanPause(it.status) }, onClick = onPauseAll) },
+                    second = { PtsSecondaryButton("Resume all", it, enabled = tasks.any { it.status in listOf("paused", "failed") }, onClick = onResumeAll) })
+                PtsButtonPair(first = { PtsSecondaryButton("Storage settings", it, onClick = onSettings) },
+                    second = { PtsSecondaryButton("Refresh access", it, onClick = onRefresh) })
+                if (unavailable.isNotEmpty()) {
+                    Text("${unavailable.size} saved file(s) unavailable. Restore access to the original folder, then refresh. Missing files cannot be recreated by changing folders.", color = Pts.danger, style = MaterialTheme.typography.bodySmall)
+                    Text(unavailable.take(5).joinToString("\n") { it.label }, color = Pts.muted, style = MaterialTheme.typography.bodySmall)
+                    PtsSecondaryButton("Restore folder access", Modifier.fillMaxWidth()) { onRecover(null) }
+                }
+            }
+        }
         if (ids.isEmpty()) item { PtsEmpty("No offline videos", icon = PtsIcons.Download) }
         if (folder == null) items(ids, key = { "title-$it" }) { id ->
             val videos = saved.filter { it.titleId == id }
@@ -65,7 +83,7 @@ fun CompactDownloads(saved: List<SavedVideo>, tasks: List<DownloadTask>, onPlay:
                         PtsIconAction(PtsIcons.Trash, "Delete", { confirm = listOf(video) })
                     }
                 }
-                if (!series) pending.forEach { TransferRow(it, onPause, onResume, onCancel) }
+                if (!series) pending.forEach { TransferRow(it, onPause, onResume, onCancel, onRecover) }
             }
         }
         else if (season == null) {
@@ -84,7 +102,7 @@ fun CompactDownloads(saved: List<SavedVideo>, tasks: List<DownloadTask>, onPlay:
         } else {
             item { Text("Season $season", style = MaterialTheme.typography.titleMedium, color = Pts.muted) }
             items(tasks.filter { it.title.id == folder && it.episode?.season == season && it.status != "complete" }, key = { "task-${it.key}" }) { task ->
-                PtsCard(Modifier.fillMaxWidth(), padding = 12.dp) { Text("E${task.episode?.episode} · ${task.episode?.title.orEmpty()}", color = Pts.text, style = MaterialTheme.typography.titleSmall); TransferRow(task, onPause, onResume, onCancel) }
+                PtsCard(Modifier.fillMaxWidth(), padding = 12.dp) { Text("E${task.episode?.episode} · ${task.episode?.title.orEmpty()}", color = Pts.text, style = MaterialTheme.typography.titleSmall); TransferRow(task, onPause, onResume, onCancel, onRecover) }
             }
             items(saved.filter { it.titleId == folder && it.season == season }.sortedBy { it.episode }, key = { it.key }) { video ->
                 PtsCard(Modifier.fillMaxWidth(), padding = 10.dp) {
@@ -116,17 +134,21 @@ private fun DownloadPoster(model: Any?, imageLoader: coil.ImageLoader?, compact:
 }
 
 @Composable
-private fun TransferRow(task: DownloadTask, onPause: (String) -> Unit, onResume: (String) -> Unit, onCancel: (String) -> Unit) {
+private fun TransferRow(task: DownloadTask, onPause: (String) -> Unit, onResume: (String) -> Unit, onCancel: (String) -> Unit, onRecover: (String?) -> Unit) {
     Column(verticalArrangement = Arrangement.spacedBy(5.dp)) {
-        PtsPill(if (task.status == "waiting_wifi") "Waiting for Wi-Fi" else task.status, active = task.status == "downloading", danger = task.status == "failed")
+        PtsPill(when (task.status) { "waiting_wifi" -> "Waiting for Wi-Fi"; "waiting_charging" -> "Waiting for charger"; "exporting" -> "Saving to folder"; else -> task.status }, active = task.status == "downloading", danger = task.status == "failed")
         PtsProgressBar(task.progress.percent / 100f, height = 4.dp)
         Text("${task.progress.percent}% · ${formatBytes(task.bytes)} / ${if (task.total > 0) formatBytes(task.total) else "…"}", style = MaterialTheme.typography.bodySmall, color = Pts.muted)
         if (task.status == "downloading") Text("${formatBytes(task.speed)}/s · ETA ${task.progress.eta?.let { if (it == 0L) "<1s" else formatDuration(it) } ?: "…"}", color = Pts.accent, style = MaterialTheme.typography.bodySmall)
         if (task.status == "downloading" && task.route.isNotEmpty()) Text(task.route, style = MaterialTheme.typography.labelSmall, color = Pts.accent)
         if (task.error.isNotBlank()) Text(task.error, color = Pts.danger, style = MaterialTheme.typography.bodySmall)
+        if (task.failure == "export") {
+            Text("Complete video is staged privately. Retry with another destination without downloading it again.", color = Pts.muted, style = MaterialTheme.typography.bodySmall)
+            PtsSecondaryButton("Retry export / choose storage", Modifier.fillMaxWidth()) { onRecover(task.key) }
+        }
         Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-            TextButton({ if (task.status in listOf("downloading", "preparing", "queued", "waiting_wifi")) onPause(task.key) else onResume(task.key) }) { Text(if (task.status in listOf("downloading", "preparing", "queued", "waiting_wifi")) "Pause" else "Resume") }
-            TextButton({ onCancel(task.key) }) { Text("Cancel", color = Pts.danger) }
+            TextButton({ if (transferCanPause(task.status)) onPause(task.key) else onResume(task.key) }, enabled = task.status != "cancelling") { Text(if (transferCanPause(task.status)) "Pause" else "Resume") }
+            TextButton({ onCancel(task.key) }, enabled = task.status != "cancelling") { Text("Cancel", color = Pts.danger) }
         }
     }
 }

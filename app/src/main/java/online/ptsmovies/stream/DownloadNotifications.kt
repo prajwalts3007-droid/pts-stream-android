@@ -7,7 +7,13 @@ import android.content.Intent
 import android.net.Uri
 import androidx.core.app.NotificationCompat
 
-fun transferIsActive(status: String) = status in setOf("queued", "preparing", "downloading", "waiting_wifi", "cancelling")
+fun transferCanPause(status: String) = status in setOf("queued", "preparing", "downloading", "exporting", "waiting_wifi", "waiting_charging")
+fun transferIsActive(status: String) = transferCanPause(status) || status == "cancelling"
+internal fun downloadWaitReason(wifiOnly: Boolean, wifi: Boolean, chargingOnly: Boolean, charging: Boolean): String? = when {
+    wifiOnly && !wifi -> "waiting_wifi"
+    chargingOnly && !charging -> "waiting_charging"
+    else -> null
+}
 fun downloadNoticeTag(owner: Long, key: String) = "pts-download:$owner:$key"
 fun downloadNoticePercent(task: DownloadTask) = if (task.status == "complete") 100 else task.progress.percent.coerceIn(0, 100)
 fun downloadNoticeSortKey(order: Int) = order.coerceAtLeast(0).toString().padStart(10, '0')
@@ -22,7 +28,7 @@ fun visibleDownloadTasks(tasks: List<DownloadTask>, tracked: Set<String>): List<
     if (candidates.size <= 40) return candidates
     // Android limits notifications per package. Reserve room for the group and
     // other app notifications; always prioritize running/queued transfers.
-    val included = candidates.sortedBy { when (it.status) { "downloading", "preparing" -> 0; "queued", "waiting_wifi", "cancelling" -> 1; else -> 2 } }.take(40).map { it.key }.toSet()
+    val included = candidates.sortedBy { when (it.status) { "downloading", "preparing", "exporting" -> 0; "queued", "waiting_wifi", "waiting_charging", "cancelling" -> 1; else -> 2 } }.take(40).map { it.key }.toSet()
     return candidates.filter { it.key in included }
 }
 
@@ -81,6 +87,7 @@ class DownloadNotifications(private val context: Context, private val owner: Lon
             val percent = downloadNoticePercent(task)
             val phase = when (task.status) {
                 "queued" -> "Queued"; "preparing" -> "Preparing MP4 on Pi"; "waiting_wifi" -> "Waiting for Wi-Fi"
+                "waiting_charging" -> "Waiting for charger"; "exporting" -> "Saving to selected folder"
                 "paused" -> "Paused"; "failed" -> "Failed · open Downloads for details"; "complete" -> "Downloaded"
                 "cancelling" -> "Cancelling"; else -> "$percent% · ${formatBytes(task.bytes)} / ${formatBytes(task.total)} · ${formatBytes(task.speed)}/s"
             }
@@ -96,7 +103,7 @@ class DownloadNotifications(private val context: Context, private val owner: Lon
                 .setOngoing(transferIsActive(task.status)).setAutoCancel(!transferIsActive(task.status))
                 .setProgress(100, percent, task.status == "preparing" || (task.status == "downloading" && task.total <= 0))
                 .apply {
-                    if (task.status in listOf("queued", "preparing", "downloading", "waiting_wifi")) addAction(android.R.drawable.ic_media_pause, "Pause", action(task.key, "PAUSE"))
+                    if (transferCanPause(task.status)) addAction(android.R.drawable.ic_media_pause, "Pause", action(task.key, "PAUSE"))
                     if (task.status in listOf("paused", "failed")) addAction(android.R.drawable.ic_media_play, "Resume", action(task.key, "RESUME"))
                     if (task.status != "complete" && task.status != "cancelling") addAction(android.R.drawable.ic_menu_close_clear_cancel, "Cancel", action(task.key, "CANCEL"))
                 }.build()

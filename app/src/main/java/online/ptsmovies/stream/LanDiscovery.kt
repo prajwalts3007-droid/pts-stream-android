@@ -57,6 +57,7 @@ internal object LanDiscovery {
     private var lastScanAt = -SCAN_COOLDOWN_MS
     private var lastNetwork: Network? = null
     private val pool = ConnectionPool(6, 15, TimeUnit.SECONDS)
+    private var probeBase: Pair<Network, OkHttpClient>? = null
 
     /** Respect smaller subnets; cap wider ones to this /24 (at most 254 probes). */
     internal fun candidatesFor(host: String, prefixLength: Int = 24): List<String> {
@@ -112,7 +113,8 @@ internal object LanDiscovery {
             finally { finished.cancel(); jobs.forEach { it.cancel() } }
         }
 
-    private fun probeClient(context: Context, network: Network): OkHttpClient {
+    @Synchronized private fun probeClient(context: Context, network: Network): OkHttpClient {
+        probeBase?.takeIf { it.first == network }?.let { return it.second }
         val certificate = context.resources.openRawResource(R.raw.pts_lan_certificate).use {
             CertificateFactory.getInstance("X.509").generateCertificate(it)
         }
@@ -130,7 +132,7 @@ internal object LanDiscovery {
             .cookieJar(CookieJar.NO_COOKIES)
             .followRedirects(false)
             .connectionPool(pool)
-            .build()
+            .build().also { probeBase = network to it }
     }
 
     private suspend fun probeLan(address: String, base: OkHttpClient): Boolean {
@@ -160,6 +162,12 @@ internal object LanDiscovery {
     }
 
     /** Probe the remembered address first; sweep only if it no longer verifies. */
+    suspend fun verifyRemembered(context: Context): Boolean {
+        val wifi = wifiSubnet(context) ?: return false
+        val address = NativePreferences(context).lanAddress()
+        return probeLan(address, probeClient(context, wifi.network)) && wifiSubnet(context)?.network == wifi.network && NativePreferences(context).lanAddress() == address
+    }
+
     fun refresh(context: Context) = maybeDiscover(context)
 
     /** Fire-and-forget from a failed media request; never scans on cellular, never scans twice at once. */

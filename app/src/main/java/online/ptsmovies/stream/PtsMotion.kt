@@ -26,7 +26,8 @@ import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 
 internal val LocalPtsMotion = staticCompositionLocalOf<Boolean?> { null }
-@Composable @ReadOnlyComposable internal fun ptsMotionEnabled() = LocalPtsMotion.current ?: true
+internal val LocalLowMemory = staticCompositionLocalOf { false }
+@Composable @ReadOnlyComposable internal fun ptsMotionEnabled() = (LocalPtsMotion.current ?: true) && !LocalLowMemory.current
 /** One dial for perceived speed. The previous timings read as abrupt on 60 Hz phones. */
 internal const val MOTION_SCALE = 1.4f
 internal fun motionMillis(enabled: Boolean, milliseconds: Int) = if (enabled) (milliseconds * MOTION_SCALE).toInt() else 0

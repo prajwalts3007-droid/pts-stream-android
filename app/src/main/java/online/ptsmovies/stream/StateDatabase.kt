@@ -90,7 +90,7 @@ internal fun compactQueue(tasks: List<DownloadTask>): String {
         titles.put(id.toString(), group.last().title.copy(episodes = episodes.values.toList()).toJson())
     }
     val rows = org.json.JSONArray(tasks.map { task -> JSONObject().put("title_id", task.title.id).put("episode_id", task.episode?.id ?: 0)
-        .put("status", task.status).put("bytes", task.bytes).put("total", task.total).put("error", task.error).put("destination", task.destination) })
+        .put("status", task.status).put("bytes", task.bytes).put("total", task.total).put("error", task.error).put("destination", task.destination).put("failure", task.failure) })
     return JSONObject().put("version", 1).put("titles", titles).put("tasks", rows).toString()
 }
 
@@ -112,7 +112,16 @@ internal fun parseQueue(source: String): List<DownloadTask> {
             } else cached
         } else titles.getValue(row.getLong("title_id"))
         val episode = if (legacy) row.optJSONObject("episode")?.let(::parseEpisode) else row.optLong("episode_id").takeIf { it > 0 }?.let { id -> title.episodes.firstOrNull { it.id == id } ?: error("Episode missing from queue metadata") }
-        DownloadTask(title, episode, row.optString("status"), row.optLong("bytes"), row.optLong("total"), error = row.optString("error"), destination = row.optString("destination").takeIf { it.isNotBlank() && it != "null" })
+        DownloadTask(title, episode, row.optString("status"), row.optLong("bytes"), row.optLong("total"), error = row.optString("error"), destination = row.optString("destination").takeIf { it.isNotBlank() && it != "null" }, failure = row.optString("failure"))
     }
     return if (legacy) parseQueue(compactQueue(result)) else result
+}
+
+/** Byte checkpoints never serialize series metadata. Structural queue changes invalidate these. */
+internal fun compactCounters(tasks: List<DownloadTask>) = JSONObject().apply {
+    tasks.filter { transferIsActive(it.status) }.forEach { put(it.key, JSONObject().put("bytes", it.bytes).put("total", it.total)) }
+}.toString()
+internal fun restoreCounters(tasks: List<DownloadTask>, raw: String?): List<DownloadTask> {
+    val counters = raw?.let { runCatching { JSONObject(it) }.getOrNull() } ?: return tasks
+    return tasks.map { task -> counters.optJSONObject(task.key)?.takeIf { transferIsActive(task.status) && it.optLong("bytes") >= 0 && it.optLong("total") >= it.optLong("bytes") }?.let { task.copy(bytes = it.optLong("bytes"), total = it.optLong("total")) } ?: task }
 }

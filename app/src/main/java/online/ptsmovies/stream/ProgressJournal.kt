@@ -15,7 +15,10 @@ class ProgressJournal(private val context: Context, private val owner: Long) {
         if (database.read(owner, "progress_pending") == null) database.write(owner, "progress_pending", "[]")
     }
     private val lock get() = locks.getOrPut(owner) { Any() }
-    companion object { private val locks = java.util.concurrent.ConcurrentHashMap<Long, Any>() }
+    companion object {
+        private val locks = java.util.concurrent.ConcurrentHashMap<Long, Any>()
+        private val syncLocks = java.util.concurrent.ConcurrentHashMap<Long, kotlinx.coroutines.sync.Mutex>()
+    }
     private var parsedSource: String? = null
     private var parsedPending = emptyList<JSONObject>()
     fun completed(): Set<String> = prefs.getStringSet("completed", emptySet())!!.toSet()
@@ -41,7 +44,11 @@ class ProgressJournal(private val context: Context, private val owner: Long) {
         database.write(owner, "progress_pending", JSONArray(pending().filterNot { it.optLong("title_id") == title } + value).toString())
         Unit
     }
-    suspend fun flush(api: PtsApi) = withContext(Dispatchers.IO) { flushPending(api) }
+    suspend fun flush(api: PtsApi) = withContext(Dispatchers.IO) {
+        val mutex = syncLocks.getOrPut(owner) { kotlinx.coroutines.sync.Mutex() }
+        mutex.lock()
+        try { flushPending(api) } finally { mutex.unlock() }
+    }
     private suspend fun flushPending(api: PtsApi) {
         for (value in pending()) {
             if (DeviceState(context).account()?.optLong("id") != owner) return

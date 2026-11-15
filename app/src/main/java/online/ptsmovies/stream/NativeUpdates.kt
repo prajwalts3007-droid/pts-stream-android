@@ -58,7 +58,7 @@ class NativeUpdates internal constructor(private val context: Context, private v
                     OkHttpClient().newCall(Request.Builder().url(url).build()).execute().use { response ->
                         if (response.code == 404) return@use null
                         check(response.isSuccessful) { "Release server HTTP ${response.code}" }
-                        val text = response.body?.string().orEmpty()
+                        val text = response.body?.boundedText(4 * 1024 * 1024).orEmpty()
                         val releases = if (tests) JSONArray(text) else JSONArray().put(JSONObject(text))
                         (0 until releases.length()).mapNotNull { i ->
                             runCatching { parseReleaseUpdate(releases.getJSONObject(i), installedCode, tests) }.getOrNull()

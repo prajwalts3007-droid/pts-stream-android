@@ -76,9 +76,10 @@ fun PtsBackground(modifier: Modifier = Modifier, decorative: Boolean = true, con
     val accent = Pts.accent
     val spark = Pts.spark
     val black = LocalPitchBlack.current
+    val lowMemory = LocalLowMemory.current
     Box(
         Modifier.fillMaxSize().background(Pts.bg).then(modifier).drawBehind {
-            if (!decorative || black) return@drawBehind
+            if (!decorative || black || lowMemory) return@drawBehind
             drawRect(Brush.radialGradient(
                 colors = listOf(accent.copy(alpha = 0.12f), Color.Transparent),
                 center = Offset(size.width * 0.92f, size.height * 0.03f),
@@ -120,17 +121,7 @@ fun PtsTopBar(title: String, initial: String, onAvatar: () -> Unit, onTitle: () 
             fontFamily = Nunito, fontWeight = FontWeight.Black, fontSize = 19.sp, color = Pts.text,
             maxLines = 1, overflow = TextOverflow.Ellipsis
         )
-        Box(
-            Modifier.size(48.dp).testTag("profile-avatar").background(Pts.soft, CircleShape)
-                .border(2.dp, Pts.line2, CircleShape)
-                .semantics { contentDescription = "Open profile" }
-                .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null, onClick = onAvatar),
-            contentAlignment = Alignment.Center
-        ) {
-            Text(initial.ifBlank { "?" }, fontFamily = Nunito, fontWeight = FontWeight.Black, fontSize = 16.sp, color = Pts.accent)
-            if (avatar != null && imageLoader != null) AsyncImage(avatar, "Profile photo", imageLoader = imageLoader,
-                modifier = Modifier.fillMaxSize().clip(CircleShape), contentScale = ContentScale.Crop)
-        }
+        ProfileAvatar(initial, avatar, imageLoader, onClick = onAvatar)
     }
 }
 

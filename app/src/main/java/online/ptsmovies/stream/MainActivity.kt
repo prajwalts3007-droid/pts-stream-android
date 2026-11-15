@@ -91,6 +91,8 @@ class MainActivity : ComponentActivity() {
     private fun detachDownloads() { if (downloadsAttached) { downloads?.detachUi(); downloadsAttached = false } }
     private var downloadWatch: Job? = null
     private var downloadTasks by mutableStateOf(emptyList<DownloadTask>())
+    private var unavailableDownloads by mutableStateOf(emptyList<UnavailableDownload>())
+    private var downloadStorage by mutableStateOf("")
     private var updatesOpen by mutableStateOf(false)
     private var editProfile by mutableStateOf(false)
     private var navigationRestored = false
@@ -105,6 +107,9 @@ class MainActivity : ComponentActivity() {
     private var libraryRequest: Job? = null
     private var startupRestored = false
     private var nativeSettings by mutableStateOf("")
+    private var lowMemory by mutableStateOf(false)
+    private var preferenceStatus by mutableStateOf("Saved on device")
+    private var connectionDetails by mutableStateOf(false)
     private var episodeDownloadTitle by mutableStateOf<Title?>(null)
     private var sleepDeadline by mutableLongStateOf(0L)
     private var sleepAtEnd by mutableStateOf(false)
@@ -148,6 +153,20 @@ class MainActivity : ComponentActivity() {
         val owner = account?.optLong("id") ?: return
         if (getSharedPreferences("download_destination_$owner", MODE_PRIVATE).getBoolean("chosen", false)) action()
         else { destinationOwner = owner; destinationAction = action; destinationDialog = true }
+    }
+    private fun recoverDownload(key: String?) {
+        val owner = account?.optLong("id") ?: return
+        val repository = downloads ?: return
+        destinationOwner = owner
+        destinationAction = {
+            if (account?.optLong("id") == owner) scope.launch {
+                try { withContext(Dispatchers.IO) {
+                    if (key != null) repository.retryExport(key, getSharedPreferences("download_destination_$owner", MODE_PRIVATE).getString("tree", null))
+                    repository.refresh()
+                } } catch (e: Exception) { toast(e.message ?: "Could not recover download") }
+            }
+        }
+        destinationDialog = true
     }
     private fun enqueueEpisodes(title: Title, episodes: List<Episode>) = withDownloadDestination {
         val repository = downloads ?: return@withDownloadDestination
@@ -303,6 +322,8 @@ class MainActivity : ComponentActivity() {
         googleClientId = if (cachedGoogle.first) cachedGoogle.second else ""
         scope.launch { refreshAuthConfig() }
         LanDiscovery.refresh(this)
+        lowMemory = NativePreferences(this).lowMemory()
+        scope.launch { lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) { ConnectionMonitor.run(this@MainActivity) } }
         startAccountSync()
         setContent {
             val dark = device.theme == "dark" || (device.theme == "system" && androidx.compose.foundation.isSystemInDarkTheme())
@@ -310,7 +331,8 @@ class MainActivity : ComponentActivity() {
             val watching = fullPlayer || (dark && selected != null && mode == "Stream" && !profileOpen && !downloadsOpen && !updatesOpen)
             PtsTheme(if (watching) "watch" else device.theme) {
               val indexes = remember(account?.optLong("id")) { LibraryIndexCache() }
-              CompositionLocalProvider(LocalLibraryIndexes provides indexes) {
+               CompositionLocalProvider(LocalLibraryIndexes provides indexes, LocalLowMemory provides lowMemory, LocalConnectionDetails provides { connectionDetails = true }) {
+                 if (connectionDetails && account != null && !inPip) ConnectionDetailsDialog { connectionDetails = false }
                 val bar = if (fullPlayer) Color.Black else Pts.bg
                 val light = !fullPlayer && MaterialTheme.colorScheme.background.luminance() > .5f
                 SideEffect {
@@ -524,7 +546,7 @@ class MainActivity : ComponentActivity() {
                 account = null; library = null; selected = null; playbackTitle = null; miniPlayer = false; playing = false; profileOpen = false; downloadsOpen = false
                 device.clearSession(); signedOutOwner?.let { DownloadNotifications.clear(this@MainActivity, it) }; navigationRestored = false; updatesOpen = false
                 queueJobs = emptyList(); queueDone = emptyList(); metrics = null; users = emptyList(); filesEntries = emptyList(); filesEntriesKey = ""
-                savedVideos = emptyList(); downloadTasks = emptyList(); downloading = ""; message = ""; startupError = ""
+                savedVideos = emptyList(); downloadTasks = emptyList(); unavailableDownloads = emptyList(); downloadStorage = ""; connectionDetails = false; preferenceStatus = "Saved on device"; downloading = ""; message = ""; startupError = ""
                 fileClipboard = null; fileEditor = null; fileStatus = ""; clearedProgress.clear()
                 relayJobs = emptyList()
                 playbackPrefs = JSONObject(); nativeSettings = ""; episodeDownloadTitle = null; sleepDeadline = 0; sleepAtEnd = false
@@ -620,11 +642,13 @@ class MainActivity : ComponentActivity() {
         if (downloads === repo && downloadWatch?.isActive == true) { repo.detachUi(); return }
         clearedProgress.clear(); clearedProgress.addAll(journal()?.clearedTitles().orEmpty())
         playbackPrefs = runCatching { JSONObject(cached!!) }.getOrDefault(JSONObject())
+        preferenceStatus = PlaybackSettings(applicationContext, user.optLong("id")).status()
         detachDownloads(); downloads = repo; downloadsAttached = true; downloadWatch?.cancel()
         savedVideos = repo.state.value.saved; downloadTasks = repo.state.value.tasks
         downloadWatch = scope.launch {
             lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) { repo.state.collect { snapshot ->
-                savedVideos = snapshot.saved; downloadTasks = snapshot.tasks
+                savedVideos = snapshot.saved; downloadTasks = snapshot.tasks; unavailableDownloads = snapshot.unavailable
+                downloadStorage = withContext(Dispatchers.IO) { "${formatBytes(repo.store.freeBytes())} available for staging · ${formatBytes(repo.store.usedBytes())} in downloads and staging" }
                 val active = snapshot.tasks.firstOrNull { it.status == "downloading" }
                 downloading = active?.label.orEmpty(); downloadPercent = active?.progress?.percent ?: 0
             } }
@@ -828,15 +852,19 @@ class MainActivity : ComponentActivity() {
     private fun loadPlaybackPrefs() {
         val owner = account?.optLong("id") ?: return
         scope.launch { preferenceMutex.withLock { try {
-            val local = getSharedPreferences("playback_$owner", MODE_PRIVATE)
+            val local = PlaybackSettings(applicationContext, owner)
             if (owner != account?.optLong("id")) return@withLock
-            if (local.getBoolean("pending", false)) {
-                api.json("/stream/prefs", "PUT", JSONObject(local.getString("value", "{}")!!))
-                local.edit().putBoolean("pending", false).apply()
+            val sent = local.snapshot()
+            if (sent.pending) {
+                api.json("/stream/prefs", "PUT", JSONObject(sent.value))
+                if (owner != account?.optLong("id")) return@withLock
+                if (!local.acknowledge(sent)) return@withLock
             }
             val result = api.json("/stream/prefs")
-            if (owner == account?.optLong("id")) { playbackPrefs = result.optJSONObject("prefs") ?: result; local.edit().putString("value", playbackPrefs.toString()).apply() }
-        } catch (_: Exception) { } } }
+            if (owner == account?.optLong("id") && local.acceptRemote(sent, result.optJSONObject("prefs") ?: result)) playbackPrefs = JSONObject(local.snapshot().value)
+        } catch (e: CancellationException) { throw e }
+          catch (_: Exception) { }
+          finally { if (owner == account?.optLong("id")) preferenceStatus = PlaybackSettings(applicationContext, owner).status() } } }
     }
 
     private fun markPlayed(title: Title) {
@@ -872,10 +900,13 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun playerPreference(key: String, value: Any) {
-        val snapshot = JSONObject(playbackPrefs.toString()).put(key, value)
-        playbackPrefs = snapshot
+        savePlaybackPreferences(JSONObject().put(key, value))
+    }
+
+    private fun savePlaybackPreferences(changes: JSONObject) {
         val owner = account?.optLong("id") ?: return
-        getSharedPreferences("playback_$owner", MODE_PRIVATE).edit().putString("value", snapshot.toString()).putBoolean("pending", true).apply()
+        playbackPrefs = PlaybackSettings(applicationContext, owner).edit(changes)
+        preferenceStatus = "Sync pending · saved on device"
         loadPlaybackPrefs()
     }
 
@@ -1080,11 +1111,11 @@ class MainActivity : ComponentActivity() {
             )
             Box(Modifier.weight(1f).ptsPageMotion(pageRoute)) {
                 when {
-                    nativeSettings == "downloads" -> DownloadSettingsScreen(NativePreferences(this@MainActivity), { nativeSettings = ""; profileOpen = true }, { scope.launch(Dispatchers.IO) { downloads?.reconcile() }; nativeSettings = ""; profileOpen = true },
+                    nativeSettings == "downloads" -> DownloadSettingsScreen(NativePreferences(this@MainActivity), { nativeSettings = ""; profileOpen = true }, { lowMemory = NativePreferences(this@MainActivity).lowMemory(); scope.launch(Dispatchers.IO) { downloads?.reconcile() }; nativeSettings = ""; profileOpen = true; ConnectionMonitor.recheck() },
                         onLocation = { destinationOwner = user.optLong("id"); destinationAction = null; destinationDialog = true },
                         location = remember(destinationRevision, user.optLong("id")) { if (getSharedPreferences("download_destination_${user.optLong("id")}", MODE_PRIVATE).getString("tree", null) == null) "Private app storage" else "Selected folder" })
-                    nativeSettings == "playback" -> PlaybackPreferencesScreen(playbackPrefs, { key, value -> playerPreference(key, value) }, { nativeSettings = ""; profileOpen = true })
-                    nativeSettings == "sync" -> SyncAlertsScreen(streamUser, api) { nativeSettings = ""; profileOpen = true; episodeProgressRevision++ }
+                    nativeSettings == "playback" -> key(user.optLong("id")) { PlaybackPreferencesScreen(playbackPrefs, { key, value -> playerPreference(key, value) }, { nativeSettings = ""; profileOpen = true }, onSave = { savePlaybackPreferences(it) }, owner = user.optLong("id"), syncStatus = preferenceStatus) }
+                    nativeSettings == "sync" -> SyncAlertsScreen(streamUser, api, onRetrySettings = { loadPlaybackPrefs() }, settingsStatus = preferenceStatus) { nativeSettings = ""; profileOpen = true; episodeProgressRevision++ }
                     updatesOpen -> NativeUpdateScreen(NativeUpdates.get(this@MainActivity), { NativeUpdates.get(this@MainActivity).install(this@MainActivity) }, { updatesOpen = false })
                     profileOpen -> ProfileScreen(streamUser, savedVideos.size, { profileOpen = false; downloadsOpen = true }, {
                         openUpdates()
@@ -1102,7 +1133,9 @@ class MainActivity : ComponentActivity() {
                          scope.launch { try { withContext(Dispatchers.IO) { downloads?.remove(item) }; toast("Download deleted", ok = true) }
                          catch (e: Exception) { toast(e.message ?: "Could not delete download") } }
                     }, tasks = downloadTasks, onPause = { key -> scope.launch(Dispatchers.IO) { downloads?.pause(key) } }, onResume = { key -> scope.launch(Dispatchers.IO) { downloads?.resume(key) } }, onCancel = { key -> scope.launch(Dispatchers.IO) { downloads?.cancel(key) } },
-                        titles = library?.titles.orEmpty(), imageLoader = images, onBack = { downloadsOpen = false; profileOpen = true })
+                         titles = library?.titles.orEmpty(), imageLoader = images, onBack = { downloadsOpen = false; profileOpen = true },
+                         onPauseAll = { downloads?.pauseAll() }, onResumeAll = { downloads?.resumeAll() }, onRecover = { recoverDownload(it) },
+                         unavailable = unavailableDownloads, storage = downloadStorage, onSettings = { downloadsOpen = false; nativeSettings = "downloads" }, onRefresh = { downloads?.refresh() })
                     mode == "Hub" && admin() -> when (hubTab) {
                         "Dashboard" -> DashboardScreen(name, metrics, metricsTarget, { metricsTarget = it }, { loadMetrics() }, queueJobs, queueDone,
                             onQueue = { hubTab = "Queue" }, refreshing = metricsRefreshing)
@@ -1111,7 +1144,7 @@ class MainActivity : ComponentActivity() {
                         }, onCancelStage = { stage, ids -> cancelStage(stage, ids) }, onRetry = { id -> changeQueue(id) },
                             onEdit = { job, link -> changeQueue(job.optString("job_id"), link) }, busy = queueBusy, refreshing = queueRefreshing)
                         "Download" -> NativeIngest(api, searchQuery, { search(it) }, searchResults, searchLoading, { loadQueue() }, searchError)
-                        else -> NativeAdminSettings(user, api, { openUpdates() }, { signOut() }, playbackPrefs, { key, value -> playerPreference(key, value) })
+                        else -> NativeAdminSettings(user, api, { openUpdates() }, { signOut() }, playbackPrefs, { key, value -> playerPreference(key, value) }, { savePlaybackPreferences(it) })
                     }
                     mode == "Files" && admin() -> if (filesTab == "Transfers") {
                         LaunchedEffect(Unit) { lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) { while (true) { loadOps(); loadRelay(); delay(4000) } } }

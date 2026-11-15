@@ -18,6 +18,15 @@ import android.os.SystemClock
 import okhttp3.Call
 
 internal class DeviceStorageException(message: String) : IOException(message)
+internal class DownloadSourceException(message: String) : IOException(message)
+internal class FolderExportException(message: String, cause: Throwable? = null) : IOException(message, cause)
+data class UnavailableDownload(val key: String, val label: String)
+
+/** Primary shared storage consumes the same device budget as private staging. */
+internal fun primaryExport(tree: String?) = tree != null && android.net.Uri.parse(tree).let {
+    it.authority == "com.android.externalstorage.documents" && runCatching { android.provider.DocumentsContract.getTreeDocumentId(it).substringBefore(':') == "primary" }.getOrDefault(false)
+}
+internal fun transferReservation(total: Long, offset: Long, sameVolumeExport: Boolean) = (total - offset).coerceAtLeast(0) + if (sameVolumeExport) total else 0L
 
 data class SavedVideo(val key: String, val titleId: Long, val title: String, val season: Int,
                       val episode: Int, val label: String, val bytes: Long, val file: File,
@@ -75,6 +84,16 @@ class OfflineStore(private val context: Context, private val api: PtsApi, privat
         return result
     }
     fun find(title: Title, episode: Episode?): SavedVideo? = list().firstOrNull { it.key == key(title, episode) }
+    fun unavailable(saved: List<SavedVideo>): List<UnavailableDownload> {
+        val valid = saved.mapTo(hashSetOf()) { it.key }
+        val entries = JSONArray(database.read(ownerId, "offline_index") ?: "[]")
+        return (0 until entries.length()).mapNotNull { i -> entries.optJSONObject(i)?.takeIf { it.optString("document_uri").isNotBlank() && it.optString("key") !in valid }?.let { UnavailableDownload(it.optString("key"), it.optString("label").ifBlank { it.optString("title") }) } }
+    }
+    fun hasStaged(key: String): Boolean {
+        require(key.matches(Regex("[0-9]+_[0-9]+")))
+        val file = File(root, "$key.mp4")
+        return file.isFile && file.length() > 0 && runCatching { File(root, "$key.complete").readText().toLong() == file.length() }.getOrDefault(false)
+    }
     fun remove(item: SavedVideo): Unit = synchronized(indexLock) {
         val next = list().filterNot { it.key == item.key }
         if (item.documentUri != null) {
@@ -107,10 +126,10 @@ class OfflineStore(private val context: Context, private val api: PtsApi, privat
         onTransfer: (TransferProgress) -> Unit = {}, onCall: (Call?) -> Unit = {}, maxBytes: Long = Long.MAX_VALUE,
         admit: (Long, Long) -> Unit = { _, _ -> },
         onRoute: (MediaRoute) -> Unit = {},
-        preparedUrl: String? = null, destinationUri: String? = null,
+        preparedUrl: String? = null, destinationUri: String? = null, onExport: () -> Unit = {},
         onProgress: (Int) -> Unit): SavedVideo = withContext(Dispatchers.IO) {
         find(title, episode)?.let { database.remove(ownerId, "export_${it.key}"); return@withContext it }
-        if (preparedUrl == null && (episode?.container == "hls" || (episode == null && title.container == "hls")))
+        if (preparedUrl == null && !hasStaged(key(title, episode)) && (episode?.container == "hls" || (episode == null && title.container == "hls")))
             throw IOException("This title needs MP4 preparation on the Pi before offline saving; user access is not yet verified")
         val id = key(title, episode)
         val telemetry = MediaTelemetry()
@@ -128,7 +147,8 @@ class OfflineStore(private val context: Context, private val api: PtsApi, privat
             val call = api.http.newCall(req.build())
             onCall(call)
             currentCoroutineContext().ensureActive()
-            call.execute().use { response ->
+            try { call.execute().use { response ->
+                if (response.code == 416) throw DownloadSourceException("Saved range is no longer valid; restart the download")
                 if (!response.isSuccessful) throw IOException("Download HTTP ${response.code}")
                 val body = response.body ?: throw IOException("Empty response")
                 val range = response.header("Content-Range").orEmpty().let { Regex("bytes (\\d+)-(\\d+)/(\\d+)").matchEntire(it) }
@@ -138,8 +158,8 @@ class OfflineStore(private val context: Context, private val api: PtsApi, privat
                 if (append && (range == null || range.groupValues[1].toLong() != offset ||
                         range.groupValues[2].toLong() != range.groupValues[3].toLong() - 1 ||
                         range.groupValues[3].toLong() != info?.optLong("total") || responseValidator != validator))
-                    throw IOException("Source changed; restart the download")
-                if (response.code != 200 && !append) throw IOException("Source did not return a safe complete file or range")
+                    throw DownloadSourceException("Source changed; restart the download")
+                if (response.code != 200 && !append) throw DownloadSourceException("Source did not return a safe complete file or range")
                 val total = if (append) range!!.groupValues[3].toLong() else body.contentLength()
                 if (total <= 0) throw IOException("Source size is unknown; safe offline download unavailable")
                 val start = if (append) offset else 0L
@@ -159,7 +179,7 @@ class OfflineStore(private val context: Context, private val api: PtsApi, privat
                             if (n < 0) break
                             out.write(buffer, 0, n)
                             written += n
-                            if (written > total) throw IOException("Source exceeded its declared size")
+                            if (written > total) throw DownloadSourceException("Source exceeded its declared size")
                             val elapsed = SystemClock.elapsedRealtime() - started
                             if (elapsed - lastReport >= 1000 || written == total) {
                                 onProgress((written * 100 / total).toInt().coerceIn(0, 100))
@@ -175,8 +195,7 @@ class OfflineStore(private val context: Context, private val api: PtsApi, privat
                 if (!partial.renameTo(dest)) throw IOException("Cannot finalize offline download")
                 complete.writeText(written.toString())
                 sourceInfo.delete()
-            }
-            onCall(null)
+            } } finally { onCall(null) }
         }
         // The source may expire between sessions. A fresh signed URL is obtained for each attempt.
         var succeeded = dest.isFile && runCatching { complete.readText().toLong() == dest.length() && dest.length() > 0 }.getOrDefault(false)
@@ -190,18 +209,27 @@ class OfflineStore(private val context: Context, private val api: PtsApi, privat
                 break
             } catch (e: kotlinx.coroutines.CancellationException) { if (!resume) discardPartial(id); throw e }
             catch (e: DeviceStorageException) { if (!resume) discardPartial(id); throw e }
-            catch (e: Exception) { currentCoroutineContext().ensureActive(); partial.delete(); sourceInfo.delete(); last = e }
+            catch (e: Exception) {
+                currentCoroutineContext().ensureActive()
+                // Transient read failures keep validator + partial. Only unsafe sources restart.
+                if (!resume || e is DownloadSourceException) { partial.delete(); sourceInfo.delete() }
+                last = e
+            }
         }
         if (!succeeded) throw IOException("Offline download failed: ${last?.message ?: "source unavailable"}")
         var item = SavedVideo(id, title.id, title.title, episode?.season ?: 0, episode?.episode ?: 0,
             episode?.title ?: title.title, dest.length(), dest)
         val tree = destinationUri
         if (tree != null) {
+            onExport()
+            admit(dest.length(), dest.length())
+            if (primaryExport(tree) && dest.length() > freeBytes()) throw DeviceStorageException("Export needs another ${formatBytes(dest.length())} temporarily on this device. Private staged video kept; free space or choose private storage.")
+            try {
             val uri = android.net.Uri.parse(tree)
             val parent = android.provider.DocumentsContract.buildDocumentUriUsingTree(uri, android.provider.DocumentsContract.getTreeDocumentId(uri))
             val previous = database.read(ownerId, "export_$id")?.let { runCatching { JSONObject(it) }.getOrNull() }
             val document = previous?.takeIf { it.optString("tree") == tree }?.optString("uri")?.takeIf { it.startsWith("content://") }?.let(android.net.Uri::parse)
-                ?: android.provider.DocumentsContract.createDocument(context.contentResolver, parent, "video/mp4", "PTS-$ownerId-$id.mp4") ?: throw IOException("Selected folder is unavailable; private staged file kept")
+                ?: android.provider.DocumentsContract.createDocument(context.contentResolver, parent, "video/mp4", "PTS-$ownerId-$id.mp4") ?: throw FolderExportException("Selected folder is unavailable; private staged file kept")
             try {
                 database.write(ownerId, "export_$id", JSONObject().put("tree", tree).put("uri", document.toString()).toString())
                 context.contentResolver.openOutputStream(document, "w")!!.use { output -> dest.inputStream().use { input ->
@@ -215,8 +243,11 @@ class OfflineStore(private val context: Context, private val api: PtsApi, privat
                 val deleted = runCatching { android.provider.DocumentsContract.deleteDocument(context.contentResolver, document) }.getOrDefault(false)
                 if (deleted) database.remove(ownerId, "export_$id")
                 if (e is kotlinx.coroutines.CancellationException) throw e
-                throw IOException("Cannot save to the selected folder. Private staged media kept. Restore access, or choose private storage and queue this title again.", e)
+                throw FolderExportException("Cannot save to the selected folder. Private staged media kept. Restore folder access or retry export to private storage.", e)
             }
+            } catch (e: kotlinx.coroutines.CancellationException) { throw e }
+              catch (e: FolderExportException) { throw e }
+              catch (e: Exception) { throw FolderExportException("Folder access unavailable. Private staged media kept; restore folder access or choose private storage.", e) }
         }
         synchronized(indexLock) {
             database.titles(ownerId, listOf(title))
@@ -225,30 +256,19 @@ class OfflineStore(private val context: Context, private val api: PtsApi, privat
         if (item.documentUri != null) dest.delete() // Only after document + index are durable.
         complete.delete()
         database.remove(ownerId, "export_$id")
-        cachePoster(title)
+        PosterWork.enqueue(context, api, ownerId, title)
         // The owner-scoped DownloadService publishes completion in the same
         // stable per-episode group as progress, never a second ungrouped alert.
         item
     }
 
-    private fun cachePoster(title: Title) {
+    internal suspend fun cachePoster(title: Title) {
         val target = File(root, "poster_${title.id}.jpg")
         if (target.isFile) return
         val url = api.imageUrl(title.poster) ?: return
         try {
-            val encoded = api.http.newCall(Request.Builder().url(url).build()).execute().use { response ->
-                if (!response.isSuccessful || response.body?.contentType()?.type != "image") return
-                response.body!!.byteStream().use { input ->
-                    val output = java.io.ByteArrayOutputStream()
-                    val buffer = ByteArray(32768)
-                    while (true) {
-                        val count = input.read(buffer); if (count < 0) break
-                        if (output.size() + count > 4 * 1024 * 1024) return
-                        output.write(buffer, 0, count)
-                    }
-                    output.toByteArray()
-                }
-            }
+            val call = api.http.newBuilder().callTimeout(8, java.util.concurrent.TimeUnit.SECONDS).readTimeout(5, java.util.concurrent.TimeUnit.SECONDS).build().newCall(Request.Builder().url(url).build())
+            val encoded = call.awaitImageBytes(4 * 1024 * 1024)
             val bounds = android.graphics.BitmapFactory.Options().apply { inJustDecodeBounds = true }
             android.graphics.BitmapFactory.decodeByteArray(encoded, 0, encoded.size, bounds)
             if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return
@@ -256,7 +276,8 @@ class OfflineStore(private val context: Context, private val api: PtsApi, privat
             val bitmap = android.graphics.BitmapFactory.decodeByteArray(encoded, 0, encoded.size, options) ?: return
             synchronized(indexLock) { target.outputStream().use { bitmap.compress(android.graphics.Bitmap.CompressFormat.JPEG, 85, it) } }
             bitmap.recycle()
-        } catch (_: Exception) { /* Poster failure never destroys a completed media transfer. */ }
+        } catch (e: kotlinx.coroutines.CancellationException) { throw e }
+          catch (_: Exception) { /* Poster failure never destroys a completed media transfer. */ }
     }
 
     fun usedBytes(): Long {
@@ -269,7 +290,7 @@ class OfflineStore(private val context: Context, private val api: PtsApi, privat
         val savedIds = list().map { it.titleId }.toSet()
         titles.filter { it.id in savedIds }.forEach { title ->
             database.titles(ownerId, listOf(title))
-            cachePoster(title)
+            PosterWork.enqueue(context, api, ownerId, title)
         }
     }
 }

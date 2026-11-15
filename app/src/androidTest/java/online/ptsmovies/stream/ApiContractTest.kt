@@ -455,6 +455,7 @@ class ApiContractTest {
     @Test fun offlinePosterAndFullEpisodeMetadataSurviveStoreRecreation() = runBlocking {
         val context = InstrumentationRegistry.getInstrumentation().targetContext
         val store = OfflineStore(context, api, 90035)
+        DeviceState(context).account(JSONObject().put("id", 90035).put("role", "user"))
         store.list().forEach { store.remove(it) }
         val bitmap = android.graphics.Bitmap.createBitmap(8, 8, android.graphics.Bitmap.Config.ARGB_8888)
         bitmap.eraseColor(android.graphics.Color.CYAN)
@@ -464,6 +465,7 @@ class ApiContractTest {
         server.enqueue(MockResponse().setBody("media-fixture"))
         server.enqueue(MockResponse().setHeader("Content-Type", "image/png").setBody(Buffer().write(png.toByteArray())))
         store.save(title, ep) {}
+        kotlinx.coroutines.withTimeout(10000) { while (OfflineStore(context, api, 90035).list().single().poster?.isFile != true) kotlinx.coroutines.delay(25) }
         val restored = OfflineStore(context, api, 90035).list().single()
         assertEquals(title, restored.titleMetadata()); assertTrue(restored.poster?.isFile == true)
         assertEquals(4096L, restored.titleMetadata().episodes.single().size)

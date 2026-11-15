@@ -91,7 +91,11 @@ class EpisodeProgress(private val context: Context, val owner: Long) {
         database.write(owner, "episode_records", serialized)
         parsed = RecordSnapshot(serialized, next)
     }
-    fun status(): String = prefs.getString("status", "Not synced yet") ?: "Not synced yet"
+    fun status(): String = synchronized(lock) {
+        if (entries().any { it.optBoolean("pending") }) "Sync pending · saved on device"
+        else if (prefs.getString("status", "") == "Episode progress synced") "Synced"
+        else "Saved on device"
+    }
     suspend fun sync(api: PtsApi) = withContext(Dispatchers.IO) {
         syncLocks.getOrPut(owner) { Mutex() }.withLock { syncRecords(api) }
     }

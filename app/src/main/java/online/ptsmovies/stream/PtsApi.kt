@@ -56,7 +56,7 @@ class PtsApi(private val baseUrl: String = BASE, cookieJar: CookieJar? = null) {
             else builder.method(method, (body ?: JSONObject()).toString().toRequestBody("application/json".toMediaType()))
         }
         val client = if (path == "/admin/github") http.newBuilder().readTimeout(105, TimeUnit.SECONDS).build() else http
-        return client.newCall(builder.build()).awaitJson()
+        return client.newCall(builder.build()).awaitJson(jsonResponseLimit(path))
     }
 
     private suspend fun get(path: String) = request(path)
@@ -80,11 +80,7 @@ class PtsApi(private val baseUrl: String = BASE, cookieJar: CookieJar? = null) {
         val token = get("/auth/csrf").optString("csrf_token")
         val body = MultipartBody.Builder().setType(MultipartBody.FORM)
             .addFormDataPart("avatar", "avatar.jpg", bytes.toRequestBody("image/jpeg".toMediaType())).build()
-        http.newCall(Request.Builder().url(resolveUrl("/api/v1/auth/avatar")).header("X-CSRF-Token", token).post(body).build()).execute().use {
-            val text = it.body?.string().orEmpty()
-            if (!it.isSuccessful) throw ApiException(it.code, "Photo upload HTTP ${it.code}: ${text.take(160)}")
-            JSONObject(text).getJSONObject("user")
-        }
+        http.newCall(Request.Builder().url(resolveUrl("/api/v1/auth/avatar")).header("X-CSRF-Token", token).post(body).build()).awaitJson(256 * 1024).getJSONObject("user")
     }
     suspend fun library(): Library = withContext(Dispatchers.IO) {
         parseLibrary(get("/stream/library"))
@@ -125,7 +121,7 @@ class PtsApi(private val baseUrl: String = BASE, cookieJar: CookieJar? = null) {
         http.newBuilder().writeTimeout(5, TimeUnit.MINUTES).readTimeout(5, TimeUnit.MINUTES).build()
             .newCall(Request.Builder().url(baseUrl.trimEnd('/') + "/api/v1/admin/files/upload").header("X-CSRF-Token", token).post(body).build())
             .execute().use { response ->
-                if (!response.isSuccessful) throw ApiException(response.code, "Upload HTTP ${response.code}: ${response.body?.string().orEmpty().take(180)}")
+                if (!response.isSuccessful) throw ApiException(response.code, "Upload HTTP ${response.code}: ${response.body?.boundedText(256 * 1024).orEmpty().take(180)}")
             }
     }
     fun streamUrl(title: Title, episode: Episode? = null, fallback: Boolean = false): String =

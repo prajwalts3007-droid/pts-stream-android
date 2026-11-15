@@ -439,8 +439,10 @@ internal fun EpisodeRow(
 @Composable
 fun DownloadsScreen(saved: List<SavedVideo>, onPlay: (SavedVideo) -> Unit, onDelete: (SavedVideo) -> Unit,
     tasks: List<DownloadTask> = emptyList(), onPause: (String) -> Unit = {}, onResume: (String) -> Unit = {}, onCancel: (String) -> Unit = {},
-    titles: List<Title> = emptyList(), imageLoader: coil.ImageLoader? = null, onBack: () -> Unit = {}) {
-    CompactDownloads(saved, tasks, onPlay, onDelete, onPause, onResume, onCancel, titles, imageLoader, onBack)
+    titles: List<Title> = emptyList(), imageLoader: coil.ImageLoader? = null, onBack: () -> Unit = {},
+    onPauseAll: () -> Unit = {}, onResumeAll: () -> Unit = {}, onRecover: (String?) -> Unit = {},
+    unavailable: List<UnavailableDownload> = emptyList(), storage: String = "", onSettings: () -> Unit = {}, onRefresh: () -> Unit = {}) {
+    CompactDownloads(saved, tasks, onPlay, onDelete, onPause, onResume, onCancel, titles, imageLoader, onBack, onPauseAll, onResumeAll, onRecover, unavailable, storage, onSettings, onRefresh)
 }
 
 @Composable
@@ -449,6 +451,7 @@ fun ProfileScreen(user: JSONObject, savedCount: Int, onDownloads: () -> Unit, on
     onEdit: () -> Unit = {}, onPhoto: () -> Unit = {}, onRemovePhoto: () -> Unit = {}, onPlayback: () -> Unit = {}, onDownloadSettings: () -> Unit = {}, onAbout: () -> Unit = {}, onSync: () -> Unit = {}, onPassword: () -> Unit = {}) {
     val name = user.optString("name").ifBlank { user.optString("username") }
     val role = user.optString("role")
+    val connectionDetails = LocalConnectionDetails.current
     LazyColumn(
         modifier = Modifier.testTag("profile-list"),
         contentPadding = PaddingValues(start = 16.dp, end = 16.dp, bottom = 20.dp),
@@ -458,11 +461,7 @@ fun ProfileScreen(user: JSONObject, savedCount: Int, onDownloads: () -> Unit, on
         item {
             PtsCard(Modifier.fillMaxWidth(), padding = 20.dp) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    Box(Modifier.size(60.dp).background(Pts.soft, CircleShape).border(2.dp, Pts.line2, CircleShape), contentAlignment = Alignment.Center) {
-                        Text(name.take(1).uppercase(), fontFamily = Nunito, fontWeight = FontWeight.Black, fontSize = 24.sp, color = Pts.accent)
-                        if (avatar != null && imageLoader != null) AsyncImage(avatar, "Profile photo", imageLoader = imageLoader,
-                            modifier = Modifier.fillMaxSize().clip(CircleShape), contentScale = androidx.compose.ui.layout.ContentScale.Crop)
-                    }
+                    ProfileAvatar(name.take(1).uppercase(), avatar, imageLoader, size = 60.dp, description = "Connection details", onClick = connectionDetails)
                     Column(Modifier.weight(1f).padding(start = 14.dp), verticalArrangement = Arrangement.spacedBy(3.dp)) {
                         Text(name, style = MaterialTheme.typography.titleLarge, color = Pts.text)
                         Text("@" + user.optString("username"), style = MaterialTheme.typography.bodySmall, color = Pts.muted)
@@ -487,6 +486,8 @@ fun ProfileScreen(user: JSONObject, savedCount: Int, onDownloads: () -> Unit, on
                 MenuRow(PtsIcons.Download, "My Downloads", if (savedCount > 0) "$savedCount on this device" else "Nothing saved") { onDownloads() }
                 MenuDivider()
                 MenuRow(PtsIcons.Settings, "Downloads & network", "") { onDownloadSettings() }
+                MenuDivider()
+                MenuRow(PtsIcons.Info, "Connection", "Red · Local Pi / Green · Internet") { connectionDetails() }
                 MenuDivider()
                 MenuRow(PtsIcons.Play, "Playback", "") { onPlayback() }
                 MenuDivider()

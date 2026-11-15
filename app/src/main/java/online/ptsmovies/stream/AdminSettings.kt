@@ -40,7 +40,7 @@ fun pipelineBody(values: Map<String, String>, original: JSONObject): JSONObject 
 
 @Composable
 fun NativeAdminSettings(user: JSONObject, api: PtsApi, onUpdate: () -> Unit, onSignOut: () -> Unit,
-    playbackPrefs: JSONObject = JSONObject(), onPlayback: (String, Any) -> Unit = { _, _ -> }) {
+    playbackPrefs: JSONObject = JSONObject(), onPlayback: (String, Any) -> Unit = { _, _ -> }, onSavePlayback: ((JSONObject) -> Unit)? = null) {
     if (user.optString("role") != "admin") return
     val scope = rememberCoroutineScope()
     var category by rememberSaveable { mutableStateOf("pipeline") }
@@ -153,7 +153,7 @@ fun NativeAdminSettings(user: JSONObject, api: PtsApi, onUpdate: () -> Unit, onS
                 PtsCard(Modifier.fillMaxWidth().ptsPageMotion(category).animateContentSize(tween(motionMillis(ptsMotionEnabled(), 180))), padding = 14.dp) {
                     Text(when (section) { "Pipeline settings" -> "Pipeline limits"; "Power options" -> "Power"; "API management" -> "API Management"; else -> section }, style = MaterialTheme.typography.titleMedium, color = Pts.text)
                     when (section) {
-                        "Playback preferences" -> PlaybackPreferencesScreen(playbackPrefs, onPlayback, {}, embedded = true)
+                        "Playback preferences" -> key(user.optLong("id")) { PlaybackPreferencesScreen(playbackPrefs, onPlayback, {}, embedded = true, onSave = onSavePlayback, owner = user.optLong("id")) }
                         "Pipeline settings" -> {
                             val labels = linkedMapOf("pi_bwlimit_kbps" to "Pi transfer speed (Mbps, 0 = unlimited)", "max_runners" to "GitHub jobs at once", "max_pi_transfers" to "Pi transfers at once", "min_free_gib" to "Keep VPS space free (GiB)", "max_staging_gib" to "VPS space for waiting files (GiB)", "reserve_per_job_gib" to "Estimated file size (GiB)")
                             if (pipeline != null) labels.forEach { (key, label) -> PtsField(fields[key].orEmpty(), { fields[key] = it }, label, Modifier.fillMaxWidth().testTag("pipeline-$key")) }
