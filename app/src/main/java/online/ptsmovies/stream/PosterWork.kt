@@ -14,6 +14,8 @@ internal object PosterWork {
         try {
             if (DeviceState(request.context).account()?.optLong("id") == request.owner)
                 OfflineStore(request.context, request.api, request.owner).cachePoster(request.title)
+        } catch (e: CancellationException) { throw e }
+          catch (_: Exception) { /* Artwork cannot terminate the worker or invalidate saved media. */
         } finally { pending.remove("${request.owner}/${request.title.id}") }
     } } }
     fun enqueue(context: Context, api: PtsApi, owner: Long, title: Title) {

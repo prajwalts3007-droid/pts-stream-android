@@ -32,7 +32,8 @@ data class DownloadSnapshot(val tasks: List<DownloadTask> = emptyList(), val sav
 
 /** Process-wide, owner-scoped transfer queue. Activity recreation never owns or cancels it. */
 class DownloadRepository internal constructor(private val context: Context, private val api: PtsApi, val owner: Long,
-    private val wifi: () -> Boolean = { onWifi(context) }, private val foreground: (() -> Unit)? = null) {
+    private val wifi: () -> Boolean = { onWifi(context) }, private val foreground: (() -> Unit)? = null,
+    private val charging: () -> Boolean = { isCharging(context) }) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val prefs = context.getSharedPreferences("download_jobs_$owner", Context.MODE_PRIVATE)
     private val database = StateDatabase.get(context)
@@ -47,15 +48,16 @@ class DownloadRepository internal constructor(private val context: Context, priv
     private val jobs = linkedMapOf<String, Job>()
     private val calls = linkedMapOf<String, Call>()
     private val reservations = linkedMapOf<String, Long>()
+    private val quotaReservations = linkedMapOf<String, Long>()
     @Volatile private var statusCallback: ((DownloadTask?) -> Unit)? = null
     private val uiOwners = java.util.concurrent.atomic.AtomicInteger()
     fun attachUi() { uiOwners.incrementAndGet() }
     fun detachUi() { uiOwners.updateAndGet { (it - 1).coerceAtLeast(0) } }
     private val serviceOwners = java.util.concurrent.atomic.AtomicInteger()
     internal val serviceOwnerCount get() = serviceOwners.get()
-    fun attachService() { serviceOwners.incrementAndGet(); synchronized(lock) { statusCallback = {} } }
+    fun attachService() { synchronized(lock) { serviceOwners.incrementAndGet(); statusCallback = {} } }
     fun releaseIfIdle(): Boolean = synchronized(lock) {
-        if (uiOwners.get() > 0 || statusCallback != null || jobs.isNotEmpty() || mutable.value.tasks.any { transferIsActive(it.status) }) false
+        if (uiOwners.get() > 0 || serviceOwners.get() > 0 || statusCallback != null || jobs.isNotEmpty() || mutable.value.tasks.any { transferIsActive(it.status) }) false
         else { scope.cancel(); true }
     }
     init {
@@ -159,9 +161,11 @@ class DownloadRepository internal constructor(private val context: Context, priv
     /** Clears ownership synchronously; persistence runs on process work, not a scope teardown may cancel. */
     /** Ownership clears synchronously; interrupted transfers persist as paused, as on a cold start. */
     fun detachService() {
-        if (serviceOwners.updateAndGet { (it - 1).coerceAtLeast(0) } > 0) return
-        statusCallback = null
-        DurableWork.scope.launch { if (serviceOwners.get() == 0) pauseAll() }
+        synchronized(lock) {
+            if (serviceOwners.updateAndGet { (it - 1).coerceAtLeast(0) } > 0) return
+            statusCallback = null
+        }
+        DurableWork.scope.launch { synchronized(lock) { if (serviceOwners.get() == 0) pauseAll() } }
     }
     fun remove(saved: SavedVideo) { if (offMain { remove(saved) }) return; store.remove(saved); DownloadNotifications.remove(context, owner, saved.key); update { s -> s.copy(saved = store.list(), tasks = s.tasks.filterNot { it.key == saved.key }) } }
     fun refresh() { if (offMain { refresh() }) return; val saved = store.list(); update { it.copy(saved = saved, unavailable = store.unavailable(saved)) } }
@@ -178,7 +182,7 @@ class DownloadRepository internal constructor(private val context: Context, priv
         synchronized(lock) {
         val callback = statusCallback ?: return@synchronized
         val options = NativePreferences(context).downloads()
-        val waiting = downloadWaitReason(options.wifiOnly, wifi(), options.chargingOnly, isCharging(context))
+        val waiting = downloadWaitReason(options.wifiOnly, wifi(), options.chargingOnly, charging())
         if (waiting != null) {
             update { s -> s.copy(tasks = s.tasks.map { if (transferCanPause(it.status)) it.copy(status = waiting, speed = 0) else it }) }
             jobs.values.forEach { it.cancel() }; calls.values.forEach { it.cancel() }
@@ -207,11 +211,12 @@ class DownloadRepository internal constructor(private val context: Context, priv
                             val needed = transferReservation(total, offset, primaryExport(next.destination))
                             if (needed + reservations.filterKeys { it != next.key }.values.sum() > store.freeBytes())
                                 throw DeviceStorageException("Insufficient device storage for concurrent downloads")
-                            if (limit > 0 && store.usedBytes() + reservations.filterKeys { it != next.key }.values.sum() + needed > limit)
+                            if (limit > 0 && store.usedBytes() + quotaReservations.filterKeys { it != next.key }.values.sum() + (total - offset).coerceAtLeast(0) > limit)
                                 throw DeviceStorageException("Storage limit reached. Remove a download or increase the limit.")
                             reservations[next.key] = needed
+                            quotaReservations[next.key] = (total - offset).coerceAtLeast(0)
                         } }, onTransfer = { p ->
-                            synchronized(lock) { reservations[next.key] = transferReservation(p.total, p.bytes, primaryExport(next.destination)) }
+                            synchronized(lock) { reservations[next.key] = transferReservation(p.total, p.bytes, primaryExport(next.destination)); quotaReservations[next.key] = (p.total - p.bytes).coerceAtLeast(0) }
                             task(next.key, checkpoint = false) { it.copy(bytes = p.bytes, total = p.total, speed = if (it.status == "downloading") p.speed else 0) }
                             statusCallback?.invoke(mutable.value.tasks.firstOrNull { it.key == next.key })
                         }, onRoute = { route -> task(next.key, checkpoint = false) { it.copy(route = route.label) } }, preparedUrl = prepared,
@@ -223,7 +228,7 @@ class DownloadRepository internal constructor(private val context: Context, priv
                     } catch (e: Exception) {
                         task(next.key) { if (it.status in listOf("downloading", "preparing", "exporting")) it.copy(status = "failed", speed = 0, error = e.message ?: "Download failed", failure = if (store.hasStaged(next.key)) "export" else if (e is DeviceStorageException) "storage" else "network") else it }
                     } finally {
-                        synchronized(lock) { calls.remove(next.key); jobs.remove(next.key); reservations.remove(next.key) }
+                        synchronized(lock) { calls.remove(next.key); jobs.remove(next.key); reservations.remove(next.key); quotaReservations.remove(next.key) }
                         reconcile()
                     }
                 }

@@ -74,9 +74,11 @@ internal object LanDiscovery {
 
     private fun wifiSubnet(context: Context): WifiSubnet? {
         val manager = context.getSystemService(ConnectivityManager::class.java) ?: return null
-        val network = manager.activeNetwork ?: return null
-        val caps = manager.getNetworkCapabilities(network) ?: return null
-        if (!caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) || caps.hasTransport(NetworkCapabilities.TRANSPORT_VPN)) return null
+        if (manager.getNetworkCapabilities(manager.activeNetwork)?.hasTransport(NetworkCapabilities.TRANSPORT_VPN) == true) return null
+        val network = (listOfNotNull(manager.activeNetwork) + manager.allNetworks).distinct().firstOrNull {
+            val caps = manager.getNetworkCapabilities(it)
+            caps?.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) == true && !caps.hasTransport(NetworkCapabilities.TRANSPORT_VPN)
+        } ?: return null
         val link = manager.getLinkProperties(network)?.linkAddresses?.firstOrNull {
             it.address is Inet4Address && isPrivateV4(it.address.hostAddress.orEmpty())
         } ?: return null
@@ -167,6 +169,7 @@ internal object LanDiscovery {
         val address = NativePreferences(context).lanAddress()
         return probeLan(address, probeClient(context, wifi.network)) && wifiSubnet(context)?.network == wifi.network && NativePreferences(context).lanAddress() == address
     }
+    fun currentWifi(context: Context): Network? = wifiSubnet(context)?.network
 
     fun refresh(context: Context) = maybeDiscover(context)
 

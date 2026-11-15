@@ -221,6 +221,7 @@ class OfflineStore(private val context: Context, private val api: PtsApi, privat
             episode?.title ?: title.title, dest.length(), dest)
         val tree = destinationUri
         if (tree != null) {
+            onTransfer(TransferProgress(dest.length(), dest.length(), 0))
             onExport()
             admit(dest.length(), dest.length())
             if (primaryExport(tree) && dest.length() > freeBytes()) throw DeviceStorageException("Export needs another ${formatBytes(dest.length())} temporarily on this device. Private staged video kept; free space or choose private storage.")

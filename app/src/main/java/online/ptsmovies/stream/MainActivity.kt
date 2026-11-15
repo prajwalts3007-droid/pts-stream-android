@@ -644,11 +644,10 @@ class MainActivity : ComponentActivity() {
         playbackPrefs = runCatching { JSONObject(cached!!) }.getOrDefault(JSONObject())
         preferenceStatus = PlaybackSettings(applicationContext, user.optLong("id")).status()
         detachDownloads(); downloads = repo; downloadsAttached = true; downloadWatch?.cancel()
-        savedVideos = repo.state.value.saved; downloadTasks = repo.state.value.tasks
+        savedVideos = repo.state.value.saved; downloadTasks = repo.state.value.tasks; unavailableDownloads = repo.state.value.unavailable
         downloadWatch = scope.launch {
             lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) { repo.state.collect { snapshot ->
                 savedVideos = snapshot.saved; downloadTasks = snapshot.tasks; unavailableDownloads = snapshot.unavailable
-                downloadStorage = withContext(Dispatchers.IO) { "${formatBytes(repo.store.freeBytes())} available for staging · ${formatBytes(repo.store.usedBytes())} in downloads and staging" }
                 val active = snapshot.tasks.firstOrNull { it.status == "downloading" }
                 downloading = active?.label.orEmpty(); downloadPercent = active?.progress?.percent ?: 0
             } }
@@ -1065,6 +1064,16 @@ class MainActivity : ComponentActivity() {
         BackHandler { routeBack() }
         val user = account ?: return
         val completed = remember(user.optLong("id"), episodeProgressRevision) { episodeProgress()?.completed().orEmpty() }
+        LaunchedEffect(downloadsOpen, user.optLong("id")) {
+            if (downloadsOpen) lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
+                val repo = downloads?.takeIf { it.owner == user.optLong("id") } ?: return@repeatOnLifecycle
+                withContext(Dispatchers.IO) { repo.refresh() }
+                while (true) {
+                    downloadStorage = withContext(Dispatchers.IO) { "${formatBytes(repo.store.freeBytes())} available for staging · ${formatBytes(repo.store.usedBytes())} in downloads and staging" }
+                    delay(5000)
+                }
+            }
+        }
         var about by remember { mutableStateOf(false) }
         var passwordOpen by remember { mutableStateOf(false) }
         if (passwordOpen && profileOpen) PasswordDialog(api, { passwordOpen = false; toast("Password updated", true) }, { passwordOpen = false })

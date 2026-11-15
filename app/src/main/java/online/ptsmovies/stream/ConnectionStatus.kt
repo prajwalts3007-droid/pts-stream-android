@@ -59,11 +59,14 @@ internal object ConnectionMonitor {
                 while (isActive && generation.get() == token) {
                     val network = manager.activeNetwork
                     val prefs = NativePreferences(context)
-                    val local = network != null && prefs.lanEnabled() && try { withContext(Dispatchers.IO) { LanDiscovery.verifyRemembered(context) } }
+                    val local = prefs.lanEnabled() && try { withContext(Dispatchers.IO) { LanDiscovery.verifyRemembered(context) } }
                         catch (e: CancellationException) { throw e } catch (_: Exception) { false }
                     if (!local) LanDiscovery.maybeDiscover(context)
                     val remote = if (local || network == null) false else try {
-                        val config = internet.newCall(Request.Builder().url("$BASE/api/v1/auth/config").build()).awaitJson(64 * 1024)
+                        val client = internet.newBuilder().socketFactory(network.socketFactory).dns(object : okhttp3.Dns {
+                            override fun lookup(hostname: String) = network.getAllByName(hostname).toList()
+                        }).build()
+                        val config = client.newCall(Request.Builder().url("$BASE/api/v1/auth/config").build()).awaitJson(64 * 1024)
                         config.has("google_enabled") || config.has("google_client_id")
                     } catch (e: CancellationException) { throw e } catch (_: Exception) { false }
                     if (manager.activeNetwork == network && generation.get() == token) mutable.value = ConnectionState(connectionRoute(local, remote), SystemClock.elapsedRealtime(), if (local) prefs.lanAddress() else "")

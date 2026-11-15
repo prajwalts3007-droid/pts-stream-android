@@ -53,10 +53,8 @@ class MediaRouting internal constructor(private val endpointOverride: (() -> Lan
         endpointOverride?.let { return it() }
         val context = PtsApplication.environment ?: return null
         val prefs = NativePreferences(context)
-        if (!prefs.lanEnabled() || !onWifi(context) || !isPrivateV4(prefs.lanAddress())) return null
-        val manager = context.getSystemService(android.net.ConnectivityManager::class.java)
-        val network = manager.activeNetwork ?: return null
-        if (manager.getNetworkCapabilities(network)?.hasTransport(android.net.NetworkCapabilities.TRANSPORT_VPN) == true) return null
+        if (!prefs.lanEnabled() || !isPrivateV4(prefs.lanAddress())) return null
+        val network = LanDiscovery.currentWifi(context) ?: return null
         val base = Request.Builder().url("https://media.ptsmovies.online:4443/").build().url
         return LanEndpoint(lanClient(context, prefs.lanAddress(), network), base)
     }

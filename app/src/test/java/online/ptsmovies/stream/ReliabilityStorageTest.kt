@@ -98,27 +98,71 @@ class ReliabilityStorageTest {
         val saved = store.list(); assertTrue(saved.isEmpty()); assertEquals("Fixture", store.unavailable(saved).single().label)
         assertTrue(db.read(owner, "offline_index")!!.contains("unavailable.invalid"))
     }
+    @Test fun rejectedSavedRangeRestartsWithoutReusingStaleBytes() = runBlocking(Dispatchers.IO) {
+        val server = MockWebServer(); server.start()
+        val owner = 72011L; val root = File(context.filesDir, "media/$owner").apply { mkdirs() }
+        File(root, "800_0.part").writeText("old")
+        File(root, "800_0.source").writeText("""{"validator":"old-validator","total":10}""")
+        server.enqueue(MockResponse().setResponseCode(416))
+        server.enqueue(MockResponse().setHeader("ETag", "new-validator").setBody("fresh full file"))
+        try {
+            val store = OfflineStore(context, PtsApi(server.url("/").toString().trimEnd('/'), CookieJar.NO_COOKIES), owner)
+            val saved = store.save(title, null, resume = true) { }
+            assertEquals("fresh full file", saved.file.readText())
+            assertEquals("bytes=3-", server.takeRequest().getHeader("Range")); assertNull(server.takeRequest().getHeader("Range"))
+        } finally { server.shutdown() }
+    }
+    @Test fun mismatchedResumeValidatorNeverAppendsDifferentMedia() = runBlocking(Dispatchers.IO) {
+        val server = MockWebServer(); server.start()
+        val owner = 72012L; val root = File(context.filesDir, "media/$owner").apply { mkdirs() }
+        File(root, "800_0.part").writeText("old")
+        File(root, "800_0.source").writeText("""{"validator":"old-validator","total":10}""")
+        server.enqueue(MockResponse().setResponseCode(206).setHeader("ETag", "new-validator").setHeader("Content-Range", "bytes 3-9/10").setBody("newdata"))
+        server.enqueue(MockResponse().setHeader("ETag", "new-validator").setBody("fresh full file"))
+        try {
+            val store = OfflineStore(context, PtsApi(server.url("/").toString().trimEnd('/'), CookieJar.NO_COOKIES), owner)
+            val saved = store.save(title, null, resume = true) { }
+            assertEquals("fresh full file", saved.file.readText())
+            assertEquals("old-validator", server.takeRequest().getHeader("If-Range")); assertNull(server.takeRequest().getHeader("Range"))
+        } finally { server.shutdown() }
+    }
     @Test fun repeatedServiceStartsHoldExactlyOneLeaseAndDestroyReleasesIt() {
         val owner = 72009L; val db = StateDatabase.get(context)
         DeviceState(context).account(JSONObject().put("id", owner).put("role", "user"))
         NativePreferences(context).downloads(DownloadOptions(wifiOnly = true))
-        db.write(owner, "download_queue", compactQueue(listOf(DownloadTask(title, null, "queued"))))
+        // Never permit a real server request from this service-lifecycle fixture.
+        db.write(owner, "download_queue", compactQueue(listOf(DownloadTask(title, null, "paused"))))
         val controller = Robolectric.buildService(DownloadService::class.java).create()
         val service = controller.get()
-        repeat(8) { service.onStartCommand(Intent(context, DownloadService::class.java).putExtra("owner", owner), 0, it + 1) }
+        repeat(7) { service.onStartCommand(Intent(context, DownloadService::class.java).putExtra("owner", owner), 0, it + 1) }
+        service.onStartCommand(Intent(context, DownloadService::class.java).putExtra("owner", owner).putExtra("key", "800_0").setAction("CANCEL"), 0, 8)
         val repo = DeviceDownloads.forOwner(context, ApiProvider.create(), owner)
         val deadline = System.currentTimeMillis() + 10000
         while (System.currentTimeMillis() < deadline) {
             shadowOf(Looper.getMainLooper()).idle(); Thread.sleep(25)
-            if (repo.serviceOwnerCount == 1 && repo.state.value.tasks.single().status == "waiting_wifi") {
-                // Let all serialized starts finish, not only the first acquisition.
-                repeat(30) { shadowOf(Looper.getMainLooper()).idle(); Thread.sleep(10) }
-                break
-            }
+            if (repo.serviceOwnerCount == 1 && repo.state.value.tasks.isEmpty()) break
         }
         assertEquals(1, repo.serviceOwnerCount)
+        assertTrue(repo.state.value.tasks.isEmpty())
         controller.destroy(); assertEquals(0, repo.serviceOwnerCount)
         runBlocking(Dispatchers.IO) { withTimeout(5000) { while (repo.state.value.tasks.any { transferIsActive(it.status) }) delay(20) } }
         assertTrue(repo.releaseIfIdle())
+    }
+    @Test fun chargerReconnectStartsWaitingTransferButNeverExplicitlyPausedOne() = runBlocking(Dispatchers.IO) {
+        val server = MockWebServer(); server.start()
+        val prefs = NativePreferences(context); prefs.downloads(DownloadOptions(wifiOnly = false, chargingOnly = true))
+        var charging = false
+        lateinit var repo: DownloadRepository
+        repo = DownloadRepository(context, PtsApi(server.url("/").toString().trimEnd('/'), CookieJar.NO_COOKIES), 72010, foreground = { repo.runNext {} }, charging = { charging })
+        try {
+            repo.enqueue(title, null)
+            assertEquals("waiting_charging", repo.state.value.tasks.single().status); assertEquals(0, server.requestCount)
+            repo.pause("800_0"); charging = true; repo.reconcile()
+            assertEquals("paused", repo.state.value.tasks.single().status); assertEquals(0, server.requestCount)
+            server.enqueue(MockResponse().setBody("charging fixture"))
+            repo.resume("800_0")
+            withTimeout(5000) { while (repo.state.value.tasks.single().status != "complete") delay(20) }
+            assertEquals(1, server.requestCount)
+        } finally { repo.pauseAll(); server.shutdown() }
     }
 }
