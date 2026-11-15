@@ -37,7 +37,7 @@ For performance acceptance on the phone: compare cold/warm Home and large-catalo
 refresh, frame stalls/peak heap, long scrolling, and concurrent transfers before/after.
 Do not infer device allocation savings from host timings or slower animations.
 
-Build is an Actions artifact only; no Stable release/tag is authorized by the build request.
+The initial request authorized an Actions artifact only. The user subsequently requested an in-app update, explicitly authorizing the Stable publication recorded below.
 
 ## Completed CI and signed artifact
 
@@ -46,4 +46,13 @@ Build is an Actions artifact only; no Stable release/tag is authorized by the bu
 - [Signed build](https://github.com/prajwalts3007-droid/pts-stream-android/actions/runs/43745586412): success, manually dispatched with versionCode 17 / versionName 1.0.17.
 - [Signed APK artifact](https://github.com/prajwalts3007-droid/pts-stream-android/actions/runs/43745586412/artifacts/14174541907), expires 2027-02-13. GitHub sign-in may be required. Extract `outputs/apk/release/app-release.apk` from the ZIP, not the separate debug artifact.
 - APK: 3,810,357 bytes; SHA-256 `034585033171ab37ae11724508c8ab9ba7f70aa31ca4e540499e868a3e0d4ac6`. Independent verification matches CI's packaging hash; package `online.ptsmovies.stream`, unchanged signer `96b14e2e5f2a67dbbb9b2d091c62c800ff61d0a91e5c2e234dd35a28efac4ed7`, standalone/non-debuggable release, API 26/35, baseline profiles and 16 KiB ZIP/native alignment. The new feature strings were also confirmed in release DEX.
-- Install over the existing signed app without uninstalling; physical upgrade/data preservation still needs phone verification. Stable remains v16; this artifact does not appear as a newer Stable OTA until separately published.
+- Install over the existing signed app without uninstalling; physical upgrade/data preservation still needs phone verification. The original Actions artifact remains separate from the public tag-built release below.
+
+## User-authorized Stable publication
+
+- [Stable v17](https://github.com/prajwalts3007-droid/pts-stream-android/releases/tag/v17), tagged source `a4ec323a7a16acab56fac7dc5d29d65177a10dbb`; application/test source is unchanged from audited `2d93387` (the intervening commit records artifact documentation).
+- Main CI audit `43747458644` and debug build `43747458690`: success. Signed tag release/publication [run 43747815907](https://github.com/prajwalts3007-droid/pts-stream-android/actions/runs/43747815907): success.
+- [Public standalone signed APK](https://github.com/prajwalts3007-droid/pts-stream-android/releases/download/v17/PTS-Stream-v17.apk): **3,810,357 bytes**, SHA-256 **`d017cb86da36fbbe206c35c40ac79b357d0bccdc7389d2c4a7e37dcf9f868247`**. Public download, tag CI report and GitHub asset digest match. Package/version, unchanged signer, baseline profiles and 16 KiB ZIP/native alignment independently reverified.
+- Whole-file hash differs from the Actions-only APK. All uncompressed ZIP entries match except `META-INF/version-control-info.textproto`, whose source revision correctly changes from `2d93387` to documentation commit `a4ec323`. DEX, resources, manifest, baseline profiles and native libraries are identical. Use the public hash above for Stable OTA/download verification.
+- Anonymous `releases/latest` returns non-draft, non-prerelease v17 with the expected asset URL/digest. On v16 or older: **Profile → Check for updates → Stable → Check for updates**. Download and approve Android's installer. Do not uninstall. If 1.0.17 is already installed from Actions, no newer version is expected.
+- Publication does not establish phone installation, pixel-perfect appearance, Google OAuth success or measured device performance; the device-validation boundary above remains unchanged.
